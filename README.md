@@ -143,8 +143,8 @@ uv run --python 3.12 python -m harness_mcp_corpus.probe "Which papers cite p17? 
 
 The shared `.env` points `LITELLM_BASE_URL` and `HARNESS_MODEL_AGENT_URL` at the
 LiteLLM proxy on the same compute node. `qwen-chat` is the default agent and extraction model;
-set `HARNESS_MODEL_SMALL` to another alias only when its vLLM endpoint is running. The small model
-model, `heavy-model` is the independent judge, and `qwen-embed` is the embedding
+set `HARNESS_MODEL_SMALL` to another alias only when its vLLM endpoint is running. `heavy-model`
+is the independent judge, and `qwen-embed` is the embedding
 model. The loopback URL remains valid when the allocated compute node changes.
 On the real 37-paper corpus, `qwen-chat` found no incoming citation edge for
 `p17` and identified `p4` as introducing Video Prediction Policy, citing
