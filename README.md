@@ -35,6 +35,26 @@ Open `http://127.0.0.1:5173`. To inspect a given fixture state directly, use
 `failed`, `runs`, `corpus`, or `settings`. The evaluation sidebar is part of both
 result screens.
 
+### Browser access from a Slurm node
+
+The repository includes an `omen-tunnels` version with a reverse `harness-ui`
+route. Install the same script at `~/.local/bin/omen-tunnels` on the laptop and
+the compute node. Start all routes on each machine:
+
+```sh
+# Laptop, once after login or reboot
+omen-tunnels laptop start all
+
+# Inside the Slurm allocation
+omen-tunnels compute start all
+make dev
+```
+
+Open `http://127.0.0.1:25173` on the laptop. The route carries browser traffic
+to Vite on compute port 5173; Vite proxies API requests to compute port 8000.
+No separate `ssh -L` command is needed. Stop and restart both tunnel commands
+after changing their selected service list.
+
 M0 is a fixture preview: run buttons open a running log and a fixture result.
 They do not call a model. The question text stays in the client unchanged
 through scene changes.

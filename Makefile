@@ -18,7 +18,7 @@ ingest-slurm:
 	sbatch --export=ALL,CORPUS="$(CORPUS)",PROJECT_DIR="$(CURDIR)" slurm/grobid_ingest.sbatch
 
 dev:
-	@echo "Run 'uv run uvicorn main:app --app-dir api --reload' and 'cd web && corepack pnpm dev' in separate terminals."
+	./scripts/dev.sh
 
 test:
 	uv run --python 3.12 pytest -q

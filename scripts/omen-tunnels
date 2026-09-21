@@ -1,0 +1,235 @@
+#!/usr/bin/env python3
+"""Open the Omen -> laptop -> Webis gateway -> Slurm compute tunnels."""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import socket
+import subprocess
+import sys
+import tempfile
+
+
+# name: (Omen service port, laptop port, gateway port, compute port)
+SERVICES = {
+    "tracing": (3004, 23004, 29304, 33004),
+    "postgres": (5432, 25432, 29432, 35432),
+    "portainer": (9443, 29443, 49443, 39443),
+    "dockge": (5001, 25001, 45001, 35001),
+    "dozzle": (9999, 29999, 49999, 39999),
+    "dagster": (3000, 23000, 43000, 33000),
+    "metabase": (3002, 23002, 43002, 33002),
+    "evidently": (8008, 28008, 48008, 38008),
+    "nessie": (19120, 39120, 59120, 49120),
+    "kg-viewer": (8085, 28085, 48085, 38085),
+    "kg-studio": (8086, 28086, 48086, 38086),
+    "grafana": (3001, 23001, 43001, 33001),
+    "cadvisor": (8089, 28089, 48089, 38089),
+    "prometheus": (9090, 29090, 49090, 39090),
+    "adminer": (8088, 28088, 48088, 38088),
+    "redis": (6379, 26379, 46379, 36379),
+    "minio-api": (9000, 29000, 49000, 39000),
+    "minio-console": (9001, 29001, 49001, 39001),
+    "neetcode": (8083, 28083, 48083, 38083),
+    "nginx-test": (8080, 28080, 48080, 38080),
+    "tracing-postgres": (15432, 35432, 55432, 45432),
+    "thesis-postgres": (15433, 35433, 55433, 45433),
+    "thesis-redis": (16379, 36380, 56380, 46380),
+    "tracing-clickhouse-http": (18123, 38123, 58123, 48123),
+    "tracing-clickhouse-native": (19000, 39000, 59000, 49000),
+    # Reverse service: laptop browser -> gateway -> Slurm compute node.
+    "harness-ui": (0, 25173, 45173, 5173),
+}
+
+DEFAULT_SERVICES = ("tracing", "postgres")
+GATEWAY = f"{os.environ.get('WEBIS_USER', 'xepi3167')}@ssh.webis.de"
+OMEN = f"{os.environ.get('OMEN_USER', 'omen-server')}@{os.environ.get('OMEN_HOST', '192.168.0.107')}"
+SSH = os.environ.get("OMEN_TUNNELS_SSH", "ssh")
+
+
+def runtime_dir() -> Path:
+    base = Path(os.environ.get("XDG_RUNTIME_DIR") or tempfile.gettempdir())
+    path = base / f"omen-tunnels-{os.getuid()}-{socket.gethostname()}"
+    if path.is_symlink():
+        raise RuntimeError(f"Refusing symlinked runtime directory: {path}")
+    path.mkdir(mode=0o700, exist_ok=True)
+    if path.stat().st_uid != os.getuid():
+        raise RuntimeError(f"Runtime directory has another owner: {path}")
+    path.chmod(0o700)
+    return path
+
+
+def selected_services(names: list[str]) -> list[str]:
+    if not names:
+        return list(DEFAULT_SERVICES)
+    if names == ["all"]:
+        return list(SERVICES)
+    unknown = sorted(set(names) - SERVICES.keys())
+    if unknown:
+        raise ValueError(f"Unknown service(s): {', '.join(unknown)}. Run: omen-tunnels list")
+    return list(dict.fromkeys(names))
+
+
+def forward_args(role: str, names: list[str]) -> list[str]:
+    args = []
+    for name in names:
+        omen, laptop, gateway, compute = SERVICES[name]
+        if name == "harness-ui":
+            if role == "gateway":
+                args += ["-L", f"127.0.0.1:{laptop}:127.0.0.1:{gateway}"]
+            elif role == "compute":
+                args += ["-R", f"127.0.0.1:{gateway}:127.0.0.1:{compute}"]
+            continue
+        if role == "omen":
+            args += ["-L", f"127.0.0.1:{laptop}:127.0.0.1:{omen}"]
+        elif role == "gateway":
+            args += ["-R", f"127.0.0.1:{gateway}:127.0.0.1:{laptop}"]
+        elif role == "compute":
+            args += ["-L", f"127.0.0.1:{compute}:127.0.0.1:{gateway}"]
+    return args
+
+
+def ssh_command(role: str, names: list[str], sock: Path) -> list[str]:
+    cmd = [SSH]
+    if role == "omen":
+        cmd += ["-F", "/dev/null", "-i", os.path.expanduser(os.environ.get("OMEN_SSH_KEY", "~/.ssh/id_ed25519"))]
+    elif role == "compute":
+        cmd += ["-i", os.path.expanduser(os.environ.get("WEBIS_TUNNEL_KEY", "~/.ssh/id_ed25519_webis_tunnel"))]
+    cmd += [
+        "-M", "-f", "-N", "-S", str(sock),
+    ]
+    if role != "gateway":
+        cmd += ["-o", "IdentitiesOnly=yes"]
+    cmd += [
+        "-o", "ExitOnForwardFailure=yes",
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=3",
+    ]
+    cmd += forward_args(role, names)
+    cmd.append(OMEN if role == "omen" else GATEWAY)
+    return cmd
+
+
+def control_command(sock: Path, action: str, target: str) -> list[str]:
+    return [SSH, "-S", str(sock), "-O", action, target]
+
+
+def active(sock: Path, target: str) -> bool:
+    if not sock.exists():
+        return False
+    result = subprocess.run(control_command(sock, "check", target),
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return result.returncode == 0
+
+
+def close(sock: Path, target: str) -> None:
+    if active(sock, target):
+        subprocess.run(control_command(sock, "exit", target),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=False)
+    if sock.exists() and not active(sock, target):
+        sock.unlink()
+
+
+def roles_for(machine: str) -> list[tuple[str, str]]:
+    return [("omen", OMEN), ("gateway", GATEWAY)] if machine == "laptop" else [("compute", GATEWAY)]
+
+
+def list_services() -> None:
+    print(f"{'SERVICE':29} {'OMEN':>5} {'LAPTOP':>7} {'GATEWAY':>7} {'COMPUTE':>7}")
+    for name, ports in SERVICES.items():
+        print(f"{name:29} {ports[0]:5} {ports[1]:7} {ports[2]:7} {ports[3]:7}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("machine", choices=("laptop", "compute", "list"))
+    parser.add_argument("action", nargs="?", choices=("start", "status", "stop", "list"))
+    parser.add_argument("services", nargs="*", metavar="SERVICE")
+    parser.add_argument("--dry-run", action="store_true", help="print SSH commands without connecting")
+    args = parser.parse_args()
+    if args.machine == "list" or args.action == "list":
+        list_services()
+        return 0
+    if not args.action:
+        parser.error("choose start, status, or stop")
+    roles = roles_for(args.machine)
+    folder = runtime_dir()
+    state = folder / f"{args.machine}.json"
+    recorded = json.loads(state.read_text()) if state.exists() else {}
+    recorded_targets = recorded.get("targets", {})
+    old_roles = [(role, recorded_targets.get(role, target)) for role, target in roles]
+    if args.action == "start":
+        names = selected_services(args.services)
+        if args.dry_run:
+            for role, _ in roles:
+                print(shlex.join(ssh_command(role, names, folder / f"{role}.sock")))
+            return 0
+        if state.exists() and all(active(folder / f"{role}.sock", target) for role, target in old_roles):
+            if recorded.get("services") == names and old_roles == roles:
+                print(f"Already running: {', '.join(names)}")
+                return 0
+            raise RuntimeError("Different services or Omen host are running. Run 'stop' first, then 'start'.")
+        # Recover only this tool's stale control sockets; never touch unrelated SSH sessions.
+        for role, target in old_roles:
+            sock = folder / f"{role}.sock"
+            if active(sock, target):
+                raise RuntimeError(f"Existing {role} tunnel found without matching state. Run '{args.machine} stop'.")
+            if sock.exists():
+                sock.unlink()
+        started = []
+        try:
+            for role, target in roles:
+                sock = folder / f"{role}.sock"
+                print(f"Starting {role} hop to {target}...", flush=True)
+                try:
+                    subprocess.run(ssh_command(role, names, sock), check=True)
+                except subprocess.CalledProcessError as exc:
+                    ports = ", ".join(str(SERVICES[name][2 if role == "gateway" else 1 if role == "omen" else 3]) for name in names)
+                    hint = (
+                        "Stop the earlier manual laptop-to-gateway SSH tunnel, then retry. "
+                        "If no old tunnel exists, these gateway ports are held by another session."
+                        if role == "gateway" else
+                        "Stop the earlier manual tunnel on this machine or choose free ports."
+                    )
+                    raise RuntimeError(f"Cannot start {role} hop; listener port(s): {ports}. {hint}") from exc
+                if not active(sock, target):
+                    raise RuntimeError(f"SSH did not keep the {role} tunnel running")
+                started.append((sock, target))
+            state.write_text(json.dumps({"services": names, "targets": dict(roles)}) + "\n")
+            state.chmod(0o600)
+        except Exception:
+            for sock, target in reversed(started):
+                close(sock, target)
+            raise
+        print("Ready. On the compute node use the same service names.")
+        for name in names:
+            if name == "harness-ui":
+                if args.machine == "laptop":
+                    print(f"  {name}: http://127.0.0.1:{SERVICES[name][1]} in the laptop browser")
+                else:
+                    print(f"  {name}: serves 127.0.0.1:{SERVICES[name][3]} from compute")
+            else:
+                print(f"  {name}: 127.0.0.1:{SERVICES[name][3]} on compute")
+        return 0
+    if args.action == "status":
+        names = recorded.get("services", [])
+        print("Services:", ", ".join(names) if names else "none recorded")
+        for role, target in old_roles:
+            print(f"{role}: {'up' if active(folder / f'{role}.sock', target) else 'down'}")
+        return 0
+    for role, target in reversed(old_roles):
+        close(folder / f"{role}.sock", target)
+        print(f"Stopped {role} hop")
+    state.unlink(missing_ok=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        print(f"omen-tunnels: {exc}", file=sys.stderr)
+        sys.exit(1)
