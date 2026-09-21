@@ -15,13 +15,13 @@ make fixtures
 ```
 
 Copy `.env.example` to `.env` and set the service URLs and credentials for your
-environment. `DATABASE_URL` points to PostgreSQL 16; `LANGTRACE_API_HOST` is
-the trace ingestion endpoint, not the dashboard URL. Langtrace's SDK sends a
-hello span at API startup when either a host or API key is configured.
+environment. `DATABASE_URL` points to PostgreSQL 16; `LANGFUSE_BASE_URL` is
+the Langfuse project URL. Langfuse sends a hello span at API startup when both
+project keys are configured.
 
 For the forwarded services shown in this workspace, the relevant ports are
-`127.0.0.1:35432` (Postgres) and `127.0.0.1:33004` (tracing). Credentials and
-the exact Langtrace ingestion path still come from the service operator.
+`127.0.0.1:35432` (Postgres). Langfuse credentials and the project URL belong
+in `.env` and should never be committed.
 
 ## Run M0
 
