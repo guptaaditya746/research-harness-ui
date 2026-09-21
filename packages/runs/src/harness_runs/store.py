@@ -32,7 +32,8 @@ class ArtifactStore:
         return self.root / run_id
 
     def write(self, run_id: str, name: str, body: bytes) -> dict[str, str | int]:
-        if name not in required_artifacts("agentic"):
+        allowed = set(required_artifacts("agentic")) | set(required_artifacts("baseline-enhanced"))
+        if name not in allowed:
             raise ValueError("unknown artifact name")
         target_dir = self._run_dir(run_id)
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -50,7 +51,8 @@ class ArtifactStore:
         }
 
     def read(self, run_id: str, name: str) -> bytes:
-        if name not in required_artifacts("agentic"):
+        allowed = set(required_artifacts("agentic")) | set(required_artifacts("baseline-enhanced"))
+        if name not in allowed:
             raise ValueError("unknown artifact name")
         return (self._run_dir(run_id) / name).read_bytes()
 

@@ -30,6 +30,7 @@ def init() -> bool:
             secret_key=secret_key,
             base_url=base_url or None,
             environment=os.getenv("HARNESS_ENV", "development"),
+            additional_headers={"x-langfuse-ingestion-version": "4"},
         )
         _ready = True
         return True
