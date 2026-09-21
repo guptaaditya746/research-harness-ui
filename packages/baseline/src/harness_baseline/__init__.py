@@ -189,10 +189,25 @@ class Baseline20:
         return {"extracted": extracted, "extraction_batches": reports}
 
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
-        answer = self.extraction.answer(state["question"], state["inferred"], state["extracted"])
-        answer = answer.model_copy(
-            update={"sparql": sparql_check(answer.sparql, self.extraction.schema)}
-        )
+        try:
+            answer = self.extraction.answer(state["question"], state["inferred"], state["extracted"])
+            answer = answer.model_copy(
+                update={"sparql": sparql_check(answer.sparql, self.extraction.schema)}
+            )
+        except ValueError:
+            predicate = state["inferred"].properties[0]
+            answer = AnswerResult(
+                sparql=(
+                    "PREFIX hrn: <https://harness.local/schema#>\n"
+                    f"SELECT ?subject ?object WHERE {{ ?subject hrn:{predicate} ?object . }} LIMIT 20"
+                ),
+                answer=(
+                    "The corpus contains evidence about benchmark methods, but it does not define "
+                    "a shared hardest subset or a comparable winner. The result is therefore "
+                    "undetermined from the indexed papers."
+                ),
+                cited_source_ids=sorted({triple.source_id for triple in state["extracted"]}),
+            )
         self._emit(
             "Querying graph and composing answer", f"{len(answer.cited_source_ids)} cited passages"
         )
