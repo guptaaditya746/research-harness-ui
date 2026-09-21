@@ -60,7 +60,7 @@ class Run(Contract):
     started_at: datetime = Field(alias="startedAt")
     duration_s: float = Field(alias="durationS")
     question: str
-    path: Literal["agentic", "baseline"]
+    path: Literal["agentic", "baseline", "baseline-enhanced"]
     budget: Literal["fast", "slow"]
     status: Literal["answered", "awaiting_reading", "incomplete", "stopped"]
     readings: list[Reading] = Field(default_factory=list)
@@ -113,6 +113,7 @@ BASELINE_ARTIFACTS = tuple(
     for name in AGENTIC_ARTIFACTS
     if name not in {"plans.json", "disagreement.json", "readings.json", "verification.json"}
 )
+ENHANCED_BASELINE_ARTIFACTS = BASELINE_ARTIFACTS + ("retrieval.json", "extraction_batches.json", "seed_manifest.json")
 
 
 def required_artifacts(path: str) -> tuple[str, ...]:
@@ -121,6 +122,8 @@ def required_artifacts(path: str) -> tuple[str, ...]:
             return AGENTIC_ARTIFACTS
         case "baseline":
             return BASELINE_ARTIFACTS
+        case "baseline-enhanced":
+            return ENHANCED_BASELINE_ARTIFACTS
         case _:
             raise ValueError(f"unknown path: {path}")
 

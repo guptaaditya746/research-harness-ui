@@ -43,7 +43,7 @@ export interface Run {
   startedAt: string;
   durationS: number;
   question: string;
-  path: "agentic" | "baseline";
+  path: "agentic" | "baseline" | "baseline-enhanced";
   budget: "fast" | "slow";
   status: "answered" | "awaiting_reading" | "incomplete" | "stopped";
   readings: Array<Reading>;

@@ -2,7 +2,24 @@
 name = "harness-baseline"
 version = "0.1.0"
 requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=1.0,<2",
+    "harness-corpus",
+    "harness-extraction",
+    "harness-graphstore",
+    "harness-runs",
+    "harness-schema",
+    "harness-semantic",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+harness-corpus = { workspace = true }
+harness-extraction = { workspace = true }
+harness-graphstore = { workspace = true }
+harness-runs = { workspace = true }
+harness-schema = { workspace = true }
+harness-semantic = { workspace = true }

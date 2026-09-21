@@ -1,3 +1,3 @@
-from .store import ArtifactStore, invariant_failure
+from .store import ArtifactStore, GoldCandidateStore, invariant_failure
 
-__all__ = ["ArtifactStore", "invariant_failure"]
+__all__ = ["ArtifactStore", "GoldCandidateStore", "invariant_failure"]

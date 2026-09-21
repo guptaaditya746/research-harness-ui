@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { Reading, Run, Triple } from './generated/run';
 
-type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_result' | 'failed' | 'runs' | 'corpus' | 'settings';
+type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_result' | 'failed' | 'runs' | 'corpus' | 'settings' | 'gold';
 type TripleView = 'statements' | 'graph' | 'turtle';
+type GoldCandidate = { id: string; run_id: string; question: string; gold_triples: Triple[]; notes: string; status: string };
 const screenRun: Record<string, string> = { readings: 'r-0413', agentic_result: 'r-0412', baseline_result: 'r-0411', failed: 'r-0410' };
 const api = '/api';
 
@@ -24,7 +25,7 @@ function ontology(reading: Reading) {
     ...reading.axioms.map(([p, d, r]) => `hrn:${p} a rdf:Property ;\n  rdfs:domain hrn:${d} ;\n  rdfs:range ${r.includes(':') ? r : `hrn:${r}`} .`)].join('\n');
 }
 
-function Sidebar({ run, reading, onRate }: { run: Run; reading?: Reading; onRate: (rating: string) => void }) {
+function Sidebar({ run, reading, onRate, onPromote }: { run: Run; reading?: Reading; onRate: (rating: string) => void; onPromote: () => void }) {
   const [plansOpen, setPlansOpen] = useState(false);
   return <aside className="sidebar" aria-label="Evaluation">
     <div><div className="section-title" style={{ marginBottom: 10 }}>Interpretation</div>
@@ -43,7 +44,7 @@ function Sidebar({ run, reading, onRate }: { run: Run; reading?: Reading; onRate
     </div>
     <div><div className="section-title" style={{ marginBottom: 10 }}>Your rating</div><div role="radiogroup" aria-label="Answer usefulness" style={{ display: 'grid', gap: 7 }}>
       {([['useful', 'Useful'], ['partial', 'Partially useful'], ['not_useful', 'Not useful']] as const).map(([value, label]) => <label className="radio" key={value}><input type="radio" name="rating" checked={run.rating === value} onChange={() => onRate(value)} /><span className="dot" />{label}</label>)}
-    </div></div>
+    </div>{run.rating && <button className="btn btn-secondary" style={{ marginTop: 14 }} onClick={onPromote}>Promote to gold candidate</button>}</div>
   </aside>;
 }
 
@@ -84,11 +85,14 @@ export default function App() {
   const [question, setQuestion] = useState('');
   const [activeId, setActiveId] = useState(screenRun[initial || ''] || '');
   const [pick, setPick] = useState(0);
-  const [path, setPath] = useState<'agentic' | 'baseline'>('agentic');
+  const [path, setPath] = useState<'agentic' | 'baseline' | 'baseline-enhanced'>('agentic');
   const [baseMode, setBaseMode] = useState<'fast' | 'slow'>('fast');
   const [agMode, setAgMode] = useState<'fast' | 'slow'>('slow');
   const [openArtifact, setOpenArtifact] = useState('');
   const [artifactBody, setArtifactBody] = useState('');
+  const [liveTrace, setLiveTrace] = useState<Run['trace']>([]);
+  const [candidates, setCandidates] = useState<GoldCandidate[]>([]);
+  const [promotion, setPromotion] = useState('');
   const active = useMemo(() => runs.find(r => r.id === activeId), [runs, activeId]);
   const reading = active?.readings[pick] || active?.readings[0];
 
@@ -101,14 +105,26 @@ export default function App() {
   useEffect(() => { if (!openArtifact) return; const [id, name] = openArtifact.split('/');
     fetch(`${api}/runs/${id}/artifacts/${name}`).then(r => r.json()).then(data => setArtifactBody(data.content));
   }, [openArtifact]);
+  useEffect(() => { if (scene !== 'gold') return; fetch(`${api}/datasets/candidates`).then(r => r.json()).then(setCandidates); }, [scene]);
 
   const openRun = (run: Run) => { setActiveId(run.id); setQuestion(run.question); setPick(run.chosenReading ?? 0); setScene(run.status === 'awaiting_reading' ? 'readings' : run.status === 'incomplete' ? 'failed' : run.path === 'agentic' ? 'agentic_result' : 'baseline_result'); };
-  const runFixture = (kind: 'agentic' | 'baseline') => { setPath(kind); setScene('running'); setActiveId(kind === 'agentic' ? 'r-0413' : 'r-0411'); };
-  const currentNav = ['idle', 'running', 'readings', 'agentic_result', 'baseline_result', 'failed'].includes(scene) ? 'Ask' : scene[0].toUpperCase() + scene.slice(1);
+  const runFixture = async (kind: 'agentic' | 'baseline' | 'baseline-enhanced') => {
+    setPath(kind); setScene('running'); setLiveTrace([]);
+    if (kind === 'agentic') { setActiveId('r-0413'); return; }
+    const response = await fetch(`${api}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, path: kind, budget: baseMode }) });
+    if (!response.ok) { setScene('failed'); return; }
+    const { id } = await response.json(); setActiveId(id);
+    const events = new EventSource(`${api}/runs/${id}/events`);
+    events.addEventListener('trace', event => setLiveTrace(rows => [...rows, JSON.parse((event as MessageEvent).data)]));
+    events.addEventListener('done', async () => { events.close(); const run = await fetch(`${api}/runs/${id}`).then(r => r.json()) as Run; setRuns(items => [run, ...items.filter(item => item.id !== id)]); openRun(run); });
+    events.onerror = () => { events.close(); setScene('failed'); };
+  };
+  const currentNav = ['idle', 'running', 'readings', 'agentic_result', 'baseline_result', 'failed'].includes(scene) ? 'Ask' : scene === 'gold' ? 'Gold' : scene[0].toUpperCase() + scene.slice(1);
   const showSidebar = !!active && ['agentic_result', 'baseline_result'].includes(scene);
-  const changeRating = (rating: string) => setRuns(previous => previous.map(run => run.id === activeId ? { ...run, rating: rating as Run['rating'] } : run));
+  const changeRating = async (rating: string) => { const updated = await fetch(`${api}/runs/${activeId}/rating`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rating }) }).then(r => r.json()) as Run; setRuns(previous => previous.map(run => run.id === activeId ? updated : run)); };
+  const promote = async () => { const response = await fetch(`${api}/runs/${activeId}/promote`, { method: 'POST' }); setPromotion(response.ok ? 'Gold candidate created.' : 'Rate this run before promotion.'); };
 
-  return <div className="page"><header className="nav header"><span className="nav-brand">Research Harness</span>{['Ask', 'Corpus', 'Runs', 'Settings'].map(item => <a key={item} href="#" aria-current={currentNav === item ? 'page' : undefined} onClick={e => { e.preventDefault(); setScene(item === 'Ask' ? 'idle' : item.toLowerCase() as Scene); }}>{item}</a>)}</header>
+  return <div className="page"><header className="nav header"><span className="nav-brand">Research Harness</span>{['Ask', 'Corpus', 'Runs', 'Gold', 'Settings'].map(item => <a key={item} href="#" aria-current={currentNav === item ? 'page' : undefined} onClick={e => { e.preventDefault(); setScene(item === 'Ask' ? 'idle' : item.toLowerCase() as Scene); }}>{item}</a>)}</header>
     <main className="main"><div className="content">
       {scene === 'corpus' && <><h2>Corpus</h2><p className="muted" style={{ maxWidth: '56ch', marginBottom: 40 }}>Papers are parsed once, chunked into passages and indexed. Both paths read the same index, so runs stay comparable.</p><button className="btn btn-secondary">Add PDFs</button><table className="table" style={{ marginTop: 34 }}><thead><tr><th>Paper</th><th>Year</th><th>Status</th></tr></thead><tbody>{[
         ['Break It Down: A Question Understanding Benchmark', '2020', 'Indexed'], ['AmbigQA: Answering Ambiguous Open-domain Questions', '2020', 'Indexed'], ['OneKE: A Dockerized Schema-Guided Extraction System', '2024', 'Indexed'], ['Dense Passage Retrieval for Open-Domain QA', '2020', 'Indexed'], ['Measuring Ambiguity in Open-ended Research Questions', '2023', 'Parsing'],
@@ -118,11 +134,12 @@ export default function App() {
         <div><div className="section-title">Agentic research budget</div><p className="muted" style={{ fontSize: 13.5 }}>Fast caps planning depth and skips re-checks; the agent still chooses its own actions.</p><div className="seg" role="radiogroup" aria-label="Agentic research budget"><label className="seg-opt"><input type="radio" checked={agMode === 'fast'} onChange={() => setAgMode('fast')} />Fast · 45 s</label><label className="seg-opt"><input type="radio" checked={agMode === 'slow'} onChange={() => setAgMode('slow')} />Slow · 120 s</label></div></div>
       </div></>}
       {scene === 'runs' && <><h2>Runs</h2><p className="muted" style={{ maxWidth: '56ch', marginBottom: 40 }}>Every run keeps its artifacts: the concept plans it considered, the reading it settled on, the subschema and query it ran, the triples and the passages behind them.</p>{runs.map(run => <details className="run-row" data-run-id={run.id} key={run.id}><summary><span className="muted micro">11 Sep, 16:20</span><span style={{ flex: '1 1 240px', fontSize: 15.5 }}>{run.question}</span><span className="muted micro">{run.path === 'agentic' ? 'Agentic' : 'Fast'} · {run.budget} · {run.durationS} s</span></summary><div style={{ display: 'grid', gap: 10, marginTop: 14 }}><div>{run.status}{run.reason ? ` — ${run.reason}` : ''}</div><div><span className="muted">Reading&nbsp;&nbsp;</span>{run.readings[run.chosenReading ?? 0]?.label || 'No reading chosen'}</div><div style={{ display: 'flex', gap: '10px 22px', flexWrap: 'wrap' }}>{run.artifacts.map(name => <button key={name} className="text-button micro" style={{ color: openArtifact === `${run.id}/${name}` ? 'var(--color-text)' : undefined }} onClick={() => setOpenArtifact(openArtifact === `${run.id}/${name}` ? '' : `${run.id}/${name}`)}>{name}</button>)}</div>{openArtifact.startsWith(`${run.id}/`) && <pre className="code">{artifactBody}</pre>}<div><button className="text-button" style={{ fontSize: 13 }} onClick={() => openRun(run)}>Open run</button><span className="muted micro" style={{ marginLeft: 24 }}>{run.rating ? `Rated ${run.rating}` : 'Not rated'} · {run.id}</span></div></div></details>)}</>}
-      {!['corpus', 'settings', 'runs'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={!question.trim()} onClick={() => runFixture('baseline')}>Fast baseline</button><button className="btn btn-primary" disabled={!question.trim()} onClick={() => runFixture('agentic')}>Agentic research</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
+      {scene === 'gold' && <><h2>Gold candidates</h2><p className="muted">Review promoted triples before approving a dataset row.</p>{candidates.map((candidate, index) => <details className="run-row" key={candidate.id}><summary><span>{candidate.question}</span><span className="muted micro">{candidate.status}</span></summary><textarea className="input code" aria-label={`Triples for ${candidate.question}`} value={JSON.stringify(candidate.gold_triples, null, 2)} onChange={event => { try { const triples = JSON.parse(event.target.value); setCandidates(rows => rows.map((row, i) => i === index ? { ...row, gold_triples: triples } : row)); } catch { /* keep the last valid JSON */ } }} /><button className="btn btn-secondary" onClick={async () => { const updated = await fetch(`${api}/datasets/candidates/${candidate.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ gold_triples: candidate.gold_triples, status: 'approved' }) }).then(r => r.json()); setCandidates(rows => rows.map(row => row.id === candidate.id ? updated : row)); }}>Save and approve</button></details>)}</>}
+      {!['corpus', 'settings', 'runs', 'gold'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={!question.trim()} onClick={() => runFixture('baseline')}>Fast baseline</button><button className="btn btn-secondary" disabled={!question.trim()} onClick={() => runFixture('baseline-enhanced')}>Enhanced baseline</button><button className="btn btn-primary" disabled={!question.trim()} onClick={() => runFixture('agentic')}>Agentic research</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
         {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'incomplete').slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
-        {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'No fixed pipeline — each action is chosen from what the last one returned' : 'Fixed pipeline · no verification pass'}</span></div>{(path === 'agentic' ? runs.find(r => r.id === 'r-0412')?.trace || [] : [{ atS: 1, action: 'Retrieving top passages', returned: '12 of 42 papers' }, { atS: 3, action: 'Extracting triples', returned: 'direct extraction' }, { atS: 6, action: 'Composing answer', returned: 'working' }]).map((step, i) => <div className="log-row" key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={() => { setScene('idle'); setQuestion(''); }}>Stop run</button><button className="text-button" style={{ marginLeft: 24, fontSize: 13 }} onClick={() => openRun(runs.find(r => r.id === (path === 'agentic' ? 'r-0413' : 'r-0411'))!)}>Open fixture result</button></section>}
+        {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Enhanced baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'No fixed pipeline — each action is chosen from what the last one returned' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction' : 'Fixed pipeline · no verification pass'}</span></div>{(path === 'agentic' ? runs.find(r => r.id === 'r-0412')?.trace || [] : liveTrace).map((step, i) => <div className="log-row" key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={() => { setScene('idle'); setQuestion(''); }}>Stop run</button>{path === 'agentic' && <button className="text-button" style={{ marginLeft: 24, fontSize: 13 }} onClick={() => openRun(runs.find(r => r.id === 'r-0413')!)}>Open fixture result</button>}</section>}
         {scene === 'readings' && active && <section style={{ marginTop: 60 }}><p style={{ maxWidth: '56ch' }}>Stopped after {active.durationS} s: no definition of <em>successful</em> exists in the corpus, and three independent plans disagreed on what to substitute (0.42).</p><p className="muted" style={{ fontSize: 13.5, marginBottom: 34 }}>Four readings are supported by the indexed papers. Each binds a different subschema and produces a different query.</p>{active.readings.map((r, i) => <button key={i} className="reading-row" onClick={() => { setActiveId('r-0412'); setPick(i); setScene('agentic_result'); }}><span className="muted micro">{i + 1}</span><span style={{ display: 'grid', gap: 4 }}><strong style={{ fontSize: 16.5 }}>{r.label}</strong><span className="muted" style={{ fontSize: 13.5 }}>{r.gloss}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{r.classes.join(' · ')} &nbsp; | &nbsp; {r.properties.join(' · ')}</span></span></button>)}<button className="text-button" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setScene('idle'); setQuestion(''); }}>None of these — rephrase the question</button></section>}
         {['agentic_result', 'baseline_result', 'failed'].includes(scene) && active && <Result key={`${active.id}-${pick}`} run={active} pick={pick} setPick={setPick} onDeeper={() => { setActiveId('r-0413'); setScene('readings'); }} />}
       </>}
-    </div>{showSidebar && active && <Sidebar run={active} reading={reading} onRate={changeRating} />}</main></div>;
+    </div>{showSidebar && active && <><Sidebar run={active} reading={reading} onRate={changeRating} onPromote={promote} />{promotion && <span className="muted micro">{promotion}</span>}</>}</main></div>;
 }

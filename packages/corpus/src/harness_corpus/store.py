@@ -128,6 +128,14 @@ class CorpusStore:
             else None
         )
 
+    def seed_facts(self) -> list[dict]:
+        """Return deterministic, corpus-wide facts suitable for graph seeding."""
+        return [
+            row
+            for row in self.fact_rows
+            if row.get("predicate") != "cites" or row.get("in_corpus") is True
+        ]
+
     def list_papers(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return paged([p for p in self.papers if in_scope(p, scope)], offset, limit)
 

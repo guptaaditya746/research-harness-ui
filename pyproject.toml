@@ -13,6 +13,10 @@ dependencies = [
     "harness-ledger",
     "harness-semantic",
     "harness-graphstore",
+    "harness-extraction",
+    "harness-baseline",
+    "sse-starlette>=3.0",
+    "python-dotenv>=1.0",
 ]
 
 [dependency-groups]
@@ -30,10 +34,12 @@ harness-mcp-corpus = { workspace = true }
 harness-ledger = { workspace = true }
 harness-semantic = { workspace = true }
 harness-graphstore = { workspace = true }
+harness-extraction = { workspace = true }
+harness-baseline = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["api"]
-testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "api/tests"]
+testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "api/tests"]
 
 [tool.ruff]
 line-length = 100
