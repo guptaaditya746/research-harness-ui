@@ -81,6 +81,7 @@ class RunRuntime:
             ExtractionEngine(model, schema),
             retrieve_k=int(os.getenv("BASELINE_RETRIEVE_K", "20")),
             enhanced=enhanced,
+            edc=True,
             trace_sink=sink,
         )
 

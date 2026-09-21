@@ -89,12 +89,14 @@ class Baseline20:
         extraction: ExtractionEngine,
         retrieve_k: int = 20,
         enhanced: bool = False,
+        edc: bool = False,
         trace_sink: TraceSink | None = None,
     ) -> None:
         self.corpus = corpus
         self.extraction = extraction
         self.retrieve_k = retrieve_k
         self.enhanced = enhanced
+        self.edc = edc
         self.trace_sink = trace_sink or (lambda _: None)
         self.started = 0.0
         self.trace: list[TraceRow] = []
@@ -133,14 +135,14 @@ class Baseline20:
             # Enhanced retrieval must inspect every query before applying the
             # final cap; otherwise the broad first query fills the cap and
             # phrase expansion never runs.
-            per_query_limit = max(5, self.retrieve_k // 2) if self.enhanced else self.retrieve_k
+            per_query_limit = 50 if self.enhanced else self.retrieve_k
             hits = self.corpus.search(query, limit=per_query_limit)["items"]
             before = len(found)
             found.update({row["passage_id"]: row for row in hits})
             rounds.append({"round": round_no, "query": query, "returned": len(hits), "new": len(found) - before})
             if not self.enhanced and len(found) >= self.retrieve_k:
                 break
-        rows = list(found.values())[: self.retrieve_k]
+        rows = list(found.values()) if self.enhanced else list(found.values())[: self.retrieve_k]
         if not rows:
             raise NoResults("retrieval returned no passages")
         self._emit("Retrieving top passages", f"{len(rows)} passages across {len(rounds)} rounds")
@@ -155,7 +157,12 @@ class Baseline20:
         return {"inferred": inferred}
 
     def _extract_build(self, state: BaselineState) -> dict[str, Any]:
-        if self.enhanced:
+        if self.edc:
+            extraction, reports = self.extraction.extract_edc(
+                state["question"], state["inferred"], state["passages"]
+            )
+            extracted = extraction.triples
+        elif self.enhanced:
             extracted, reports = self.extraction.extract_batches(
                 state["question"], state["inferred"], state["passages"]
             )
@@ -183,7 +190,7 @@ class Baseline20:
                         evidence=f"Corpus fact {row.get('fact_id', row['source_id'])}.",
                     )
                 )
-                if len(fallback) >= self.retrieve_k:
+                if not self.enhanced and len(fallback) >= self.retrieve_k:
                     break
             extracted = fallback
             reports.append({"fallback": "corpus-seed", "triples": len(extracted)})

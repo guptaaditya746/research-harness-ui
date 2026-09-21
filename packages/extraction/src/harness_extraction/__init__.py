@@ -6,6 +6,7 @@ import json
 import os
 import re
 import time
+from difflib import SequenceMatcher
 from typing import Any, Protocol
 
 import httpx
@@ -97,6 +98,27 @@ class ExtractionResult(BaseModel):
     triples: list[ExtractedTriple] = Field(default_factory=list)
 
 
+class EDCOpenTriple(BaseModel):
+    """Evidence-linked open proposition produced by EDC Extract."""
+
+    model_config = ConfigDict(extra="ignore")
+    subject: str
+    predicate: str
+    object: str
+    source_id: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list)
+    evidence: str = ""
+
+
+class EDCDefinition(BaseModel):
+    relation: str
+    definition: str
+
+
+class EDCDefinitionResult(BaseModel):
+    definitions: list[EDCDefinition] = Field(default_factory=list)
+
+
 class AnswerResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
     sparql: str
@@ -175,6 +197,99 @@ class ExtractionEngine:
             if triple.predicate in inferred.properties and triple.source_id in passage_ids
         ]
         return result
+
+    def extract_edc(
+        self, question: str, inferred: SchemaInference, passages: list[dict[str, Any]]
+    ) -> tuple[ExtractionResult, list[dict[str, Any]]]:
+        """Run EDC-style Extract -> Define -> Canonicalize over passages.
+
+        Extraction keeps predicates open and ties every proposition to evidence.
+        Canonicalization then maps only high-confidence open predicates to the
+        inferred ontology; unsupported relations remain unresolved instead of
+        being forced into a schema property.
+        """
+        allowed_ids = {row["passage_id"] for row in passages}
+        payload = self.model.complete_json(
+            "Extract evidence-backed atomic propositions relevant to the question. Keep predicates open natural-language relations. "
+            "Return strict JSON with triples; each triple must include source_id (a supplied passage_id), subject, predicate, object, and evidence.",
+            json.dumps({
+                "question": question,
+                "passages": [{"source_id": row["passage_id"], "text": row["text"][:1800]} for row in passages],
+            }),
+        )
+        raw = payload.get("triples", []) if isinstance(payload, dict) else []
+        open_triples: list[EDCOpenTriple] = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            source = str(item.get("source_id") or "").strip() or None
+            ids = [str(x) for x in item.get("evidence_ids", []) if str(x) in allowed_ids]
+            if source in allowed_ids and source not in ids:
+                ids.append(source)
+            if not ids:
+                continue
+            try:
+                open_triples.append(EDCOpenTriple.model_validate({
+                    **item,
+                    "source_id": source,
+                    "evidence_ids": ids,
+                    "evidence": item.get("evidence") or item.get("evidence_span") or "",
+                }))
+            except (TypeError, ValueError):
+                continue
+
+        relations = list(inferred.properties)
+        definitions: list[EDCDefinition] = []
+        distinct = sorted({item.predicate.strip() for item in open_triples if item.predicate.strip()})
+        if distinct:
+            defined = self.model.complete_json(
+                "Define each open predicate in subject-to-object terms. Return strict JSON with definitions, each containing relation and definition.",
+                json.dumps({"relations": distinct}),
+            )
+            try:
+                definitions = EDCDefinitionResult.model_validate(defined).definitions
+            except (TypeError, ValueError):
+                definitions = []
+        definition_map = {self._norm(item.relation): item.definition for item in definitions}
+        canonical: list[ExtractedTriple] = []
+        decisions: list[dict[str, Any]] = []
+        for item in open_triples:
+            selected, score = self._canonical_property(
+                item.predicate, definition_map.get(self._norm(item.predicate), ""), relations
+            )
+            decisions.append({"open": item.predicate, "selected": selected, "score": round(score, 3)})
+            if selected is None:
+                continue
+            canonical.append(ExtractedTriple(
+                subject=item.subject,
+                predicate=selected,
+                object=item.object,
+                source_id=item.evidence_ids[0],
+                evidence=item.evidence or f"Evidence from {item.evidence_ids[0]}.",
+            ))
+        return ExtractionResult(triples=canonical), [
+            {"stage": "extract", "open_triples": len(open_triples)},
+            {"stage": "define", "definitions": len(definitions)},
+            {"stage": "canonicalize", "decisions": decisions},
+        ]
+
+    @staticmethod
+    def _norm(value: str) -> str:
+        return re.sub(r"[^a-z0-9]+", " ", value.casefold()).strip()
+
+    @classmethod
+    def _canonical_property(cls, predicate: str, definition: str, relations: list[str]) -> tuple[str | None, float]:
+        source = set(cls._norm(f"{predicate} {definition}").split())
+        ranked = []
+        for relation in relations:
+            target = set(cls._norm(relation).split())
+            overlap = len(source & target) / max(1, len(source | target))
+            ratio = SequenceMatcher(None, cls._norm(predicate), cls._norm(relation)).ratio()
+            ranked.append((0.55 * ratio + 0.45 * overlap, relation))
+        if not ranked:
+            return None, 0.0
+        score, relation = max(ranked)
+        return (relation, score) if score >= 0.42 else (None, score)
 
     def extract_batches(
         self,
