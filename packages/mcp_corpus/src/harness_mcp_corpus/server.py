@@ -25,7 +25,9 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def abstracts(paper_ids: list[str], offset: int = 0, limit: int = 10) -> dict:
         return corpus.abstracts(paper_ids, offset, limit)
 
-    @mcp.tool(description="Find passages with lexical boolean, phrase, proximity, or field query terms.")
+    @mcp.tool(
+        description="Find passages with lexical boolean, phrase, proximity, or field query terms."
+    )
     def search(dsl: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return corpus.search(dsl, scope, offset, limit)
 
@@ -41,7 +43,9 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def facts(paper_id: str, offset: int = 0, limit: int = 10) -> dict:
         return corpus.facts(paper_id, offset, limit)
 
-    @mcp.tool(description="Read incoming or outgoing citations with citation fact IDs. The reference title describes the cited target, not the citing paper.")
+    @mcp.tool(
+        description="Read incoming or outgoing citations with citation fact IDs. The reference title describes the cited target, not the citing paper."
+    )
     def citations(paper_id: str, direction: str = "out", offset: int = 0, limit: int = 10) -> dict:
         return corpus.citations(paper_id, direction, offset, limit)
 
@@ -53,9 +57,11 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
 
 
 def main() -> None:
-    mcp = create_server(Path(os.getenv("CORPUS_ROOT", "./corpus_data")),
-                        os.getenv("MCP_CORPUS_HOST", "127.0.0.1"),
-                        int(os.getenv("MCP_CORPUS_PORT", "8765")))
+    mcp = create_server(
+        Path(os.getenv("CORPUS_ROOT", "./corpus_data")),
+        os.getenv("MCP_CORPUS_HOST", "127.0.0.1"),
+        int(os.getenv("MCP_CORPUS_PORT", "8765")),
+    )
     transport = os.getenv("MCP_CORPUS_TRANSPORT", "streamable-http")
     if transport not in {"stdio", "streamable-http"}:
         raise ValueError("MCP_CORPUS_TRANSPORT must be stdio or streamable-http")

@@ -8,12 +8,12 @@ from harness_mcp_corpus.server import create_server
 
 
 def tei(title: str, doi: str, paragraph: str, reference: str = "") -> bytes:
-    return f'''<TEI xmlns="http://www.tei-c.org/ns/1.0"><teiHeader><fileDesc><sourceDesc>
+    return f"""<TEI xmlns="http://www.tei-c.org/ns/1.0"><teiHeader><fileDesc><sourceDesc>
     <biblStruct><analytic><title level="a">{title}</title><author><persName>Ada Scholar</persName></author></analytic>
     <idno type="DOI">{doi}</idno><date when="2024"/></biblStruct></sourceDesc></fileDesc>
     <profileDesc><abstract><p>Research on robotics.</p></abstract></profileDesc></teiHeader>
     <text><body><div><head>Introduction</head><p>{paragraph}</p></div></body></text>
-    <listBibl>{reference}</listBibl></TEI>'''.encode()
+    <listBibl>{reference}</listBibl></TEI>""".encode()
 
 
 def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
@@ -25,13 +25,21 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
     for name in ("17", "2"):
         (pdfs / f"{name}.pdf").write_bytes(f"fixture-{name}".encode())
     ref = '<biblStruct><analytic><title level="a">World Models</title></analytic><idno type="DOI">10.1/world</idno></biblStruct>'
-    (cache / "17.grobid.tei.xml").write_bytes(tei("Robot Control", "10.1/robot", "World models predict robot motion.", ref))
-    (cache / "2.grobid.tei.xml").write_bytes(tei("World Models", "10.1/world", "A predictive model learns from video."))
+    (cache / "17.grobid.tei.xml").write_bytes(
+        tei("Robot Control", "10.1/robot", "World models predict robot motion.", ref)
+    )
+    (cache / "2.grobid.tei.xml").write_bytes(
+        tei("World Models", "10.1/world", "A predictive model learns from video.")
+    )
     report = ingest(pdfs, root, "http://unused", skip_grobid=True, skip_dblp=True)
     assert report["papers"] == 2
     papers = [json.loads(line) for line in (root / "papers.jsonl").read_text().splitlines()]
-    assert all(p["identifier"] == local_identifier(pdfs / f"{p['paper_id'][1:]}.pdf") for p in papers)
-    assert all(p["identifier_source"] == "local" and p["dblp_status"] == "unresolved" for p in papers)
+    assert all(
+        p["identifier"] == local_identifier(pdfs / f"{p['paper_id'][1:]}.pdf") for p in papers
+    )
+    assert all(
+        p["identifier_source"] == "local" and p["dblp_status"] == "unresolved" for p in papers
+    )
     assert len({p["identifier"] for p in papers}) == 2
     store = CorpusStore(root)
     cited = store.citations("p17")
@@ -46,15 +54,27 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
     assert hits["total"] == 1
     assert hits["items"][0]["passage_id"] == "p17-s1-p1"
     assert store.bulk_check("video", ["p17", "p2"])["items"][1]["hit"]
-    assert store.read_passage("p17-s1-p1")["items"][0]["text"] == "World models predict robot motion."
+    assert (
+        store.read_passage("p17-s1-p1")["items"][0]["text"] == "World models predict robot motion."
+    )
     mcp = create_server(root)
     assert [tool.name for tool in asyncio.run(mcp.list_tools())] == [
-        "list_papers", "paper_outline", "abstracts", "search", "grep",
-        "read_passage", "facts", "citations", "bulk_check",
+        "list_papers",
+        "paper_outline",
+        "abstracts",
+        "search",
+        "grep",
+        "read_passage",
+        "facts",
+        "citations",
+        "bulk_check",
     ]
     response = asyncio.run(mcp.call_tool("citations", {"paper_id": "p17"}))
     assert "p2" in str(response)
-    monkeypatch.setattr("harness_corpus.ingest.lookup_dblp_many", lambda papers, client: {"p17": "https://dblp.org/rec/conf/test/Robot24"})
+    monkeypatch.setattr(
+        "harness_corpus.ingest.lookup_dblp_many",
+        lambda papers, client: {"p17": "https://dblp.org/rec/conf/test/Robot24"},
+    )
     ingest(pdfs, root, "http://unused", skip_grobid=True)
     joined = [json.loads(line) for line in (root / "papers.jsonl").read_text().splitlines()]
     by_id = {p["paper_id"]: p for p in joined}
@@ -67,7 +87,7 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
 def test_search_dsl() -> None:
     text = "World models predict future robot motion"
     assert matches('"world models" AND robot', text)
-    assert matches('world NEAR/3 predict', text)
-    assert matches('vision OR robot', text)
-    assert matches('robot AND NOT video', text)
-    assert not matches('world AND video', text)
+    assert matches("world NEAR/3 predict", text)
+    assert matches("vision OR robot", text)
+    assert matches("robot AND NOT video", text)
+    assert not matches("world AND video", text)

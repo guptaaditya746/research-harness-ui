@@ -9,6 +9,14 @@ from tempfile import NamedTemporaryFile
 from harness_schema.models import Run, required_artifacts
 
 
+def invariant_failure(run: Run, number: int) -> Run:
+    if number not in range(1, 9):
+        raise ValueError("invariant number must be 1..8")
+    return run.model_copy(
+        update={"status": "incomplete", "reason": f"invariant:{number}", "chosen_reading": None}
+    )
+
+
 class ArtifactStore:
     def __init__(self, root: Path):
         self.root = root.resolve()

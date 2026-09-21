@@ -3,6 +3,9 @@ name = "harness-ledger"
 version = "0.1.0"
 requires-python = ">=3.12"
 
+[project.optional-dependencies]
+test = ["hypothesis>=6", "pytest>=8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

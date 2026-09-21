@@ -18,8 +18,12 @@ def read_jsonl(path: Path) -> list[dict]:
 def paged(rows: list[dict], offset: int = 0, limit: int = 10) -> dict:
     if offset < 0 or limit < 1 or limit > 50:
         raise ValueError("offset must be nonnegative and limit must be 1..50")
-    return {"total": len(rows), "offset": offset, "limit": limit,
-            "items": rows[offset:offset + limit]}
+    return {
+        "total": len(rows),
+        "offset": offset,
+        "limit": limit,
+        "items": rows[offset : offset + limit],
+    }
 
 
 def in_scope(paper: dict, scope: dict | None) -> bool:
@@ -32,7 +36,9 @@ def in_scope(paper: dict, scope: dict | None) -> bool:
 
 
 def lex(dsl: str) -> list[str]:
-    tokens = re.findall(r'"[^"\n]+"|\(|\)|\bNEAR/\d+\b|\bAND\b|\bOR\b|\bNOT\b|[^\s()]+', dsl, re.IGNORECASE)
+    tokens = re.findall(
+        r'"[^"\n]+"|\(|\)|\bNEAR/\d+\b|\bAND\b|\bOR\b|\bNOT\b|[^\s()]+', dsl, re.IGNORECASE
+    )
     if not tokens:
         raise ValueError("empty search")
     return tokens
@@ -54,8 +60,8 @@ def matches(dsl: str, text: str) -> bool:
         b = re.findall(r"\w+", right.casefold())
         if not a or not b:
             return False
-        left_pos = [i for i in range(len(words)) if words[i:i + len(a)] == a]
-        right_pos = [i for i in range(len(words)) if words[i:i + len(b)] == b]
+        left_pos = [i for i in range(len(words)) if words[i : i + len(a)] == a]
+        right_pos = [i for i in range(len(words)) if words[i : i + len(b)] == b]
         return any(0 <= j - (i + len(a)) <= distance for i in left_pos for j in right_pos)
 
     def atom() -> bool:
@@ -116,21 +122,44 @@ class CorpusStore:
         self.by_paper = {p["paper_id"]: p for p in self.papers}
         self.by_passage = {p["passage_id"]: p for p in self.passages}
         index_path = root / "index" / "bm25"
-        self.bm25 = bm25s.BM25.load(str(index_path), load_corpus=True) if (index_path / "params.index.json").exists() else None
+        self.bm25 = (
+            bm25s.BM25.load(str(index_path), load_corpus=True)
+            if (index_path / "params.index.json").exists()
+            else None
+        )
 
     def list_papers(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return paged([p for p in self.papers if in_scope(p, scope)], offset, limit)
 
     def abstracts(self, paper_ids: list[str], offset: int = 0, limit: int = 10) -> dict:
-        return paged([{"paper_id": pid, "abstract": self.by_paper[pid]["abstract"],
-                       "passage_id": f"{pid}-abstract" if f"{pid}-abstract" in self.by_passage else None} for pid in paper_ids if pid in self.by_paper], offset, limit)
+        return paged(
+            [
+                {
+                    "paper_id": pid,
+                    "abstract": self.by_paper[pid]["abstract"],
+                    "passage_id": f"{pid}-abstract"
+                    if f"{pid}-abstract" in self.by_passage
+                    else None,
+                }
+                for pid in paper_ids
+                if pid in self.by_paper
+            ],
+            offset,
+            limit,
+        )
 
     def paper_outline(self, pid: str) -> dict:
         path = self.root / "outlines" / f"{pid}.md"
         if not path.exists():
             raise KeyError(pid)
-        return {"total": 1, "offset": 0, "limit": 1,
-                "items": [{"paper_id": pid, "outline": path.read_text(), "source_id": f"{pid}-outline"}]}
+        return {
+            "total": 1,
+            "offset": 0,
+            "limit": 1,
+            "items": [
+                {"paper_id": pid, "outline": path.read_text(), "source_id": f"{pid}-outline"}
+            ],
+        }
 
     def search(self, dsl: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         scope = dict(scope or {})
@@ -145,14 +174,29 @@ class CorpusStore:
         query = re.sub(r"\b(?:paper|section|year):[^\s()]+", "", dsl, flags=re.IGNORECASE).strip()
         if not query:
             raise ValueError("search requires content terms")
-        candidates = [p for p in self.passages if in_scope(self.by_paper[p["paper_id"]], scope)
-                      and (not scope.get("section_roles") or any(role.casefold() in p["section_path"].casefold()
-                          for role in scope["section_roles"]))]
+        candidates = [
+            p
+            for p in self.passages
+            if in_scope(self.by_paper[p["paper_id"]], scope)
+            and (
+                not scope.get("section_roles")
+                or any(
+                    role.casefold() in p["section_path"].casefold()
+                    for role in scope["section_roles"]
+                )
+            )
+        ]
         found = {p["passage_id"]: p for p in candidates if matches(query, p["text"])}
         if self.bm25 is not None and found:
-            terms = " ".join(t for t in lex(query) if t.upper() not in {"AND", "OR", "NOT"} and not t.upper().startswith("NEAR/"))
+            terms = " ".join(
+                t
+                for t in lex(query)
+                if t.upper() not in {"AND", "OR", "NOT"} and not t.upper().startswith("NEAR/")
+            )
             tokens = bm25s.tokenize([terms], stopwords="en", show_progress=False)
-            ranked = self.bm25.retrieve(tokens, k=len(self.passages), show_progress=False, sorted=True).documents[0]
+            ranked = self.bm25.retrieve(
+                tokens, k=len(self.passages), show_progress=False, sorted=True
+            ).documents[0]
             rows = [found[item["passage_id"]] for item in ranked if item["passage_id"] in found]
         else:
             rows = list(found.values())
@@ -164,41 +208,67 @@ class CorpusStore:
         for passage in self.passages:
             if not in_scope(self.by_paper[passage["paper_id"]], scope):
                 continue
-            if scope and scope.get("section_roles") and not any(role.casefold() in passage["section_path"].casefold() for role in scope["section_roles"]):
+            if (
+                scope
+                and scope.get("section_roles")
+                and not any(
+                    role.casefold() in passage["section_path"].casefold()
+                    for role in scope["section_roles"]
+                )
+            ):
                 continue
             match = pattern.search(passage["text"])
             if match:
-                rows.append({"passage_id": passage["passage_id"], "paper_id": passage["paper_id"],
-                             "line": passage["text"], "match_start": match.start(), "match_end": match.end()})
+                rows.append(
+                    {
+                        "passage_id": passage["passage_id"],
+                        "paper_id": passage["paper_id"],
+                        "line": passage["text"],
+                        "match_start": match.start(),
+                        "match_end": match.end(),
+                    }
+                )
         return paged(rows, offset, limit)
 
     def read_passage(self, passage_id: str, window: int = 0) -> dict:
         passage = self.by_passage[passage_id]
         siblings = [p for p in self.passages if p["paper_id"] == passage["paper_id"]]
         idx = next(i for i, p in enumerate(siblings) if p["passage_id"] == passage_id)
-        items = siblings[max(0, idx - window):idx + window + 1]
+        items = siblings[max(0, idx - window) : idx + window + 1]
         return {"total": len(items), "offset": 0, "limit": len(items), "items": items}
 
     def facts(self, paper_id: str, offset: int = 0, limit: int = 10) -> dict:
         return paged([f for f in self.fact_rows if f["subject"] == paper_id], offset, limit)
 
-    def citations(self, paper_id: str, direction: str = "out", offset: int = 0, limit: int = 10) -> dict:
+    def citations(
+        self, paper_id: str, direction: str = "out", offset: int = 0, limit: int = 10
+    ) -> dict:
         if direction not in {"in", "out"}:
             raise ValueError("direction must be in or out")
         references = [
-            r for r in self.references
+            r
+            for r in self.references
             if (r["paper_id"] if direction == "out" else r["resolved_paper_id"]) == paper_id
         ]
-        rows = [{**reference, "fact_id": f"{reference['reference_id']}-cites"}
-                for reference in references]
+        rows = [
+            {**reference, "fact_id": f"{reference['reference_id']}-cites"}
+            for reference in references
+        ]
         return paged(rows, offset, limit)
 
-    def bulk_check(self, pattern: str, paper_ids: list[str], offset: int = 0, limit: int = 10) -> dict:
+    def bulk_check(
+        self, pattern: str, paper_ids: list[str], offset: int = 0, limit: int = 10
+    ) -> dict:
         regex = re.compile(pattern, re.IGNORECASE)
         rows = []
         for pid in paper_ids:
             hits = [p for p in self.passages if p["paper_id"] == pid and regex.search(p["text"])]
-            rows.append({"paper_id": pid, "hit": bool(hits),
-                         "passage_id": hits[0]["passage_id"] if hits else None,
-                         "line": hits[0]["text"] if hits else None})
+            rows.append(
+                {
+                    "paper_id": pid,
+                    "hit": bool(hits),
+                    "passage_id": hits[0]["passage_id"] if hits else None,
+                    "line": hits[0]["text"] if hits else None,
+                }
+            )
         return paged(rows, offset, limit)

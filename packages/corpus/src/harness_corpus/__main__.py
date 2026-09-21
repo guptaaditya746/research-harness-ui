@@ -25,8 +25,13 @@ def main() -> None:
     else:
         if args.pdf_dir is None:
             parser.error("pdf_dir is required unless --dblp-only is used")
-        result = ingest(args.pdf_dir, args.root, args.grobid_url,
-                        skip_grobid=args.skip_grobid, skip_dblp=args.skip_dblp)
+        result = ingest(
+            args.pdf_dir,
+            args.root,
+            args.grobid_url,
+            skip_grobid=args.skip_grobid,
+            skip_dblp=args.skip_dblp,
+        )
     print(json.dumps(result, indent=2))
 
 

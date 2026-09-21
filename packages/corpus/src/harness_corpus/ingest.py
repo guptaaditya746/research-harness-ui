@@ -43,7 +43,9 @@ def resolve_references(papers: list[dict], references: list[dict], cutoff: float
         target = by_doi.get(ref["doi"]) if ref["doi"] else None
         if target is None and ref["title"]:
             title = normal_title(ref["title"])
-            candidates = [(SequenceMatcher(None, title, other).ratio(), pid) for other, pid in titled]
+            candidates = [
+                (SequenceMatcher(None, title, other).ratio(), pid) for other, pid in titled
+            ]
             if candidates:
                 score, candidate = max(candidates)
                 if score >= cutoff:
@@ -55,18 +57,36 @@ def structural_facts(papers: list[dict], references: list[dict]) -> list[dict]:
     facts: list[dict] = []
     for paper in papers:
         pid = paper["paper_id"]
-        for predicate, values in (("title", [paper["title"]]), ("author", paper["authors"]),
-                                  ("year", [paper["year"]]), ("venue", [paper["venue"]])):
+        for predicate, values in (
+            ("title", [paper["title"]]),
+            ("author", paper["authors"]),
+            ("year", [paper["year"]]),
+            ("venue", [paper["venue"]]),
+        ):
             for value in values:
                 if value is not None and value != "":
-                    facts.append({"fact_id": f"{pid}-metadata-{len(facts)}", "subject": pid,
-                                  "predicate": predicate, "object": value, "source": "metadata",
-                                  "source_id": f"{pid}-metadata"})
+                    facts.append(
+                        {
+                            "fact_id": f"{pid}-metadata-{len(facts)}",
+                            "subject": pid,
+                            "predicate": predicate,
+                            "object": value,
+                            "source": "metadata",
+                            "source_id": f"{pid}-metadata",
+                        }
+                    )
     for ref in references:
-        facts.append({"fact_id": f"{ref['reference_id']}-cites", "subject": ref["paper_id"],
-                      "predicate": "cites", "object": ref["resolved_paper_id"] or ref["reference_id"],
-                      "source": "reference_list", "source_id": ref["reference_id"],
-                      "in_corpus": ref["resolved_paper_id"] is not None})
+        facts.append(
+            {
+                "fact_id": f"{ref['reference_id']}-cites",
+                "subject": ref["paper_id"],
+                "predicate": "cites",
+                "object": ref["resolved_paper_id"] or ref["reference_id"],
+                "source": "reference_list",
+                "source_id": ref["reference_id"],
+                "in_corpus": ref["resolved_paper_id"] is not None,
+            }
+        )
     return facts
 
 
@@ -90,8 +110,16 @@ def from_docling(pdf: Path, pid: str) -> tuple[dict, list[dict], list[dict]]:
     markdown = DocumentConverter().convert(pdf).document.export_to_markdown()
     chunks = [clean(chunk) for chunk in re.split(r"\n\s*\n", markdown) if clean(chunk)]
     title = chunks[0].lstrip("# ") if chunks else pdf.stem
-    paper = {"paper_id": pid, "dblp_iri": None, "title": title, "authors": [], "year": None,
-             "venue": "", "doi": "", "abstract": ""}
+    paper = {
+        "paper_id": pid,
+        "dblp_iri": None,
+        "title": title,
+        "authors": [],
+        "year": None,
+        "venue": "",
+        "doi": "",
+        "abstract": "",
+    }
     passages = []
     offset = 0
     heading = "Body"
@@ -99,14 +127,29 @@ def from_docling(pdf: Path, pid: str) -> tuple[dict, list[dict], list[dict]]:
         if chunk.startswith("#"):
             heading = chunk.lstrip("# ")
             continue
-        passages.append({"passage_id": f"{pid}-s1-p{len(passages) + 1}", "paper_id": pid,
-                         "section_path": heading, "para_idx": len(passages), "text": chunk,
-                         "char_start": offset, "char_end": offset + len(chunk)})
+        passages.append(
+            {
+                "passage_id": f"{pid}-s1-p{len(passages) + 1}",
+                "paper_id": pid,
+                "section_path": heading,
+                "para_idx": len(passages),
+                "text": chunk,
+                "char_start": offset,
+                "char_end": offset + len(chunk),
+            }
+        )
         offset += len(chunk) + 1
     return paper, passages, []
 
 
-def ingest(pdf_dir: Path, root: Path, grobid_url: str, *, skip_grobid: bool = False, skip_dblp: bool = False) -> dict:
+def ingest(
+    pdf_dir: Path,
+    root: Path,
+    grobid_url: str,
+    *,
+    skip_grobid: bool = False,
+    skip_dblp: bool = False,
+) -> dict:
     pdfs = sorted(pdf_dir.glob("*.pdf"))
     if not pdfs:
         raise ValueError(f"no PDFs found in {pdf_dir}")
@@ -120,8 +163,13 @@ def ingest(pdf_dir: Path, root: Path, grobid_url: str, *, skip_grobid: bool = Fa
         tei_dir.mkdir(parents=True, exist_ok=True)
         if not skip_grobid:
             GrobidClient(grobid_server=grobid_url).process(
-                "processFulltextDocument", str(pdf_dir), output=str(tei_dir),
-                n=2, consolidate_citations=False, force=False, skip_errors=True,
+                "processFulltextDocument",
+                str(pdf_dir),
+                output=str(tei_dir),
+                n=2,
+                consolidate_citations=False,
+                force=False,
+                skip_errors=True,
             )
         metadata = {}
         manifest = pdf_dir / "manifest.tsv"
@@ -147,7 +195,9 @@ def ingest(pdf_dir: Path, root: Path, grobid_url: str, *, skip_grobid: bool = Fa
                 fallback.append(pid)
             row = metadata.get(pdf.name, {})
             paper["title"] = paper["title"] or row.get("title", "")
-            paper["doi"] = paper["doi"] or row.get("doi", "").lower().removeprefix("https://doi.org/")
+            paper["doi"] = paper["doi"] or row.get("doi", "").lower().removeprefix(
+                "https://doi.org/"
+            )
             paper["year"] = paper["year"] or (int(row["year"]) if row.get("year") else None)
             local_id = local_identifier(pdf)
             if local_id in local_ids:
@@ -183,10 +233,23 @@ def ingest(pdf_dir: Path, root: Path, grobid_url: str, *, skip_grobid: bool = Fa
         index_dir = root / "index" / "bm25"
         index_dir.mkdir(parents=True, exist_ok=True)
         retriever = bm25s.BM25()
-        retriever.index(bm25s.tokenize([p["text"] for p in passages], stopwords="en", show_progress=False), show_progress=False)
-        retriever.save(str(index_dir), corpus=[{"passage_id": p["passage_id"]} for p in passages], show_progress=False)
-        report = {"papers": len(papers), "passages": len(passages), "references": len(references),
-                  "fallback_papers": fallback, "dblp_errors": dblp_errors, "unresolved_dblp": [p["paper_id"] for p in papers if not p["dblp_iri"]]}
+        retriever.index(
+            bm25s.tokenize([p["text"] for p in passages], stopwords="en", show_progress=False),
+            show_progress=False,
+        )
+        retriever.save(
+            str(index_dir),
+            corpus=[{"passage_id": p["passage_id"]} for p in passages],
+            show_progress=False,
+        )
+        report = {
+            "papers": len(papers),
+            "passages": len(passages),
+            "references": len(references),
+            "fallback_papers": fallback,
+            "dblp_errors": dblp_errors,
+            "unresolved_dblp": [p["paper_id"] for p in papers if not p["dblp_iri"]],
+        }
         (root / "ingest_report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
     finally:
@@ -215,8 +278,11 @@ def enrich_dblp(root: Path) -> dict:
     report["verified_dblp"] = sorted(matches)
     report["unresolved_dblp"] = [p["paper_id"] for p in papers if p["dblp_status"] != "verified"]
     report_path.write_text(json.dumps(report, indent=2) + "\n")
-    return {"papers": len(papers), "verified": len(matches),
-            "unresolved": len(report["unresolved_dblp"])}
+    return {
+        "papers": len(papers),
+        "verified": len(matches),
+        "unresolved": len(report["unresolved_dblp"]),
+    }
 
 
 def prune_unresolved_dblp(root: Path) -> dict:
@@ -224,9 +290,13 @@ def prune_unresolved_dblp(root: Path) -> dict:
     papers = [json.loads(line) for line in (root / "papers.jsonl").read_text().splitlines() if line]
     removed = {p["paper_id"] for p in papers if p.get("dblp_status") != "verified"}
     kept_papers = [p for p in papers if p["paper_id"] not in removed]
-    passages = [json.loads(line) for line in (root / "passages.jsonl").read_text().splitlines() if line]
+    passages = [
+        json.loads(line) for line in (root / "passages.jsonl").read_text().splitlines() if line
+    ]
     kept_passages = [p for p in passages if p["paper_id"] not in removed]
-    references = [json.loads(line) for line in (root / "references.jsonl").read_text().splitlines() if line]
+    references = [
+        json.loads(line) for line in (root / "references.jsonl").read_text().splitlines() if line
+    ]
     kept_references = [r for r in references if r["paper_id"] not in removed]
     for reference in kept_references:
         if reference.get("resolved_paper_id") in removed:
@@ -242,6 +312,7 @@ def prune_unresolved_dblp(root: Path) -> dict:
     index_dir = root / "index" / "bm25"
     if index_dir.exists():
         import shutil
+
         shutil.rmtree(index_dir)
     index_dir.mkdir(parents=True)
     retriever = bm25s.BM25()
@@ -250,18 +321,27 @@ def prune_unresolved_dblp(root: Path) -> dict:
         show_progress=False,
     )
     retriever.save(
-        str(index_dir), corpus=[{"passage_id": p["passage_id"]} for p in kept_passages],
+        str(index_dir),
+        corpus=[{"passage_id": p["passage_id"]} for p in kept_passages],
         show_progress=False,
     )
 
     report_path = root / "ingest_report.json"
     report = json.loads(report_path.read_text()) if report_path.exists() else {}
-    report.update({
-        "papers": len(kept_papers), "passages": len(kept_passages),
-        "references": len(kept_references), "unresolved_dblp": [],
-        "verified_dblp": sorted(p["paper_id"] for p in kept_papers),
-        "excluded_unresolved_dblp": sorted(removed),
-    })
+    report.update(
+        {
+            "papers": len(kept_papers),
+            "passages": len(kept_passages),
+            "references": len(kept_references),
+            "unresolved_dblp": [],
+            "verified_dblp": sorted(p["paper_id"] for p in kept_papers),
+            "excluded_unresolved_dblp": sorted(removed),
+        }
+    )
     report_path.write_text(json.dumps(report, indent=2) + "\n")
-    return {"removed": sorted(removed), "papers": len(kept_papers),
-            "passages": len(kept_passages), "references": len(kept_references)}
+    return {
+        "removed": sorted(removed),
+        "papers": len(kept_papers),
+        "passages": len(kept_passages),
+        "references": len(kept_references),
+    }

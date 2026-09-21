@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from harness_runs import ArtifactStore
+from harness_runs import ArtifactStore, invariant_failure
 from harness_schema.generate import fixture_runs
 from harness_schema.models import required_artifacts
 
@@ -25,3 +25,10 @@ def test_stopped_run_gets_full_artifact_set(tmp_path: Path) -> None:
     store.finalize(run, {})
     assert store.load_run(run.id) == run
     assert all((tmp_path / run.id / name).exists() for name in required_artifacts(run.path))
+
+
+@pytest.mark.parametrize("number", range(2, 7))
+def test_invariant_violation_ends_run_in_named_terminal_state(number: int) -> None:
+    failed = invariant_failure(fixture_runs()[2], number)
+    assert failed.status == "incomplete"
+    assert failed.reason == f"invariant:{number}"

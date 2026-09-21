@@ -10,6 +10,9 @@ dependencies = [
     "uvicorn>=0.30",
     "harness-corpus",
     "harness-mcp-corpus",
+    "harness-ledger",
+    "harness-semantic",
+    "harness-graphstore",
 ]
 
 [dependency-groups]
@@ -24,10 +27,13 @@ harness-runs = { workspace = true }
 harness-observability = { workspace = true }
 harness-corpus = { workspace = true }
 harness-mcp-corpus = { workspace = true }
+harness-ledger = { workspace = true }
+harness-semantic = { workspace = true }
+harness-graphstore = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["api"]
-testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "api/tests"]
+testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "api/tests"]
 
 [tool.ruff]
 line-length = 100

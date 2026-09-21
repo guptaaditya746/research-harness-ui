@@ -1,0 +1,15 @@
+{
+  "query": "PREFIX hrn: <https://harness.local/schema#>\nSELECT ?paper WHERE { ?paper hrn:cites <https://harness.local/resource/p17> }",
+  "shape": "set",
+  "domain_size": 37,
+  "obligations": 37,
+  "status_counts": {
+    "open": 0,
+    "satisfied": 0,
+    "unsupported": 37,
+    "out_of_budget": 0
+  },
+  "closed": true,
+  "queryable": true,
+  "coverage": 1.0
+}

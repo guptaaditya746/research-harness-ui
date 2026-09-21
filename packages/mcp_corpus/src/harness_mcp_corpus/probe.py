@@ -37,33 +37,54 @@ def serialise_result(value: Any) -> Any:
     return value
 
 
-async def ask(root: Path, question: str, base_url: str, model: str, api_key: str,
-              max_steps: int = 12) -> dict:
+async def ask(
+    root: Path, question: str, base_url: str, model: str, api_key: str, max_steps: int = 12
+) -> dict:
     server = create_server(root)
     tools = await server.list_tools()
     definitions = [
-        {"type": "function", "function": {"name": tool.name,
-         "description": tool.description or "", "parameters": tool.inputSchema}}
+        {
+            "type": "function",
+            "function": {
+                "name": tool.name,
+                "description": tool.description or "",
+                "parameters": tool.inputSchema,
+            },
+        }
         for tool in tools
     ]
-    messages: list[dict] = [{"role": "system", "content": SYSTEM},
-                            {"role": "user", "content": question}]
+    messages: list[dict] = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": question},
+    ]
     calls: list[dict] = []
-    async with httpx.AsyncClient(timeout=120, headers={"Authorization": f"Bearer {api_key}"}) as client:
+    async with httpx.AsyncClient(
+        timeout=120, headers={"Authorization": f"Bearer {api_key}"}
+    ) as client:
         for _ in range(max_steps):
             response = await client.post(
                 f"{base_url.rstrip('/')}/chat/completions",
-                json={"model": model, "messages": messages, "tools": definitions,
-                      "tool_choice": "auto", "temperature": 0},
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "tools": definitions,
+                    "tool_choice": "auto",
+                    "temperature": 0,
+                },
             )
             response.raise_for_status()
             message = response.json()["choices"][0]["message"]
             requested = message.get("tool_calls") or []
             if not requested:
-                return {"question": question, "answer": message.get("content") or "",
-                        "tool_calls": calls, "model": model}
-            messages.append({"role": "assistant", "content": message.get("content"),
-                             "tool_calls": requested})
+                return {
+                    "question": question,
+                    "answer": message.get("content") or "",
+                    "tool_calls": calls,
+                    "model": model,
+                }
+            messages.append(
+                {"role": "assistant", "content": message.get("content"), "tool_calls": requested}
+            )
             for call in requested:
                 name = call["function"]["name"]
                 if name not in {tool.name for tool in tools}:
@@ -79,8 +100,7 @@ async def ask(root: Path, question: str, base_url: str, model: str, api_key: str
                 except ToolError as exc:
                     record["error"] = str(exc)
                     content = json.dumps({"error": str(exc)})
-                messages.append({"role": "tool", "tool_call_id": call["id"],
-                                 "content": content})
+                messages.append({"role": "tool", "tool_call_id": call["id"], "content": content})
     raise RuntimeError(f"model did not finish after {max_steps} steps")
 
 
@@ -88,12 +108,22 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question")
     parser.add_argument("--root", type=Path, default=Path(os.getenv("CORPUS_ROOT", "corpus_data")))
-    parser.add_argument("--base-url", default=os.getenv("HARNESS_MODEL_AGENT_URL"),
-                        required="HARNESS_MODEL_AGENT_URL" not in os.environ)
+    parser.add_argument(
+        "--base-url",
+        default=os.getenv("HARNESS_MODEL_AGENT_URL"),
+        required="HARNESS_MODEL_AGENT_URL" not in os.environ,
+    )
     parser.add_argument("--model", default=os.getenv("HARNESS_MODEL_AGENT", "qwen-chat"))
     args = parser.parse_args()
-    result = asyncio.run(ask(args.root, args.question, args.base_url, args.model,
-                             os.getenv("VLLM_API_KEY", "sk-local-vllm")))
+    result = asyncio.run(
+        ask(
+            args.root,
+            args.question,
+            args.base_url,
+            args.model,
+            os.getenv("VLLM_API_KEY", "sk-local-vllm"),
+        )
+    )
     print(json.dumps(result, ensure_ascii=False, indent=2))
 
 

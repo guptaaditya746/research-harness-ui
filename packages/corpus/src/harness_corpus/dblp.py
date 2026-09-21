@@ -30,7 +30,10 @@ def _sparql(client: httpx.Client, query: str) -> list[dict]:
     response = client.post(
         SPARQL_API,
         content=query,
-        headers={"Accept": "application/sparql-results+json", "Content-Type": "application/sparql-query"},
+        headers={
+            "Accept": "application/sparql-results+json",
+            "Content-Type": "application/sparql-query",
+        },
     )
     response.raise_for_status()
     if "json" not in response.headers.get("content-type", ""):
@@ -95,7 +98,10 @@ def lookup(doi: str, title: str, client: httpx.Client, cutoff: float = 0.9) -> s
             doi_match = bool(doi and candidate_doi == normal_doi(doi))
             title_match = bool(
                 title
-                and SequenceMatcher(None, normal_title(title), normal_title(candidate_title)).ratio() >= cutoff
+                and SequenceMatcher(
+                    None, normal_title(title), normal_title(candidate_title)
+                ).ratio()
+                >= cutoff
             )
             url = str(info.get("url", ""))
             if (doi_match or title_match) and url.startswith("https://dblp.org/rec/"):

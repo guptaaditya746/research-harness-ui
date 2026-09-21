@@ -128,3 +128,13 @@ model. The loopback URL remains valid when the allocated compute node changes.
 On the real 37-paper corpus, `qwen-chat` found no incoming citation edge for
 `p17` and identified `p4` as introducing Video Prediction Policy, citing
 `p4-abstract`. The recorded calls and tool results are under `docs/evidence/`.
+
+## M2 semantic core
+
+`harness_ledger` owns monotonic coverage obligations and closes structural
+obligations from ingest facts. `harness_semantic` supplies the hand-written
+subschema, SHACL property shapes, and OWL RL closure. `harness_graphstore`
+checks SPARQL terms against that schema, derives coverage plans from query
+shape and the fact domain, and stores extraction events in provenance-bearing
+named graphs. The M2 real-corpus closure evidence is
+`docs/evidence/m2-structural-ledger.json`.

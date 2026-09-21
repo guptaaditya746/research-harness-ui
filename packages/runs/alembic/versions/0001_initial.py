@@ -58,11 +58,17 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
     )
     op.create_index(
-        "uq_artifacts_shared", "artifacts", ["run_id", "name"], unique=True,
+        "uq_artifacts_shared",
+        "artifacts",
+        ["run_id", "name"],
+        unique=True,
         postgresql_where=sa.text("reading_idx IS NULL"),
     )
     op.create_index(
-        "uq_artifacts_reading", "artifacts", ["run_id", "reading_idx", "name"], unique=True,
+        "uq_artifacts_reading",
+        "artifacts",
+        ["run_id", "reading_idx", "name"],
+        unique=True,
         postgresql_where=sa.text("reading_idx IS NOT NULL"),
     )
     op.create_table(
