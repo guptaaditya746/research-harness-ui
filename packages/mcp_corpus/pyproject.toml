@@ -1,0 +1,16 @@
+[project]
+name = "harness-mcp-corpus"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "harness-corpus",
+    "mcp>=1.0,<2.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv.sources]
+harness-corpus = { workspace = true }

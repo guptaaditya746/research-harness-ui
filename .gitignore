@@ -1,0 +1,16 @@
+.env
+.venv/
+node_modules/
+dist/
+artifacts/
+corpus_data/*
+!corpus_data/.gitkeep
+__pycache__/
+.pytest_cache/
+.playwright/
+test-results/
+
+.services/
+slurm/logs/*.out
+slurm/logs/*.err
+slurm/logs/grobid-service-*.log

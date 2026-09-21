@@ -1,0 +1,316 @@
+{
+  "id": "r-0413",
+  "startedAt": "2026-09-11T16:20:00Z",
+  "durationS": 79.0,
+  "question": "Across this corpus, which author is most successful?",
+  "path": "agentic",
+  "budget": "slow",
+  "status": "awaiting_reading",
+  "readings": [
+    {
+      "label": "Citation count within the corpus",
+      "gloss": "Rank authors by how often indexed papers cite them.",
+      "classes": [
+        "Author",
+        "Paper",
+        "Citation"
+      ],
+      "axioms": [
+        [
+          "author_of",
+          "Paper",
+          "Author"
+        ],
+        [
+          "cites",
+          "Paper",
+          "Paper"
+        ],
+        [
+          "citation_count",
+          "Author",
+          "xsd:integer"
+        ]
+      ],
+      "sparql": "PREFIX hrn: <https://harness.local/schema#>\nSELECT ?author (COUNT(?citing) AS ?n) WHERE { ?paper hrn:author_of ?author . ?citing hrn:cites ?paper . } GROUP BY ?author ORDER BY DESC(?n) LIMIT 10",
+      "answer": "Under this reading, Jonathan Berant ranks first with 214 in-corpus citations, ahead of Matt Gardner (187).",
+      "triples": [
+        {
+          "s": "Jonathan Berant",
+          "p": "in_corpus_citations",
+          "o": "214",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-001"
+        },
+        {
+          "s": "Matt Gardner",
+          "p": "in_corpus_citations",
+          "o": "187",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-002"
+        }
+      ],
+      "metrics": {
+        "disagreement": 0.42,
+        "precision": [
+          2,
+          3
+        ],
+        "recall": [
+          2,
+          2
+        ]
+      },
+      "status": "answered",
+      "op": "citation count",
+      "properties": [
+        "author_of",
+        "cites",
+        "citation_count"
+      ]
+    },
+    {
+      "label": "First-author publication count",
+      "gloss": "Rank by papers where the author is listed first.",
+      "classes": [
+        "Author",
+        "Paper"
+      ],
+      "axioms": [
+        [
+          "first_author_of",
+          "Paper",
+          "Author"
+        ],
+        [
+          "year",
+          "Paper",
+          "xsd:gYear"
+        ]
+      ],
+      "sparql": "PREFIX hrn: <https://harness.local/schema#>\nSELECT ?author (COUNT(?paper) AS ?n) WHERE { ?paper hrn:first_author_of ?author ; hrn:year ?year . } GROUP BY ?author ORDER BY DESC(?n)",
+      "answer": "Under this reading, Tomer Wolfson ranks first with 3 first-author papers, ahead of Mor Geva (2).",
+      "triples": [
+        {
+          "s": "Tomer Wolfson",
+          "p": "first_author_papers",
+          "o": "3",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-001"
+        },
+        {
+          "s": "Mor Geva",
+          "p": "first_author_papers",
+          "o": "2",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-002"
+        }
+      ],
+      "metrics": {
+        "disagreement": 0.42,
+        "precision": [
+          2,
+          2
+        ],
+        "recall": [
+          2,
+          3
+        ]
+      },
+      "status": "answered",
+      "op": "first-author count",
+      "properties": [
+        "first_author_of",
+        "year"
+      ]
+    },
+    {
+      "label": "Venue prestige of published work",
+      "gloss": "Weight papers by venue rank.",
+      "classes": [
+        "Author",
+        "Paper",
+        "Venue"
+      ],
+      "axioms": [
+        [
+          "author_of",
+          "Paper",
+          "Author"
+        ],
+        [
+          "published_in",
+          "Paper",
+          "Venue"
+        ],
+        [
+          "venue_rank",
+          "Venue",
+          "xsd:decimal"
+        ]
+      ],
+      "sparql": "PREFIX hrn: <https://harness.local/schema#>\nSELECT ?author (SUM(?rank) AS ?score) WHERE { ?paper hrn:author_of ?author ; hrn:published_in ?venue . ?venue hrn:venue_rank ?rank . } GROUP BY ?author ORDER BY DESC(?score)",
+      "answer": "Under this reading, Jonathan Berant and Matt Gardner tie at a venue-weighted score of 24.",
+      "triples": [
+        {
+          "s": "Jonathan Berant",
+          "p": "venue_weighted_score",
+          "o": "24",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-001"
+        },
+        {
+          "s": "Matt Gardner",
+          "p": "venue_weighted_score",
+          "o": "24",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-002"
+        }
+      ],
+      "metrics": {
+        "disagreement": 0.42,
+        "precision": [
+          2,
+          2
+        ],
+        "recall": [
+          2,
+          4
+        ]
+      },
+      "status": "answered",
+      "op": "venue rank",
+      "properties": [
+        "author_of",
+        "published_in",
+        "venue_rank"
+      ]
+    },
+    {
+      "label": "Breadth of collaboration",
+      "gloss": "Rank by distinct co-authors.",
+      "classes": [
+        "Author",
+        "Paper"
+      ],
+      "axioms": [
+        [
+          "author_of",
+          "Paper",
+          "Author"
+        ],
+        [
+          "co_author_with",
+          "Author",
+          "Author"
+        ]
+      ],
+      "sparql": "PREFIX hrn: <https://harness.local/schema#>\nSELECT ?author (COUNT(DISTINCT ?peer) AS ?n) WHERE { ?paper hrn:author_of ?author, ?peer . FILTER (?peer != ?author) } GROUP BY ?author ORDER BY DESC(?n)",
+      "answer": "Under this reading, Matt Gardner ranks first with 19 distinct co-authors, ahead of Jonathan Berant (17).",
+      "triples": [
+        {
+          "s": "Matt Gardner",
+          "p": "distinct_co_authors",
+          "o": "19",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-001"
+        },
+        {
+          "s": "Jonathan Berant",
+          "p": "distinct_co_authors",
+          "o": "17",
+          "support": "Fixture support",
+          "evidence": "Illustrative fixture evidence; live provenance begins in M2.",
+          "source": "Fixture · aggregation",
+          "tripleId": "t-002"
+        }
+      ],
+      "metrics": {
+        "disagreement": 0.42,
+        "precision": [
+          2,
+          2
+        ],
+        "recall": [
+          2,
+          5
+        ]
+      },
+      "status": "answered",
+      "op": "co-author count",
+      "properties": [
+        "author_of",
+        "co_author_with"
+      ]
+    }
+  ],
+  "chosenReading": null,
+  "plans": [
+    "A · author · citations · rank",
+    "B · author · paper count · rank",
+    "C · author · venue prestige · rank"
+  ],
+  "trace": [
+    {
+      "atS": 2.0,
+      "action": "Read the question",
+      "returned": "success criterion unresolved",
+      "reading": null,
+      "spanId": null
+    },
+    {
+      "atS": 11.0,
+      "action": "Searched the corpus",
+      "returned": "0 explicit definitions",
+      "reading": null,
+      "spanId": null
+    },
+    {
+      "atS": 79.0,
+      "action": "Stopped: the criterion is yours to choose",
+      "returned": "4 readings prepared",
+      "reading": null,
+      "spanId": null
+    }
+  ],
+  "rating": null,
+  "reason": null,
+  "coverage": 0.74,
+  "theta": 0.3,
+  "modelAgent": "fixture",
+  "modelSmall": "fixture",
+  "promptHashes": {
+    "fixture": "sample"
+  },
+  "artifacts": [
+    "plans.json",
+    "disagreement.json",
+    "readings.json",
+    "subschema.ttl",
+    "query.rq",
+    "coverage_plan.json",
+    "ledger.json",
+    "graph.trig",
+    "triples.ttl",
+    "shacl_report.ttl",
+    "answer.md",
+    "citations.json",
+    "verification.json",
+    "trace.json",
+    "run.json"
+  ]
+}

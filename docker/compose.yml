@@ -1,0 +1,11 @@
+services:
+  grobid:
+    image: grobid/grobid:0.9.0-crf
+    init: true
+    ports:
+      - "127.0.0.1:8070:8070"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8070/api/isalive"]
+      interval: 10s
+      timeout: 5s
+      retries: 12

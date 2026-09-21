@@ -1,0 +1,35 @@
+{
+  "id": "r-0410",
+  "startedAt": "2026-09-11T16:20:00Z",
+  "durationS": 5.0,
+  "question": "Which retrieval method wins on the hardest subset of these benchmarks?",
+  "path": "baseline",
+  "budget": "fast",
+  "status": "incomplete",
+  "readings": [],
+  "chosenReading": null,
+  "plans": [],
+  "trace": [],
+  "rating": null,
+  "reason": "no_results",
+  "coverage": null,
+  "theta": 0.3,
+  "modelAgent": "fixture",
+  "modelSmall": "fixture",
+  "promptHashes": {
+    "fixture": "sample"
+  },
+  "artifacts": [
+    "subschema.ttl",
+    "query.rq",
+    "coverage_plan.json",
+    "ledger.json",
+    "graph.trig",
+    "triples.ttl",
+    "shacl_report.ttl",
+    "answer.md",
+    "citations.json",
+    "trace.json",
+    "run.json"
+  ]
+}
