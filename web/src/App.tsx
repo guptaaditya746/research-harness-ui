@@ -64,9 +64,15 @@ function Result({ run, pick, setPick, onDeeper }: { run: Run; pick: number; setP
   const [showQuery, setShowQuery] = useState(false);
   const reading = run.readings[pick] || run.readings[0];
   const failed = run.status === 'incomplete';
+  const pathLabel = run.path === 'baseline-enhanced' ? 'enhanced baseline' : run.path === 'baseline' ? 'fast baseline' : 'agentic research';
+  const failure = run.reason === 'provider_error'
+    ? `The ${pathLabel} retrieved passages, but the model gateway failed while inferring the schema. Start or reconnect the local model service at LITELLM_BASE_URL, then run again.`
+    : run.reason === 'no_results'
+      ? `The ${pathLabel} could not find enough supported evidence in the corpus to answer this question.`
+      : `The ${pathLabel} ended before it produced an answer (${run.reason || 'unknown failure'}).`;
   return <div style={{ marginTop: 64 }}>
-    <p className="notice">{failed ? 'Incomplete — the fast path stopped after retrieval.' : run.path === 'baseline' ? 'No criterion was stated and none was requested — the baseline chose one silently.' : `Interpreted as: ${reading?.label}.${run.coverage != null && run.coverage < 1 ? ` Evaluated ${Math.round(run.coverage * 100)}% of obligations; ranking is provisional.` : ''}`}</p>
-    <p className="answer">{failed ? '“Hardest subset” could not be resolved from the corpus. Retrieval returned passages on benchmark difficulty, but the papers define no shared hard subset.' : reading?.answer}</p>
+    <p className="notice">{failed ? `Incomplete — ${pathLabel} stopped before answer composition.` : run.path === 'baseline' ? 'No criterion was stated and none was requested — the baseline chose one silently.' : `Interpreted as: ${reading?.label}.${run.coverage != null && run.coverage < 1 ? ` Evaluated ${Math.round(run.coverage * 100)}% of obligations; ranking is provisional.` : ''}`}</p>
+    <p className="answer">{failed ? failure : reading?.answer}</p>
     {failed && <button className="btn btn-secondary" style={{ marginTop: 24 }} onClick={onDeeper}>Try deeper research</button>}
     {!failed && run.path === 'agentic' && run.readings.length > 1 && <div style={{ marginTop: 20 }}><div className="muted micro" style={{ marginBottom: 8 }}>Re-answer under another reading</div><div style={{ display: 'flex', gap: '12px 24px', flexWrap: 'wrap' }}>{run.readings.map((r, i) => i !== pick && <button key={i} className="text-button" style={{ fontSize: 13 }} onClick={() => setPick(i)}>{r.label}</button>)}</div></div>}
     {!failed && run.path === 'baseline' && <div style={{ marginTop: 20 }}><div className="muted micro">Re-answer under a stated reading (agentic)</div><button className="text-button" style={{ fontSize: 13, marginTop: 8 }} onClick={onDeeper}>Citation count within the corpus</button></div>}
