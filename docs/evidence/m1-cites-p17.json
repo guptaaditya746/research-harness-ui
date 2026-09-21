@@ -1,0 +1,24 @@
+{
+  "question": "Which papers cite p17? Answer from facts and include a fact ID when an incoming citation exists.",
+  "answer": "No indexed paper cites **p17**. \n\n**Citation evidence:** The `citations` query for direction = \"in\" on paper ID p17 returned a total of 0 citing papers, indicating that there are no incoming citations to p17 in the corpus. \n\n**Fact IDs:** None, because there are no incoming citation facts.",
+  "tool_calls": [
+    {
+      "name": "citations",
+      "arguments": {
+        "paper_id": "p17",
+        "direction": "in",
+        "offset": 0,
+        "limit": 10
+      },
+      "result": [
+        {
+          "type": "text",
+          "text": "{\n  \"total\": 0,\n  \"offset\": 0,\n  \"limit\": 10,\n  \"items\": []\n}",
+          "annotations": null,
+          "meta": null
+        }
+      ]
+    }
+  ],
+  "model": "qwen-chat"
+}

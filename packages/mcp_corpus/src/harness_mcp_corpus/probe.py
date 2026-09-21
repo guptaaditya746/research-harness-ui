@@ -17,8 +17,9 @@ from harness_mcp_corpus.server import create_server
 SYSTEM = (
     "You answer questions using only the corpus tools provided. "
     "Call tools to check evidence before answering. "
-    "For citation questions, call citations with direction=in, then call facts on each citing "
-    "paper and cite the exact cites fact_id. A reference title names the cited target, "
+    "For citation questions, call citations with direction=in. If total is zero, report that no "
+    "indexed paper cites the target and do not cite unrelated outgoing facts. Otherwise call facts "
+    "on each citing paper and cite the exact cites fact_id. A reference title names the cited target, "
     "not the citing paper. For citation answers, give paper IDs and fact IDs only; omit titles. "
     "For introduction questions, search passages, read the relevant passage, and cite its passage_id. "
     "Use page limits from 1 to 50 and nonnegative offsets. "
@@ -72,7 +73,9 @@ async def ask(root: Path, question: str, base_url: str, model: str, api_key: str
                 calls.append(record)
                 try:
                     result = await server.call_tool(name, arguments)
-                    content = json.dumps(serialise_result(result))
+                    serialised = serialise_result(result)
+                    record["result"] = serialised
+                    content = json.dumps(serialised)
                 except ToolError as exc:
                     record["error"] = str(exc)
                     content = json.dumps({"error": str(exc)})

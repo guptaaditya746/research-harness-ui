@@ -83,7 +83,7 @@ This route needs outbound HTTPS during the first allocation so Gradle, GROBID,
 and JDK dependencies can be downloaded. It uses the CRF models and CPUs, matching
 the previously pinned Docker setup.
 
-## M1 corpus work in progress
+## M1 corpus
 
 The M1 ingest command reads PDFs with GROBID, uses Docling for individual PDFs
 that have no usable TEI, resolves in-corpus references by DOI then title, writes
@@ -107,11 +107,10 @@ stable across ingest runs. A missing DBLP IRI is recorded as `null`, never
 guessed. This is the user-approved M1 identifier rule; the original plan's
 all-DBLP requirement has been superseded.
 
-On this compute node, the Docker socket is inaccessible and `127.0.0.1:8070`
-is closed. The single-PDF Docling conversion did not return before it was
-stopped, so live ingest of the provided samples has not been verified here.
-Fixture-based TEI parsing, citation resolution, BM25 retrieval, search DSL,
-and MCP registration are tested with `uv run pytest -q packages/corpus/tests`.
+The current sample ingest contains 37 DBLP-verified papers, 2,683 passages,
+2,384 references, structural facts, outlines, and a BM25S index. Fixture-based
+TEI parsing, citation resolution, BM25 retrieval, search DSL, and MCP
+registration are tested with `uv run pytest -q packages/corpus/tests`.
 
 The M1 bare-agent probe exposes only the nine corpus tools to an OpenAI-compatible
 chat endpoint. With a completed ingest and a reachable model, run:
@@ -126,6 +125,6 @@ The shared `.env` points `LITELLM_BASE_URL` and `HARNESS_MODEL_AGENT_URL` at the
 LiteLLM proxy on the same compute node. `qwen-chat` is the default agent, `lite-model` is the small
 model, `heavy-model` is the independent judge, and `qwen-embed` is the embedding
 model. The loopback URL remains valid when the allocated compute node changes.
-On the real 37-paper corpus, `qwen-chat` found no incoming citation edge for `p17`
-and identified `p4` as introducing Video Prediction Policy, citing passage
-`p4-s20-p1`.
+On the real 37-paper corpus, `qwen-chat` found no incoming citation edge for
+`p17` and identified `p4` as introducing Video Prediction Policy, citing
+`p4-abstract`. The recorded calls and tool results are under `docs/evidence/`.
