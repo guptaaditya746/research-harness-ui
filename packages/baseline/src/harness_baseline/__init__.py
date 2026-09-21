@@ -130,11 +130,15 @@ class Baseline20:
         found: dict[str, dict[str, Any]] = {}
         rounds: list[dict[str, Any]] = []
         for round_no, query in enumerate(queries, start=1):
-            hits = self.corpus.search(query, limit=self.retrieve_k)["items"]
+            # Enhanced retrieval must inspect every query before applying the
+            # final cap; otherwise the broad first query fills the cap and
+            # phrase expansion never runs.
+            per_query_limit = max(5, self.retrieve_k // 2) if self.enhanced else self.retrieve_k
+            hits = self.corpus.search(query, limit=per_query_limit)["items"]
             before = len(found)
             found.update({row["passage_id"]: row for row in hits})
             rounds.append({"round": round_no, "query": query, "returned": len(hits), "new": len(found) - before})
-            if len(found) >= self.retrieve_k:
+            if not self.enhanced and len(found) >= self.retrieve_k:
                 break
         rows = list(found.values())[: self.retrieve_k]
         if not rows:
