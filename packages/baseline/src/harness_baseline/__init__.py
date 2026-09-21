@@ -158,10 +158,15 @@ class Baseline20:
 
     def _extract_build(self, state: BaselineState) -> dict[str, Any]:
         if self.edc:
-            extraction, reports = self.extraction.extract_edc(
-                state["question"], state["inferred"], state["passages"]
-            )
-            extracted = extraction.triples
+            extracted = []
+            reports = []
+            batch_size = 8 if self.enhanced else len(state["passages"])
+            for start in range(0, len(state["passages"]), max(1, batch_size)):
+                extraction, batch_reports = self.extraction.extract_edc(
+                    state["question"], state["inferred"], state["passages"][start : start + batch_size]
+                )
+                extracted.extend(extraction.triples)
+                reports.append({"batch": start // max(1, batch_size) + 1, "passages": len(state["passages"][start : start + batch_size]), "edc": batch_reports})
         elif self.enhanced:
             extracted, reports = self.extraction.extract_batches(
                 state["question"], state["inferred"], state["passages"]
