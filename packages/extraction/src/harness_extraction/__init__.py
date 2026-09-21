@@ -10,7 +10,7 @@ from typing import Any, Protocol
 
 import httpx
 from harness_semantic import Subschema
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from rdflib import RDFS, URIRef
 
 
@@ -89,7 +89,7 @@ class ExtractedTriple(BaseModel):
     predicate: str
     object: str
     source_id: str
-    evidence: str
+    evidence: str = Field(validation_alias=AliasChoices("evidence", "evidence_span"))
 
 
 class ExtractionResult(BaseModel):
@@ -166,11 +166,14 @@ class ExtractionEngine:
             )
         )
         passage_ids = {row["passage_id"] for row in passages}
-        for triple in result.triples:
-            if triple.predicate not in inferred.properties:
-                raise ValueError(f"extracted predicate outside inferred schema: {triple.predicate}")
-            if triple.source_id not in passage_ids:
-                raise ValueError(f"extracted triple has unknown source: {triple.source_id}")
+        # Models sometimes return a useful supported triple alongside a
+        # natural-language relation or an invalid passage id. Keep the valid
+        # evidence instead of rejecting the whole extraction response.
+        result.triples = [
+            triple
+            for triple in result.triples
+            if triple.predicate in inferred.properties and triple.source_id in passage_ids
+        ]
         return result
 
     def extract_batches(
