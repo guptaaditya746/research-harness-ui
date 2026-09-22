@@ -1,3 +1,4 @@
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -106,3 +107,50 @@ def test_live_run_sse_rating_promotion_and_editor(tmp_path: Path, monkeypatch) -
     )
     assert edited.json()["notes"] == "Reviewed"
     assert len(client.get("/datasets/candidates").json()) == 1
+
+
+def test_benchmark_endpoint_aggregates_approved_question(tmp_path: Path, monkeypatch) -> None:
+    test_runtime = RunRuntime(
+        tmp_path / "artifacts",
+        tmp_path / "datasets",
+        runner_factory=lambda sink: FakeRunner(sink),
+    )
+    monkeypatch.setattr(main, "runtime", test_runtime)
+    client = TestClient(app)
+    created = client.post(
+        "/runs",
+        json={"question": "Which paper introduced VPP?", "path": "baseline", "budget": "fast"},
+    )
+    run_id = created.json()["id"]
+    for _ in range(100):
+        if client.get(f"/runs/{run_id}").json().get("status") == "answered":
+            break
+        time.sleep(0.01)
+    client.post(f"/runs/{run_id}/rating", json={"rating": "useful"})
+    candidate = client.post(f"/runs/{run_id}/promote").json()
+    edited = client.put(
+        f"/datasets/candidates/{candidate['id']}",
+        json={"category": "metadata", "gold_version": "v1", "status": "approved"},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["status"] == "approved"
+    response = client.get("/benchmark")
+    assert response.status_code == 200
+    assert response.json()["questions"][0]["paths"][0]["f1"]["mean"] == 1.0
+
+
+def test_benchmark_execute_validates_and_launches_repetitions(tmp_path: Path, monkeypatch) -> None:
+    test_runtime = RunRuntime(
+        tmp_path / "artifacts",
+        tmp_path / "datasets",
+        runner_factory=lambda sink: FakeRunner(sink),
+    )
+    monkeypatch.setattr(main, "runtime", test_runtime)
+    client = TestClient(app)
+    response = client.post(
+        "/benchmark/execute",
+        json={"question": "q", "path": "baseline", "budget": "fast", "repetitions": 3},
+    )
+    assert response.status_code == 202
+    assert response.json()["evaluation_mode"] is True
+    assert len(response.json()["ids"]) == 3

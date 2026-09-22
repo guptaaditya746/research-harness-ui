@@ -49,6 +49,9 @@ def evaluate_directory(artifacts: Path, dataset: Path, path: str | None = None) 
                 "precision": chosen.get("precision", 0.0),
                 "recall": chosen.get("recall", 0.0),
                 "f1": chosen.get("f1", 0.0),
+                "provenance_coverage": chosen.get("provenance_coverage", 0.0),
+                "unsupported_ratio": chosen.get("unsupported_ratio", 0.0),
+                "answer_supported": chosen.get("answer_supported", False),
             }
         )
     return results
@@ -60,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts"))
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--path", choices=["agentic", "baseline", "baseline-enhanced"])
+    parser.add_argument("--repetitions", type=int, default=1, help="expected repetitions in evaluation mode")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     if args.run != "run":

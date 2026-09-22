@@ -16,9 +16,15 @@ from .mcp import MCPToolClient, MCPUnavailable
 class AgenticResearch:
     """Agent-path runner sharing evidence and graph invariants with baseline."""
 
-    def __init__(self, baseline: Baseline20, trace_sink: Callable[[TraceRow], None] | None = None):
+    def __init__(
+        self,
+        baseline: Baseline20,
+        trace_sink: Callable[[TraceRow], None] | None = None,
+        agent_model: object | None = None,
+    ):
         self.baseline = baseline
         self.trace_sink = trace_sink or (lambda _: None)
+        self.agent_model = agent_model or baseline.extraction.model
 
     def run(self, question: str, budget: str, run_id: str):
         tool_calls: list[dict] = []
@@ -43,7 +49,7 @@ class AgenticResearch:
 
         mcp = MCPToolClient(tool_sink, agent="supervisor")
         try:
-            agent_final = mcp.run_agent(self.baseline.extraction.model, question)
+            agent_final = mcp.run_agent(self.agent_model, question)
             if agent_final:
                 row = TraceRow(
                     atS=round(monotonic() - started, 3),
@@ -132,7 +138,7 @@ class AgenticResearch:
                 "plans": plans,
                 "trace": trace,
                 "readings": readings,
-                "model_agent": getattr(self.baseline.extraction.model, "model", "recorded"),
+                "model_agent": getattr(self.agent_model, "model", "recorded"),
                 "artifacts": list(required_artifacts("agentic")),
                 "status": "incomplete" if mcp_error else status,
                 "chosen_reading": None if mcp_error else chosen,

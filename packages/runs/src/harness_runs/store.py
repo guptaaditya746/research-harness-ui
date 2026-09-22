@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from threading import RLock
@@ -116,6 +117,23 @@ class GoldCandidateStore:
         with self.lock:
             return self._rows()
 
+    def validate_benchmark(self, *, minimum_per_category: int = 3) -> dict:
+        mandatory = ("metadata", "citation", "aggregation/ranking", "synthesis")
+        rows = self.list()
+        errors: list[dict[str, object]] = []
+        approved = [row for row in rows if row.get("status") == "approved"]
+        for category in mandatory:
+            matches = [row for row in approved if row.get("category") == category]
+            if len(matches) < minimum_per_category:
+                errors.append({"category": category, "code": "minimum_questions", "count": len(matches), "required": minimum_per_category})
+        for row in approved:
+            missing = [field for field in ("gold_triples", "evidence_refs", "gold_version", "corpus_fingerprint", "ontology_hash", "reviewer") if not row.get(field)]
+            if missing:
+                errors.append({"id": row.get("id"), "code": "missing_metadata", "fields": missing})
+            if not row.get("gold_triples"):
+                errors.append({"id": row.get("id"), "code": "empty_gold_triples"})
+        return {"valid": not errors, "mandatory_categories": list(mandatory), "approved_questions": len(approved), "errors": errors}
+
     def promote(self, run: Run) -> dict:
         if run.rating is None:
             raise ValueError("a run must be human-rated before promotion")
@@ -145,20 +163,33 @@ class GoldCandidateStore:
                 ),
                 "notes": "Promoted from a human-rated run; review required.",
                 "status": "candidate",
+                "category": "uncategorized",
+                "gold_version": "draft-1",
+                "corpus_fingerprint": os.getenv("CORPUS_FINGERPRINT", "unknown"),
+                "ontology_hash": os.getenv("ONTOLOGY_HASH", "unknown"),
+                "reviewer": None,
+                "reviewed_at": None,
             }
             rows.append(row)
             self._write(rows)
             return row
 
     def update(self, candidate_id: str, changes: dict) -> dict:
-        allowed = {"ambiguous", "readings", "gold_triples", "paper_ids", "notes", "status"}
+        allowed = {
+            "ambiguous", "readings", "gold_triples", "paper_ids", "notes", "status",
+            "category", "gold_version", "corpus_fingerprint", "ontology_hash",
+            "reviewer", "reviewed_at", "accepted_readings", "evidence_refs",
+        }
         if set(changes) - allowed:
             raise ValueError("unknown candidate fields")
         with self.lock:
             rows = self._rows()
             for index, row in enumerate(rows):
                 if row["id"] == candidate_id:
-                    rows[index] = {**row, **changes}
+                    updated = {**row, **changes}
+                    if changes.get("status") == "approved":
+                        updated.setdefault("reviewed_at", datetime.now(UTC).isoformat())
+                    rows[index] = updated
                     self._write(rows)
                     return rows[index]
         raise KeyError(candidate_id)

@@ -10,6 +10,7 @@ import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
+from statistics import mean
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -52,6 +53,14 @@ class CandidateUpdate(BaseModel):
     paper_ids: list[str] | None = None
     notes: str | None = None
     status: str | None = None
+    category: str | None = None
+    gold_version: str | None = None
+    corpus_fingerprint: str | None = None
+    ontology_hash: str | None = None
+    reviewer: str | None = None
+    reviewed_at: str | None = None
+    accepted_readings: list[dict] | None = None
+    evidence_refs: list[str] | None = None
 
 
 class ReadingPick(BaseModel):
@@ -62,6 +71,20 @@ class ReadingPick(BaseModel):
 class EvaluationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     gold_triples: list[dict]
+
+
+class BenchmarkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    repetitions: int = 1
+    category: str | None = None
+
+
+class BenchmarkExecuteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    question: str
+    path: str
+    budget: str = "slow"
+    repetitions: int = 3
 
 
 class SettingsUpdate(BaseModel):
@@ -125,7 +148,15 @@ class RunRuntime:
             try:
                 with run_observation(run_id, request.question.strip(), request.path, request.budget) as observation:
                     if request.path == "agentic" and not self.custom_runner:
-                        runner = AgenticResearch(self._runner(sink, True), sink)
+                        baseline = self._runner(sink, True)
+                        agent_model = OpenAICompatibleModel(
+                            model=os.getenv(
+                                "HARNESS_MODEL_HIGH",
+                                os.getenv("HARNESS_MODEL_AGENT", "heavy-model"),
+                            ),
+                            timeout_s=float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15")),
+                        )
+                        runner = AgenticResearch(baseline, sink, agent_model=agent_model)
                     else:
                         runner = self.runner_factory(sink) if self.custom_runner else self._runner(
                             sink, request.path == "baseline-enhanced"
@@ -184,8 +215,8 @@ class RunRuntime:
 
     def pick_reading(self, run_id: str, index: int) -> Run:
         run = self.get(run_id)
-        if run.path != "agentic":
-            raise ValueError("reading selection is only available for agentic runs")
+        if run.path not in {"agentic", "baseline-enhanced"}:
+            raise ValueError("reading selection is only available for adaptive or agentic runs")
         if run.status not in {"awaiting_reading", "answered"}:
             raise ValueError("run is not waiting for a reading")
         if index < 0 or index >= len(run.readings):
@@ -353,6 +384,69 @@ def promote_run(run_id: str) -> dict:
 @app.get("/datasets/candidates")
 def list_candidates() -> list[dict]:
     return runtime.gold.list()
+
+
+@app.get("/benchmark")
+def benchmark(category: str | None = None) -> dict:
+    """Return approved benchmark questions with aggregated path scores."""
+    candidates = [row for row in runtime.gold.list() if row.get("status") == "approved"]
+    if category:
+        candidates = [row for row in candidates if row.get("category") == category]
+    runs = runtime.list()
+    question_rows = []
+    for candidate in candidates:
+        path_rows = []
+        for path in ("baseline", "baseline-enhanced", "agentic"):
+            matching = [run for run in runs if run.question == candidate.get("question") and run.path == path]
+            scores = [evaluate_run(run, candidate.get("gold_triples", []))["chosen"] for run in matching]
+            scores = [score for score in scores if score is not None]
+            if not scores:
+                continue
+            path_rows.append(
+                {
+                    "path": "adaptive-baseline" if path == "baseline-enhanced" else path,
+                    "repetitions": [run.id for run in matching],
+                    "completed": len(scores),
+                    "failed": len(matching) - len(scores),
+                    "precision": {"mean": mean(s["precision"] for s in scores), "min": min(s["precision"] for s in scores), "max": max(s["precision"] for s in scores)},
+                    "recall": {"mean": mean(s["recall"] for s in scores), "min": min(s["recall"] for s in scores), "max": max(s["recall"] for s in scores)},
+                    "f1": {"mean": mean(s["f1"] for s in scores), "min": min(s["f1"] for s in scores), "max": max(s["f1"] for s in scores)},
+                }
+            )
+        question_rows.append(
+            {
+                "id": candidate.get("id"),
+                "question": candidate.get("question"),
+                "category": candidate.get("category", "uncategorized"),
+                "gold_version": candidate.get("gold_version"),
+                "corpus_fingerprint": candidate.get("corpus_fingerprint"),
+                "ontology_hash": candidate.get("ontology_hash"),
+                "paths": path_rows,
+            }
+        )
+    return {"questions": question_rows, "categories": sorted({row["category"] for row in question_rows})}
+
+
+@app.get("/benchmark/validate")
+def validate_benchmark() -> dict:
+    """Validate approved gold coverage and required version metadata."""
+    return runtime.gold.validate_benchmark(minimum_per_category=3)
+
+
+@app.post("/benchmark/execute", status_code=202)
+def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
+    """Launch explicit evaluation repetitions; ordinary runs remain single-pass."""
+    if request.path not in {"baseline", "baseline-enhanced", "agentic"}:
+        raise HTTPException(422, "unknown research path")
+    if request.budget not in {"fast", "slow"}:
+        raise HTTPException(422, "budget must be fast or slow")
+    if not 1 <= request.repetitions <= 20:
+        raise HTTPException(422, "repetitions must be between 1 and 20")
+    ids = [
+        runtime.start(RunRequest(question=request.question, path=request.path, budget=request.budget))
+        for _ in range(request.repetitions)
+    ]
+    return {"ids": ids, "repetitions": request.repetitions, "evaluation_mode": True}
 
 
 @app.put("/datasets/candidates/{candidate_id}")
