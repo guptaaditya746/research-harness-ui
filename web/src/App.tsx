@@ -4,7 +4,7 @@ import type { Reading, Run, Triple } from './generated/run';
 type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_result' | 'failed' | 'runs' | 'corpus' | 'settings' | 'gold';
 type TripleView = 'statements' | 'graph' | 'turtle';
 type GoldCandidate = { id: string; run_id: string; question: string; gold_triples: Triple[]; notes: string; status: string };
-type PaperLabel = { paper_id: string; title: string };
+type PaperLabel = { paper_id: string; dblp_iri?: string | null; title: string };
 const screenRun: Record<string, string> = { readings: 'r-0413', agentic_result: 'r-0412', baseline_result: 'r-0411', failed: 'r-0410' };
 const api = '/api';
 
@@ -105,7 +105,7 @@ export default function App() {
   const active = useMemo(() => runs.find(r => r.id === activeId), [runs, activeId]);
   const reading = active?.readings[pick] || active?.readings[0];
 
-  useEffect(() => { fetch(`${api}/corpus/papers`).then(r => r.json()).then((items: PaperLabel[]) => setLabels(Object.fromEntries(items.map(item => [item.paper_id, item.title])))); fetch(`${api}/runs`).then(r => r.json()).then((items: Run[]) => {
+  useEffect(() => { fetch(`${api}/corpus/papers`).then(r => r.json()).then((items: PaperLabel[]) => setLabels(Object.fromEntries(items.flatMap(item => [[item.paper_id, item.title], ...(item.dblp_iri ? [[item.dblp_iri, item.title]] : [])])))); fetch(`${api}/runs`).then(r => r.json()).then((items: Run[]) => {
     setRuns(items);
     const id = screenRun[initial || ''];
     if (id) setQuestion(items.find(run => run.id === id)?.question || '');

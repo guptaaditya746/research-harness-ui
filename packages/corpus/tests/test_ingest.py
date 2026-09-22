@@ -4,6 +4,7 @@ from pathlib import Path
 
 from harness_corpus.ingest import ingest, local_identifier
 from harness_corpus.store import CorpusStore, matches
+from harness_corpus.tei import parse_tei
 from harness_mcp_corpus.server import create_server
 
 
@@ -97,3 +98,17 @@ def test_search_dsl() -> None:
     assert matches("vision OR robot", text)
     assert matches("robot AND NOT video", text)
     assert not matches("world AND video", text)
+
+
+def test_tei_does_not_turn_affiliations_into_authors() -> None:
+    xml = b'''<TEI xmlns="http://www.tei-c.org/ns/1.0">
+      <teiHeader><fileDesc><sourceDesc><biblStruct><analytic>
+        <title level="a">FOCUS</title>
+        <author><persName><forename>Xianmin</forename><surname>Wang</surname></persName></author>
+        <author><affiliation><orgName>Guangzhou University</orgName><country>China</country></affiliation></author>
+      </analytic></biblStruct></sourceDesc></fileDesc></teiHeader>
+      <text><body><div><p>Abstract.</p></div></body></text>
+    </TEI>'''
+    paper, _, _ = parse_tei(xml, "p6")
+    assert paper["authors"] == ["Xianmin Wang"]
+    assert paper["excluded_affiliation_authors"] == 1

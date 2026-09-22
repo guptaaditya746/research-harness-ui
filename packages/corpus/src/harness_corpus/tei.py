@@ -33,11 +33,19 @@ def parse_tei(xml: bytes, pid: str) -> tuple[dict, list[dict], list[dict]]:
     if not title and header is not None:
         title = node_text(header.find(".//t:title", NS))
     authors = []
+    affiliation_only_authors = 0
     if header is not None:
         for author in header.findall(".//t:author", NS):
-            name = node_text(author.find("t:persName", NS)) or node_text(author)
+            # GROBID may emit an affiliation-only ``author`` node when it
+            # cannot associate an institution with a person.  Falling back
+            # to the complete node text turns institutions and countries
+            # into fake authors.  A DBLP author fact requires a person name.
+            person = author.find("t:persName", NS)
+            name = node_text(person)
             if name:
                 authors.append(name)
+            elif author.find("t:affiliation", NS) is not None:
+                affiliation_only_authors += 1
     doi = ""
     if header is not None:
         doi = node_text(header.find(".//t:idno[@type='DOI']", NS))
@@ -58,6 +66,7 @@ def parse_tei(xml: bytes, pid: str) -> tuple[dict, list[dict], list[dict]]:
         "venue": venue,
         "doi": doi.lower().removeprefix("https://doi.org/"),
         "abstract": abstract,
+        "excluded_affiliation_authors": affiliation_only_authors,
     }
     passages = []
     if abstract:

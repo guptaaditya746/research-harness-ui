@@ -119,6 +119,7 @@ def from_docling(pdf: Path, pid: str) -> tuple[dict, list[dict], list[dict]]:
         "venue": "",
         "doi": "",
         "abstract": "",
+        "excluded_affiliation_authors": 0,
     }
     passages = []
     offset = 0
@@ -249,6 +250,9 @@ def ingest(
             "fallback_papers": fallback,
             "dblp_errors": dblp_errors,
             "unresolved_dblp": [p["paper_id"] for p in papers if not p["dblp_iri"]],
+            "excluded_affiliation_authors": sum(
+                int(p.get("excluded_affiliation_authors", 0)) for p in papers
+            ),
         }
         (root / "ingest_report.json").write_text(json.dumps(report, indent=2) + "\n")
         return report
