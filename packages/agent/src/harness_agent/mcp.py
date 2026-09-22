@@ -227,6 +227,14 @@ class MCPToolClient:
                 return len(result["items"])
             content = result.get("content")
             if isinstance(content, list):
+                for item in content:
+                    if isinstance(item, dict) and isinstance(item.get("text"), str):
+                        try:
+                            decoded = json.loads(item["text"])
+                        except json.JSONDecodeError:
+                            continue
+                        if isinstance(decoded, dict) and isinstance(decoded.get("items"), list):
+                            return len(decoded["items"])
                 return len(content)
         if isinstance(result, list):
             return len(result)
