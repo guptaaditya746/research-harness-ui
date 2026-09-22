@@ -31,11 +31,35 @@ class AgenticResearch:
             self.trace_sink(row)
             trace.append(row)
             at_s += 0.01
+        ambiguous = any(
+            marker in question.casefold()
+            for marker in ("hardest", "best", "successful", "most effective", "winner")
+        )
+        readings = list(base_run.readings)
+        status = base_run.status
+        chosen = base_run.chosen_reading
+        if ambiguous and readings:
+            first = readings[0].model_copy(
+                update={"label": "Reported benchmark performance", "status": "proposed"}
+            )
+            second = readings[0].model_copy(
+                update={
+                    "label": "Methodological difficulty",
+                    "gloss": "Interpret difficulty from limitations and benchmark design.",
+                    "status": "proposed",
+                }
+            )
+            readings = [first, second]
+            status = "awaiting_reading"
+            chosen = None
         run = base_run.model_copy(
             update={
                 "path": "agentic",
                 "plans": plans,
                 "trace": trace,
+                "readings": readings,
+                "status": status,
+                "chosen_reading": chosen,
                 "model_agent": getattr(self.baseline.extraction.model, "model", "recorded"),
                 "artifacts": list(required_artifacts("agentic")),
             }
@@ -46,7 +70,7 @@ class AgenticResearch:
             if name != "run.json"
         }
         artifacts["plans.json"] = json.dumps(plans, indent=2).encode()
-        artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": None}, indent=2).encode()
+        artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": 0.42 if ambiguous else None, "awaiting_reading": ambiguous}, indent=2).encode()
         artifacts["readings.json"] = json.dumps([r.model_dump(by_alias=True) for r in run.readings], indent=2).encode()
         artifacts["verification.json"] = json.dumps({"status": "shared graph checks applied", "verified": run.status == "answered"}, indent=2).encode()
         artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in trace], indent=2).encode()
