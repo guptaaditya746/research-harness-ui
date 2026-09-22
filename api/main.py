@@ -123,7 +123,7 @@ class RunRuntime:
 
         def execute() -> None:
             try:
-                with run_observation(run_id, request.question.strip(), request.path, request.budget):
+                with run_observation(run_id, request.question.strip(), request.path, request.budget) as observation:
                     if request.path == "agentic" and not self.custom_runner:
                         runner = AgenticResearch(self._runner(sink, True), sink)
                     else:
@@ -131,6 +131,13 @@ class RunRuntime:
                             sink, request.path == "baseline-enhanced"
                         )
                     result = runner.run(request.question.strip(), request.budget, run_id)
+                    if observation is not None:
+                        observation.update(
+                            output={
+                                "status": result["run"].status,
+                                "triple_count": sum(len(item.triples) for item in result["run"].readings),
+                            }
+                        )
                 run = result["run"]
                 with self.lock:
                     stopped = run_id in self.stop_requested
