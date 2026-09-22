@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from harness_ledger import Ledger, Obligation
 from harness_semantic import HRN, Subschema
-from rdflib import PROV, RDF, RDFS, Dataset, Graph, Literal, URIRef
+from rdflib import OWL, PROV, RDF, RDFS, Dataset, Graph, Literal, URIRef
 from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.parserutils import CompValue
 from rdflib.term import Node
@@ -67,7 +67,7 @@ class ProvenanceDataset:
         graph_iri = URIRef(f"urn:harness:graph:{quote(event_id, safe='')}")
         checked = list(triples)
         for _subject, predicate, object_ in checked:
-            if predicate not in self.schema.properties and predicate != RDF.type:
+            if not _known_predicate(self.schema, predicate) and predicate != RDF.type:
                 raise InvariantViolation(3, f"predicate outside subschema: {predicate}")
             if predicate == RDF.type and object_ not in self.schema.classes:
                 raise InvariantViolation(3, f"class outside subschema: {object_}")
@@ -159,12 +159,25 @@ def _query_terms(query: str) -> tuple[set[URIRef], set[URIRef]]:
     return predicates, classes
 
 
+def _known_predicate(schema: Subschema, predicate: URIRef) -> bool:
+    """Accept immutable seed predicates linked to local compatibility terms."""
+    if predicate in schema.properties:
+        return True
+    return any(schema.graph.triples((local, OWL.equivalentProperty, predicate)) for local in schema.properties) or any(
+        schema.graph.triples((predicate, OWL.equivalentProperty, local)) for local in schema.properties
+    )
+
+
 def sparql_check(query: str, schema: Subschema) -> str:
     try:
         predicates, classes = _query_terms(query)
     except Exception as error:
         raise ValueError(f"invalid SPARQL: {error}") from error
-    unknown_predicates = predicates - schema.properties - {RDF.type}
+    unknown_predicates = {
+        predicate
+        for predicate in predicates
+        if predicate != RDF.type and not _known_predicate(schema, predicate)
+    }
     unknown_classes = classes - schema.classes
     if unknown_predicates or unknown_classes:
         values = sorted(map(str, unknown_predicates | unknown_classes))
