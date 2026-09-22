@@ -64,6 +64,12 @@ class EvaluationRequest(BaseModel):
     gold_triples: list[dict]
 
 
+class SettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    baseline: str | None = None
+    agentic: str | None = None
+
+
 def fixture_runs() -> list[Run]:
     return [Run.model_validate_json(path.read_text()) for path in sorted(FIXTURES.glob("r-*.json"))]
 
@@ -82,6 +88,7 @@ class RunRuntime:
         self.events: dict[str, list[TraceRow]] = {}
         self.running: set[str] = set()
         self.stop_requested: set[str] = set()
+        self.settings = {"baseline": "fast", "agentic": "slow"}
         self.fixture_overrides: dict[str, Run] = {}
         self.lock = threading.RLock()
 
@@ -386,4 +393,13 @@ def papers() -> list[dict]:
 
 @app.get("/settings")
 def settings() -> dict[str, str]:
-    return {"baseline": "fast", "agentic": "slow"}
+    return dict(runtime.settings)
+
+
+@app.put("/settings")
+def update_settings(request: SettingsUpdate) -> dict[str, str]:
+    changes = request.model_dump(exclude_none=True)
+    if any(value not in {"fast", "slow"} for value in changes.values()):
+        raise HTTPException(422, "budgets must be fast or slow")
+    runtime.settings.update(changes)
+    return dict(runtime.settings)

@@ -24,10 +24,18 @@ class AgenticResearch:
             "Corpus structure: inspect metadata, citations, and shared entities.",
             "Counterevidence: search for limitations, disagreements, and missing definitions.",
         ]
+        trace = list(base_run.trace)
+        at_s = (trace[-1].at_s if trace else 0.0) + 0.01
+        for plan in plans:
+            row = TraceRow(atS=at_s, action="Agent planner lens", returned=plan)
+            self.trace_sink(row)
+            trace.append(row)
+            at_s += 0.01
         run = base_run.model_copy(
             update={
                 "path": "agentic",
                 "plans": plans,
+                "trace": trace,
                 "model_agent": getattr(self.baseline.extraction.model, "model", "recorded"),
                 "artifacts": list(required_artifacts("agentic")),
             }
@@ -41,6 +49,7 @@ class AgenticResearch:
         artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": None}, indent=2).encode()
         artifacts["readings.json"] = json.dumps([r.model_dump(by_alias=True) for r in run.readings], indent=2).encode()
         artifacts["verification.json"] = json.dumps({"status": "shared graph checks applied", "verified": run.status == "answered"}, indent=2).encode()
+        artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in trace], indent=2).encode()
         return {"run": run, "artifacts": artifacts}
 
 
