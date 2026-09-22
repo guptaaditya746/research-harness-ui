@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 
 import bm25s
@@ -280,3 +281,47 @@ class CorpusStore:
                 }
             )
         return paged(rows, offset, limit)
+
+    def keyphrases(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        """Return corpus-local lexical keyphrases with supporting passage IDs."""
+        rows = [
+            passage for passage in self.passages
+            if in_scope(self.by_paper[passage["paper_id"]], scope)
+        ]
+        counts: Counter[str] = Counter()
+        support: dict[str, set[str]] = {}
+        for passage in rows:
+            words = re.findall(r"[A-Za-z][A-Za-z0-9-]{3,}", passage["text"].casefold())
+            seen: set[str] = set()
+            for size in (2, 3):
+                for index in range(len(words) - size + 1):
+                    phrase = " ".join(words[index : index + size])
+                    if phrase in seen or any(token in {"this", "that", "with", "from", "which"} for token in phrase.split()):
+                        continue
+                    seen.add(phrase)
+                    counts[phrase] += 1
+                    support.setdefault(phrase, set()).add(passage["passage_id"])
+        ranked = [
+            {"phrase": phrase, "count": count, "passage_ids": sorted(support[phrase])[:10]}
+            for phrase, count in counts.most_common()
+            if count > 1
+        ]
+        return paged(ranked, offset, limit)
+
+    def results(self, pattern: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        """Find numeric result statements while retaining their evidence IDs."""
+        regex = re.compile(pattern, re.IGNORECASE)
+        rows = []
+        for passage in self.passages:
+            if not in_scope(self.by_paper[passage["paper_id"]], scope):
+                continue
+            for sentence in re.split(r"(?<=[.!?])\s+", passage["text"]):
+                if regex.search(sentence) and re.search(r"\d", sentence):
+                    rows.append({"passage_id": passage["passage_id"], "paper_id": passage["paper_id"], "text": sentence.strip()})
+        return paged(rows, offset, limit)
+
+    def expand(self, passage_id: str, window: int = 2) -> dict:
+        """Expand a passage to bounded neighbouring evidence."""
+        if window < 0 or window > 5:
+            raise ValueError("window must be between 0 and 5")
+        return self.read_passage(passage_id, window)

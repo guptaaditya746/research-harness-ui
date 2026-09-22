@@ -53,6 +53,18 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def bulk_check(pattern: str, paper_ids: list[str], offset: int = 0, limit: int = 10) -> dict:
         return corpus.bulk_check(pattern, paper_ids, offset, limit)
 
+    @mcp.tool(description="Rank repeated corpus-local keyphrases with supporting passage IDs.")
+    def keyphrases(scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.keyphrases(scope, offset, limit)
+
+    @mcp.tool(description="Find numeric result statements matching a pattern with passage IDs.")
+    def results(pattern: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.results(pattern, scope, offset, limit)
+
+    @mcp.tool(description="Expand one passage to bounded neighbouring passages.")
+    def expand(passage_id: str, window: int = 2) -> dict:
+        return corpus.expand(passage_id, window)
+
     return mcp
 
 

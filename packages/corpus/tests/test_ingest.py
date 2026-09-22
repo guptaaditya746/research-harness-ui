@@ -68,9 +68,15 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
         "facts",
         "citations",
         "bulk_check",
+        "keyphrases",
+        "results",
+        "expand",
     ]
     response = asyncio.run(mcp.call_tool("citations", {"paper_id": "p17"}))
     assert "p2" in str(response)
+    assert store.expand("p17-s1-p1", 1)["total"] == 1
+    assert store.results("predict")['total'] == 1
+    assert "items" in store.keyphrases()
     monkeypatch.setattr(
         "harness_corpus.ingest.lookup_dblp_many",
         lambda papers, client: {"p17": "https://dblp.org/rec/conf/test/Robot24"},
