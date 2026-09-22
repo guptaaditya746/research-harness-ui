@@ -17,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from harness_agent import AgenticResearch
 from harness_baseline import Baseline20
 from harness_corpus.store import CorpusStore
+from harness_evaluation import evaluate_run
 from harness_extraction import ExtractionEngine, OpenAICompatibleModel
 from harness_observability import hello_span
 from harness_observability import init as init_observability
@@ -53,6 +54,16 @@ class CandidateUpdate(BaseModel):
     status: str | None = None
 
 
+class ReadingPick(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    pick: int
+
+
+class EvaluationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    gold_triples: list[dict]
+
+
 def fixture_runs() -> list[Run]:
     return [Run.model_validate_json(path.read_text()) for path in sorted(FIXTURES.glob("r-*.json"))]
 
@@ -70,6 +81,7 @@ class RunRuntime:
         self.runner_factory = runner_factory or self._runner
         self.events: dict[str, list[TraceRow]] = {}
         self.running: set[str] = set()
+        self.stop_requested: set[str] = set()
         self.fixture_overrides: dict[str, Run] = {}
         self.lock = threading.RLock()
 
@@ -113,10 +125,17 @@ class RunRuntime:
                 result = runner.run(
                     request.question.strip(), request.budget, run_id
                 )
-                self.artifacts.finalize(result["run"], result["artifacts"])
+                run = result["run"]
+                with self.lock:
+                    stopped = run_id in self.stop_requested
+                if stopped:
+                    run = run.model_copy(update={"status": "stopped", "chosen_reading": None})
+                    result["run"] = run
+                self.artifacts.finalize(run, result["artifacts"])
             finally:
                 with self.lock:
                     self.running.discard(run_id)
+                    self.stop_requested.discard(run_id)
 
         threading.Thread(target=execute, name=f"baseline-{run_id}", daemon=True).start()
         return run_id
@@ -148,6 +167,35 @@ class RunRuntime:
             self.artifacts.update_run(run)
         except FileNotFoundError:
             self.fixture_overrides[run_id] = run
+        return run
+
+    def pick_reading(self, run_id: str, index: int) -> Run:
+        run = self.get(run_id)
+        if run.path != "agentic":
+            raise ValueError("reading selection is only available for agentic runs")
+        if run.status not in {"awaiting_reading", "answered"}:
+            raise ValueError("run is not waiting for a reading")
+        if index < 0 or index >= len(run.readings):
+            raise ValueError("reading index is out of range")
+        selected = run.model_copy(update={"chosen_reading": index, "status": "answered"})
+        try:
+            self.artifacts.update_run(selected)
+        except FileNotFoundError:
+            self.fixture_overrides[run_id] = selected
+        return selected
+
+    def stop(self, run_id: str) -> Run | None:
+        with self.lock:
+            if run_id in self.running:
+                self.stop_requested.add(run_id)
+                return None
+        run = self.get(run_id)
+        if run.status in {"answered", "awaiting_reading"}:
+            run = run.model_copy(update={"status": "stopped", "chosen_reading": None})
+            try:
+                self.artifacts.update_run(run)
+            except FileNotFoundError:
+                self.fixture_overrides[run_id] = run
         return run
 
     def promote(self, run_id: str) -> dict:
@@ -251,6 +299,32 @@ def rate_run(run_id: str, request: RatingRequest) -> Run:
         raise HTTPException(404, "run not found") from exc
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/reading", response_model=Run, response_model_by_alias=True)
+def pick_reading(run_id: str, request: ReadingPick) -> Run:
+    try:
+        return runtime.pick_reading(run_id, request.pick)
+    except KeyError as exc:
+        raise HTTPException(404, "run not found") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+
+
+@app.post("/runs/{run_id}/stop", response_model=Run | None, response_model_by_alias=True)
+def stop_run(run_id: str) -> Run | None:
+    try:
+        return runtime.stop(run_id)
+    except KeyError as exc:
+        raise HTTPException(404, "run not found") from exc
+
+
+@app.post("/runs/{run_id}/evaluate")
+def evaluate_run_endpoint(run_id: str, request: EvaluationRequest) -> dict:
+    try:
+        return evaluate_run(runtime.get(run_id), request.gold_triples)
+    except KeyError as exc:
+        raise HTTPException(404, "run not found") from exc
 
 
 @app.post("/runs/{run_id}/promote", status_code=201)

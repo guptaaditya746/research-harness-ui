@@ -88,6 +88,12 @@ def test_live_run_sse_rating_promotion_and_editor(tmp_path: Path, monkeypatch) -
     assert "event: trace" in events.text
     assert "event: done" in events.text
     assert client.get(f"/runs/{run_id}").json()["status"] == "answered"
+    evaluated = client.post(
+        f"/runs/{run_id}/evaluate",
+        json={"gold_triples": [{"s": "p4", "p": "claims", "o": "Video Prediction Policy"}]},
+    )
+    assert evaluated.status_code == 200
+    assert evaluated.json()["chosen"]["f1"] == 1.0
 
     assert client.post(f"/runs/{run_id}/promote").status_code == 409
     rated = client.post(f"/runs/{run_id}/rating", json={"rating": "useful"})
