@@ -2,7 +2,12 @@
 name = "harness-agent"
 version = "0.1.0"
 requires-python = ">=3.12"
+dependencies = ["harness-baseline", "harness-schema", "deepagents>=0.7.16,<1"]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv.sources]
+harness-baseline = { workspace = true }
+harness-schema = { workspace = true }

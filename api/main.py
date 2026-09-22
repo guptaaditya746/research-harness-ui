@@ -14,6 +14,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from harness_agent import AgenticResearch
 from harness_baseline import Baseline20
 from harness_corpus.store import CorpusStore
 from harness_extraction import ExtractionEngine, OpenAICompatibleModel
@@ -86,8 +87,8 @@ class RunRuntime:
         )
 
     def start(self, request: RunRequest) -> str:
-        if request.path not in {"baseline", "baseline-enhanced"}:
-            raise ValueError("the agentic path arrives in M5")
+        if request.path not in {"agentic", "baseline", "baseline-enhanced"}:
+            raise ValueError("unknown research path")
         if request.budget not in {"fast", "slow"}:
             raise ValueError("budget must be fast or slow")
         if not request.question.strip():
@@ -103,9 +104,12 @@ class RunRuntime:
 
         def execute() -> None:
             try:
-                runner = self.runner_factory(sink) if self.custom_runner else self._runner(
-                    sink, request.path == "baseline-enhanced"
-                )
+                if request.path == "agentic" and not self.custom_runner:
+                    runner = AgenticResearch(self._runner(sink, True), sink)
+                else:
+                    runner = self.runner_factory(sink) if self.custom_runner else self._runner(
+                        sink, request.path == "baseline-enhanced"
+                    )
                 result = runner.run(
                     request.question.strip(), request.budget, run_id
                 )
