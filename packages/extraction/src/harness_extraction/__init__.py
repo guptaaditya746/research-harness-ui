@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 import httpx
 from harness_semantic import Subschema
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rdflib import RDFS, URIRef
 
 
@@ -82,6 +82,18 @@ class SchemaInference(BaseModel):
     gloss: str
     classes: list[str]
     properties: list[str]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_catalogs(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        normalized = dict(value)
+        for key in ("classes", "properties"):
+            item = normalized.get(key)
+            if isinstance(item, dict):
+                normalized[key] = list(item)
+        return normalized
 
 
 class ExtractedTriple(BaseModel):
