@@ -268,7 +268,7 @@ class Baseline20:
         if "which papers cite" in question or "who cites" in question:
             target = self._find_title_fact(question)
             if target is not None:
-                rows = self.corpus.citations(target["subject"], "in", 0, 10000)["items"]
+                rows = self.corpus.citations(target["subject"], "in", 0, 50)["items"]
                 triples = [
                     ExtractedTriple(
                         subject=str(row["paper_id"]),

@@ -120,10 +120,11 @@ class RunRuntime:
         sink: Callable[[TraceRow], None],
         enhanced: bool = False,
         model_name: str | None = None,
+        timeout_s: float | None = None,
     ) -> Baseline20:
         schema = hand_written_subschema()
         budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15"))
-        model = OpenAICompatibleModel(model=model_name, timeout_s=budget_timeout)
+        model = OpenAICompatibleModel(model=model_name, timeout_s=timeout_s or budget_timeout)
         return Baseline20(
             CorpusStore(Path(os.getenv("CORPUS_ROOT", ROOT / "corpus_data"))),
             ExtractionEngine(model, schema),
@@ -157,10 +158,20 @@ class RunRuntime:
                             "HARNESS_MODEL_HIGH",
                             os.getenv("HARNESS_MODEL_AGENT", "heavy-model"),
                         )
-                        baseline = self._runner(sink, True, model_name=high_model)
+                        agent_timeout = float(
+                            os.getenv(
+                                "BUDGET_AGENTIC_SLOW_SECONDS"
+                                if request.budget == "slow"
+                                else "BUDGET_AGENTIC_FAST_SECONDS",
+                                "120" if request.budget == "slow" else "45",
+                            )
+                        )
+                        baseline = self._runner(
+                            sink, True, model_name=high_model, timeout_s=agent_timeout
+                        )
                         agent_model = OpenAICompatibleModel(
                             model=high_model,
-                            timeout_s=float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15")),
+                            timeout_s=agent_timeout,
                         )
                         runner = AgenticResearch(baseline, sink, agent_model=agent_model)
                     else:
