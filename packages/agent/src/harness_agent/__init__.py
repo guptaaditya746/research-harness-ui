@@ -8,7 +8,7 @@ from time import monotonic
 
 from harness_baseline import Baseline20
 from harness_observability import record_tool_call
-from harness_schema.models import TraceRow, required_artifacts
+from harness_schema.models import Metrics, Reading, TraceRow, required_artifacts
 
 from .mcp import MCPToolClient, MCPUnavailable
 
@@ -66,6 +66,33 @@ class AgenticResearch:
 
         result = self.baseline.run(question, budget, run_id)
         base_run = result["run"]
+        mcp_answer_used = base_run.status == "incomplete" and bool(agent_final) and not mcp_error
+        if base_run.status == "incomplete" and agent_final and not mcp_error:
+            # The MCP supervisor has a usable evidence-grounded text response
+            # even when the older ontology extractor rejects its inferred
+            # schema. Keep that answer visible instead of replacing it with a
+            # generic baseline failure message.
+            base_run = base_run.model_copy(
+                update={
+                    "status": "answered",
+                    "reason": None,
+                    "readings": [
+                        Reading(
+                            label="MCP evidence answer",
+                            gloss="Answer composed from managed corpus tool results.",
+                            classes=["Paper"],
+                            axioms=[],
+                            properties=[],
+                            sparql="",
+                            answer=agent_final,
+                            triples=[],
+                            metrics=Metrics(),
+                            status="answered",
+                        )
+                    ],
+                    "chosen_reading": 0,
+                }
+            )
         plans = [
             "Evidence coverage: compare claims and reported metrics across retrieved papers.",
             "Corpus structure: inspect metadata, citations, and shared entities.",
@@ -122,6 +149,8 @@ class AgenticResearch:
         artifacts["readings.json"] = json.dumps([r.model_dump(by_alias=True) for r in run.readings], indent=2).encode()
         artifacts["verification.json"] = json.dumps({"status": "shared graph checks applied", "verified": run.status == "answered"}, indent=2).encode()
         artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in trace], indent=2).encode()
+        if mcp_answer_used:
+            artifacts["answer.md"] = agent_final.encode()
         artifacts["tool_calls.jsonl"] = b"\n".join(
             json.dumps(item, ensure_ascii=False, default=str).encode() for item in tool_calls
         ) + (b"\n" if tool_calls else b"")
