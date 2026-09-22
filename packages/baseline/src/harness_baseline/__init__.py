@@ -20,8 +20,9 @@ from harness_extraction import (
     SchemaInference,
 )
 from harness_graphstore import ProvenanceDataset, sparql_check
+from harness_observability import record_stage
 from harness_schema.models import Metrics, Reading, Run, TraceRow, Triple, required_artifacts
-from harness_semantic import HRN, validate_subschema
+from harness_semantic import DBLP, HRN, validate_subschema
 from langgraph.graph import END, START, StateGraph
 from rdflib import RDFS, XSD, Literal, URIRef
 
@@ -100,6 +101,7 @@ class Baseline20:
         self.trace_sink = trace_sink or (lambda _: None)
         self.started = 0.0
         self.trace: list[TraceRow] = []
+        self.current_run_id: str | None = None
         self.graph = self._graph()
 
     def _emit(self, action: str, returned: str) -> None:
@@ -108,6 +110,7 @@ class Baseline20:
         )
         self.trace.append(row)
         self.trace_sink(row)
+        record_stage(action, returned, run_id=self.current_run_id)
 
     def _graph(self):
         graph = StateGraph(BaselineState)
@@ -272,12 +275,13 @@ class Baseline20:
             {selected.source_id}
             | {item.source_id for item in state["extracted"] if item.subject == selected.subject}
         )
+        canonical = self.corpus.canonical_paper_iri(selected.subject)
         return AnswerResult(
             sparql=(
                 "PREFIX hrn: <https://harness.local/schema#>\n"
                 "SELECT ?paper ?title WHERE { ?paper hrn:title ?title . }"
             ),
-            answer=f"{selected.object} ({selected.subject}) [{'; '.join(sources)}].",
+            answer=f"{selected.object} ({canonical or 'corpus paper'}) [{'; '.join(sources)}].",
             cited_source_ids=sources,
         )
 
@@ -285,6 +289,7 @@ class Baseline20:
         run_id = run_id or f"r-{uuid.uuid4().hex[:8]}"
         started_at = datetime.now(UTC)
         self.started = time.monotonic()
+        self.current_run_id = run_id
         self.trace = []
         try:
             state = self.graph.invoke({"question": question})
@@ -360,34 +365,71 @@ class Baseline20:
         seed_rows = self.corpus.seed_facts()
         seed_rdf: list[tuple[Any, URIRef, Any]] = []
         for row in seed_rows:
-            predicate_name = {"author": "authoredBy"}.get(row["predicate"], row["predicate"])
+            raw_predicate = str(row["predicate"])
+            predicate_name = {"author": "authoredBy"}.get(raw_predicate, raw_predicate)
+            if raw_predicate == "cites" and not self.corpus.canonical_paper_iri(str(row.get("object", ""))):
+                title = self.corpus.reference_title(str(row.get("source_id", "")))
+                if not title:
+                    continue
+                predicate_name = "citesTitle"
             if not hasattr(HRN, predicate_name):
                 continue
-            predicate = URIRef(HRN[predicate_name])
-            subject = URIRef(f"https://harness.local/resource/{quote(str(row['subject']), safe='')}")
-            expected = schema.graph.value(predicate, RDFS.range)
-            raw = row.get("object")
-            object_ = Literal(raw) if expected and str(expected).startswith(str(XSD)) else URIRef(
-                f"https://harness.local/resource/{quote(str(raw), safe='')}"
+            local_predicate = URIRef(HRN[predicate_name])
+            predicate = URIRef(
+                {
+                    "title": DBLP.title,
+                    "authoredBy": DBLP.authoredBy,
+                    "year": DBLP.yearOfPublication,
+                    "venue": DBLP.publishedIn,
+                }.get(predicate_name, local_predicate)
+            )
+            subject_value = self.corpus.canonical_paper_iri(str(row["subject"])) or str(row["subject"])
+            subject = URIRef(
+                subject_value
+                if subject_value.startswith("https://dblp.org/rec/")
+                else f"https://harness.local/resource/{quote(subject_value, safe='')}"
+            )
+            expected = schema.graph.value(local_predicate, RDFS.range)
+            raw = title if predicate_name == "citesTitle" else row.get("object")
+            target_iri = self.corpus.canonical_paper_iri(str(raw))
+            object_ = Literal(raw) if predicate_name == "citesTitle" or (expected and str(expected).startswith(str(XSD))) else URIRef(
+                target_iri
+                or f"https://harness.local/resource/{quote(str(raw), safe='')}"
             )
             seed_rdf.append((subject, predicate, object_))
         if seed_rdf:
             dataset.add_event("corpus-seed", seed_rdf, sorted({str(row["source_id"]) for row in seed_rows}))
         for index, item in enumerate(extracted, start=1):
-            predicate = URIRef(HRN[item.predicate])
-            expected = schema.graph.value(predicate, RDFS.range)
+            local_predicate = URIRef(HRN[item.predicate])
+            predicate = URIRef(
+                {
+                    "title": DBLP.title,
+                    "authoredBy": DBLP.authoredBy,
+                    "year": DBLP.yearOfPublication,
+                    "venue": DBLP.publishedIn,
+                }.get(item.predicate, local_predicate)
+            )
+            expected = schema.graph.value(local_predicate, RDFS.range)
+            subject_iri = self.corpus.canonical_paper_iri(item.subject)
+            object_iri = self.corpus.canonical_paper_iri(item.object)
+            if expected and str(expected) == str(HRN.Paper) and not object_iri:
+                # A paper-valued relation must never emit a fabricated pN resource.
+                continue
             object_ = (
                 Literal(item.object)
                 if expected and str(expected).startswith(str(XSD))
-                else URIRef(f"https://harness.local/resource/{quote(item.object, safe='')}")
+                else URIRef(object_iri or f"https://harness.local/resource/{quote(item.object, safe='')}")
             )
-            subject = URIRef(f"https://harness.local/resource/{quote(item.subject, safe='')}")
+            subject = URIRef(
+                subject_iri
+                or f"https://harness.local/resource/{quote(item.subject, safe='')}"
+            )
             dataset.add_event(f"extract-{index}", [(subject, predicate, object_)], [item.source_id])
             ui_triples.append(
                 Triple(
-                    s=item.subject,
+                    s=subject_iri or item.subject,
                     p=item.predicate,
-                    o=item.object,
+                    o=object_iri or item.object,
                     support="1 passage",
                     evidence=item.evidence,
                     source=item.source_id,
@@ -443,7 +485,14 @@ class Baseline20:
             artifacts["retrieval.json"] = json.dumps(state.get("retrieval", {}), indent=2).encode()
             artifacts["extraction_batches.json"] = json.dumps(state.get("extraction_batches", []), indent=2).encode()
             artifacts["seed_manifest.json"] = json.dumps(
-                {"facts": len(seed_rows), "seed_graph": "corpus-seed"}, indent=2
+                {
+                    "facts": len(seed_rows),
+                    "seed_graph": "corpus-seed",
+                    "ontology": "dblp_schema_2024-06-14.ttl",
+                    "ontology_version": schema.seed_schema_version,
+                    "ontology_sha256": schema.seed_schema_sha256,
+                },
+                indent=2,
             ).encode()
         return run, artifacts
 

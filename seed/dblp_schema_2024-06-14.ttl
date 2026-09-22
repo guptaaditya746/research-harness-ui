@@ -1,0 +1,820 @@
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix bf: <http://id.loc.gov/ontologies/bibframe/> .
+@prefix bibo: <http://purl.org/ontology/bibo/> .
+@prefix bibtex: <http://purl.org/net/nknouf/ns/bibtex#> .
+@prefix cito: <http://purl.org/spar/cito/> .
+@prefix datacite: <http://purl.org/spar/datacite/> .
+@prefix dbo: <http://dbpedia.org/ontology/> .
+@prefix dc: <http://purl.org/dc/elements/1.1/> .
+@prefix dct: <http://purl.org/dc/terms/> .
+@prefix foaf: <http://xmlns.com/foaf/0.1/> .
+@prefix litre: <http://purl.org/spar/literal/> .
+@prefix locid: <http://id.loc.gov/vocabulary/identifiers/> .
+@prefix locrel: <http://id.loc.gov/vocabulary/relators/> .
+@prefix schema: <https://schema.org/> .
+@prefix wd: <http://www.wikidata.org/entity/> .
+@prefix wdt: <http://www.wikidata.org/prop/direct/> .
+@prefix dblp: <https://dblp.org/rdf/schema#> .
+
+<https://dblp.org/rdf/schema>
+    dct:abstract "The dblp RDF schema is an ontology that models the semantic contents of the dblp computer science bibliography."@en ;
+    dct:creator <https://dblp.org> ;
+    dct:description "This ontology describes the RDF representation of the contents of the dblp computer science bibliography."@en ;
+    dct:title "dblp RDF schema" ;
+    a owl:Ontology ;
+    owl:priorVersion <https://dblp.org/rdf/schema-2023-10-17> ;
+    owl:versionIRI <https://dblp.org/rdf/schema-2024-06-14> ;
+    owl:versionInfo "Fri 14 Jun 2024" .
+
+dblp:AmbiguousCreator
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "Not an actual creator, but an ambiguous proxy for an unknown number of unrelated actual creators of the same name. Associated publications do not have their true creators determined yet."@en ;
+    rdfs:label "AmbiguousCreator"@en ;
+    rdfs:subClassOf wd:Q48522, dblp:Creator .
+
+dblp:Article
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A journal article."@en ;
+    rdfs:label "Article"@en ;
+    rdfs:subClassOf bibo:AcademicArticle, wd:Q13442814, dblp:Publication, schema:Article ;
+    owl:equivalentClass dbo:Article .
+
+dblp:AuthorSignature
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "The information that links a publication to an author."@en ;
+    rdfs:label "AuthorSignature"@en ;
+    rdfs:subClassOf dblp:Signature .
+
+dblp:Book
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A book or a thesis."@en ;
+    rdfs:label "Book"@en ;
+    rdfs:subClassOf dblp:Publication ;
+    owl:equivalentClass dbo:Book, bibo:Book, wd:Q571, schema:Book .
+
+dblp:Conference
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A conference or workshop series."@en ;
+    rdfs:label "Conference"@en ;
+    rdfs:subClassOf dblp:Stream ;
+    owl:equivalentClass wd:Q47258130 .
+
+dblp:Creator
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A creator of a publication."@en ;
+    rdfs:label "Creator"@en ;
+    rdfs:subClassOf dbo:Agent, bf:Agent, dct:Agent, wd:Q24229398, foaf:Agent, dblp:Entity .
+
+dblp:Data
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "Research data or artifacts."@en ;
+    rdfs:label "Data"@en ;
+    rdfs:subClassOf dblp:Publication ;
+    owl:equivalentClass wd:Q17051824, schema:Dataset .
+
+dblp:EditorSignature
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "The information that links a publication to an editor."@en ;
+    rdfs:label "EditorSignature"@en ;
+    rdfs:subClassOf dblp:Signature .
+
+dblp:Editorship
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "An edited publication."@en ;
+    rdfs:label "Editorship"@en ;
+    rdfs:subClassOf dblp:Publication .
+
+dblp:Entity
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "An abstract, identifiable entity in dblp."@en ;
+    rdfs:label "Entity"@en ;
+    rdfs:subClassOf owl:Thing, wd:Q35120, schema:Thing .
+
+dblp:Group
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A creator alias used by a group or consortium of persons."@en ;
+    rdfs:label "Group"@en ;
+    rdfs:subClassOf dblp:Creator ;
+    owl:equivalentClass dbo:Organisation, bf:Organisation, wd:Q43229, foaf:Group, schema:Organization .
+
+dblp:Incollection
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A part/chapter in a book or a collection."@en ;
+    rdfs:label "Incollection"@en ;
+    rdfs:subClassOf bibo:AcademicArticle, wd:Q13442814, dblp:Publication, schema:Chapter .
+
+dblp:Informal
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "An informal or other publication."@en ;
+    rdfs:label "Informal"@en ;
+    rdfs:subClassOf dblp:Publication ;
+    owl:equivalentClass wd:Q1148359 .
+
+dblp:Inproceedings
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A conference or workshop paper."@en ;
+    rdfs:label "Inproceedings"@en ;
+    rdfs:subClassOf bibo:AcademicArticle, wd:Q13442814, dblp:Publication, schema:Chapter .
+
+dblp:Journal
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A periodically published journal."@en ;
+    rdfs:label "Journal"@en ;
+    rdfs:subClassOf dblp:Stream, schema:Periodical ;
+    owl:equivalentClass wd:Q5633421 .
+
+dblp:Person
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "An actual person, who is a creator of a publication."@en ;
+    rdfs:label "Person"@en ;
+    rdfs:subClassOf dblp:Creator ;
+    owl:equivalentClass dbo:Person, bf:Person, wd:Q5, foaf:Person, schema:Person .
+
+dblp:Publication
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A publication."@en ;
+    rdfs:label "Publication"@en ;
+    rdfs:subClassOf dbo:WrittenWork, bf:Work, dct:BibliographicResource, bibo:Document, foaf:Document, dblp:Entity, schema:CreativeWork ;
+    owl:equivalentClass wd:Q591041 .
+
+dblp:Reference
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A reference work entry."@en ;
+    rdfs:label "Reference"@en ;
+    rdfs:subClassOf dblp:Publication ;
+    owl:equivalentClass bibo:ReferenceSource, wd:Q10389811 .
+
+dblp:Repository
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A source of data and/or artifact publications."@en ;
+    rdfs:label "Repository"@en ;
+    rdfs:subClassOf dblp:Stream ;
+    owl:equivalentClass wd:Q5227240 .
+
+dblp:Series
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A published series of volumes."@en ;
+    rdfs:label "Series"@en ;
+    rdfs:subClassOf dblp:Stream ;
+    owl:equivalentClass wd:Q2217301 .
+
+dblp:Signature
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "The information that links a publication to a creator."@en ;
+    rdfs:label "Signature"@en .
+
+dblp:Stream
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A publication stream, i.e., a venue or source for publications."@en ;
+    rdfs:label "Stream"@en ;
+    rdfs:subClassOf dblp:Entity, schema:CreativeWorkSeries .
+
+dblp:VersionRelation
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "The information that links an (instanced) publication version to its general (concept) publication."@en ;
+    rdfs:label "VersionRelation"@en .
+
+dblp:Withdrawn
+    a rdfs:Class, owl:Class ;
+    rdfs:comment "A withdrawn publication item."@en ;
+    rdfs:label "Withdrawn"@en ;
+    rdfs:subClassOf dblp:Publication ;
+    owl:equivalentClass wd:Q45182324 .
+
+dblp:affiliation
+    a rdf:Property ;
+    rdfs:comment "A (past or present) affiliation of the creator. (Remark: This property currently just gives literal xsd:string values until institutions are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "affiliation"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dblp:creatorNote ;
+    owl:equivalentProperty dbo:affiliation, wd:P1416, schema:affiliation .
+
+dblp:archivedWebpage
+    a rdf:Property ;
+    rdfs:comment "The URL of an archived web page about this item, which may no longer be available in the web."@en ;
+    rdfs:domain dblp:Entity ;
+    rdfs:label "archivedWebpage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:webpage .
+
+dblp:authorOf
+    a rdf:Property ;
+    rdfs:comment "The creator is the author of the publication."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "authorOf"@en ;
+    rdfs:range dblp:Publication ;
+    rdfs:subPropertyOf dblp:creatorOf ;
+    owl:inverseOf dblp:authoredBy .
+
+dblp:authoredBy
+    a rdf:Property ;
+    rdfs:comment "The publication is authored by the creator."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "authoredBy"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf dblp:createdBy ;
+    owl:equivalentProperty dbo:author, locrel:aut, wd:P50, schema:author ;
+    owl:inverseOf dblp:authorOf .
+
+dblp:awardWebpage
+    a rdf:Property ;
+    rdfs:comment "The URL of a web page about an award received by this creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "awardwebpage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:webpage .
+
+dblp:bibtexType
+    a rdf:Property ;
+    rdfs:comment "The bibtex type of the publication, e.g. book, inproceedings, etc."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "bibtexType"@en ;
+    rdfs:range bibtex:Entry .
+
+dblp:coAuthorWith
+    a rdf:Property, owl:SymmetricProperty ;
+    rdfs:comment "The creator is co-author with the other creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "coAuthorWith"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf dblp:coCreatorWith .
+
+dblp:coCreatorWith
+    a rdf:Property, owl:SymmetricProperty ;
+    rdfs:comment "The creator is co-creator with the other creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "coCreatorWith"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf foaf:knows .
+
+dblp:coEditorWith
+    a rdf:Property, owl:SymmetricProperty ;
+    rdfs:comment "The creator is co-editor with the other creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "coEditorWith"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf dblp:coCreatorWith .
+
+dblp:createdBy
+    a rdf:Property ;
+    rdfs:comment "The publication is created by the creator."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "createdBy"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf dc:creator, foaf:maker ;
+    owl:equivalentProperty locrel:cre, dct:creator, wd:P170, schema:creator ;
+    owl:inverseOf dblp:creatorOf .
+
+dblp:creatorName
+    a rdf:Property ;
+    rdfs:comment "The full name of the creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "creatorname"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P2561, foaf:name, schema:name .
+
+dblp:creatorNote
+    a rdf:Property ;
+    rdfs:comment "An additional note about the creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "creatorNote"@en ;
+    rdfs:range xsd:string .
+
+dblp:creatorOf
+    a rdf:Property ;
+    rdfs:comment "The creator of the publication."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "creatorOf"@en ;
+    rdfs:range dblp:Publication ;
+    rdfs:subPropertyOf foaf:made ;
+    owl:inverseOf dblp:createdBy .
+
+dblp:documentPage
+    a rdf:Property ;
+    rdfs:comment "The URL of the electronic edition of the publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "documentPage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:webpage ;
+    owl:equivalentProperty bf:electronicLocator, bibo:uri .
+
+dblp:doi
+    a rdf:Property ;
+    rdfs:comment "A Digital Object Identifier."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "doi"@en ;
+    rdfs:range xsd:anyUri ;
+    rdfs:subPropertyOf dblp:identifier ;
+    owl:equivalentProperty locid:doi, datacite:doi .
+
+dblp:editedBy
+    a rdf:Property ;
+    rdfs:comment "The publication is edited by the creator."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "editedBy"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf dblp:createdBy ;
+    owl:equivalentProperty dbo:editor, locrel:edt, bibo:editor, wd:P98, schema:editor ;
+    owl:inverseOf dblp:editorOf .
+
+dblp:editorOf
+    a rdf:Property ;
+    rdfs:comment "The creator is the editor of the publication."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "editorOf"@en ;
+    rdfs:range dblp:Publication ;
+    rdfs:subPropertyOf dblp:creatorOf ;
+    owl:inverseOf dblp:editedBy .
+
+dblp:formerStreamTitle
+    a rdf:Property ;
+    rdfs:comment "A former title of the stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "formerStreamTitle"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dblp:streamTitle .
+
+dblp:hasSignature
+    a rdf:Property ;
+    rdfs:comment "A signature that links this publication to an creator."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "hasSignature"@en ;
+    rdfs:range dblp:Signature ;
+    owl:inverseOf dblp:signaturePublication .
+
+dblp:hasVersion
+    a rdf:Property ;
+    rdfs:comment "The publication has a different, more specific (instance) publication as its version."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "hasVersion"@en ;
+    rdfs:range dblp:VersionRelation ;
+    owl:inverseOf dblp:versionConcept .
+
+dblp:homepage
+    a rdf:Property ;
+    rdfs:comment "The URL of an academic homepage of this creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "homepage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:webpage ;
+    owl:equivalentProperty wd:P856, foaf:homepage .
+
+dblp:homonymousCreator
+    a rdf:Property, owl:SymmetricProperty ;
+    rdfs:comment "This creator shares a homonymous name with the other creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "homonymousCreator"@en ;
+    rdfs:range dblp:Creator .
+
+dblp:identifier
+    a rdf:Property ;
+    rdfs:comment "An abstract identifier."@en ;
+    rdfs:domain dblp:Entity ;
+    rdfs:label "identifier"@en ;
+    rdfs:range xsd:anyUri ;
+    owl:equivalentProperty locid:id .
+
+dblp:indexPage
+    a rdf:Property ;
+    rdfs:comment "The URL of the dblp stream index page for this stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "indexPage"@en ;
+    rdfs:range foaf:Document .
+
+dblp:isVersion
+    a rdf:Property ;
+    rdfs:comment "The publication is a version of another, more general (concept) publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "isVersion"@en ;
+    rdfs:range dblp:VersionRelation ;
+    owl:inverseOf dblp:versionInstance .
+
+dblp:isVersionOf
+    a rdf:Property, owl:TransitiveProperty ;
+    rdfs:comment "The publication is a version of another, more general (concept) publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "isVersionOf"@en ;
+    rdfs:range dblp:Publication ;
+    owl:equivalentProperty wd:P747 .
+
+dblp:isbn
+    a rdf:Property ;
+    rdfs:comment "An International Standard Book Number."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "isbn"@en ;
+    rdfs:range xsd:anyUri ;
+    rdfs:subPropertyOf dblp:identifier ;
+    owl:equivalentProperty locid:isbn, datacite:isbn .
+
+dblp:iso4
+    a rdf:Property ;
+    rdfs:comment "The stream's ISO4 abbreviation."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "iso4"@en ;
+    rdfs:range xsd:string ;
+    owl:equivalentProperty wd:P1160 .
+
+dblp:issn
+    a rdf:Property ;
+    rdfs:comment "An International Standard Serial Number."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "issn"@en ;
+    rdfs:range xsd:anyUri ;
+    rdfs:subPropertyOf dblp:identifier ;
+    owl:equivalentProperty locid:issn, datacite:issn .
+
+dblp:listedOnTocPage
+    a rdf:Property ;
+    rdfs:comment "The url of the dblp table of contents page listing this publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "listedOnTocPage"@en ;
+    rdfs:range foaf:Document .
+
+dblp:monthOfPublication
+    a rdf:Property ;
+    rdfs:comment "The month the publication has been published."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "monthOfPublication"@en ;
+    rdfs:range xsd:gMonth ;
+    rdfs:subPropertyOf wd:P2922 .
+
+dblp:numberOfCreators
+    a rdf:Property ;
+    rdfs:comment "The number of creators who created this publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "numberOfCreators"@en ;
+    rdfs:range xsd:integer .
+
+dblp:omid
+    a rdf:Property ;
+    rdfs:comment "An OpenCitations Meta Identifier."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "omid"@en ;
+    rdfs:range xsd:anyUri ;
+    rdfs:subPropertyOf dblp:identifier ;
+    owl:equivalentProperty datacite:omid .
+
+dblp:orcid
+    a rdf:Property ;
+    rdfs:comment "An Open Researcher and Contributor ID."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "orcid"@en ;
+    rdfs:range xsd:anyUri ;
+    rdfs:subPropertyOf dblp:identifier ;
+    owl:equivalentProperty locid:orcid, datacite:orcid .
+
+dblp:pagination
+    a rdf:Property ;
+    rdfs:comment "The page numbers where the publication can be found."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "pagination"@en ;
+    rdfs:range xsd:string ;
+    owl:equivalentProperty bibo:pages, wd:P304, schema:pagination .
+
+dblp:possibleActualCreator
+    a rdf:Property ;
+    rdfs:comment "This ambiguous creator may be (or may be not) just a disambiguation proxy for the other creator. Further actual creator candidates are possible."@en ;
+    rdfs:domain dblp:AmbiguousCreator ;
+    rdfs:label "possibleActualCreator"@en ;
+    rdfs:range dblp:Creator ;
+    rdfs:subPropertyOf dblp:homonymousCreator ;
+    owl:inverseOf dblp:proxyAmbiguousCreator .
+
+dblp:predecessorStream
+    a rdf:Property ;
+    rdfs:comment "This stream is a predecessor of the other stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "predecessorStream"@en ;
+    rdfs:range dblp:Stream ;
+    rdfs:subPropertyOf dblp:relatedStream ;
+    owl:inverseOf dblp:successorStream .
+
+dblp:primaryAffiliation
+    a rdf:Property ;
+    rdfs:comment "The primary affiliation of the creator. (Remark: This property currently just gives literal xsd:string values until institutions are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "primaryAffiliation"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dblp:affiliation .
+
+dblp:primaryCreatorName
+    a rdf:Property ;
+    rdfs:comment "The primary full name of the creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "primaryCreatorName"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dbo:commonName, dblp:creatorName .
+
+dblp:primaryDocumentPage
+    a rdf:Property ;
+    rdfs:comment "The primary URL of the electronic edition of the publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "primaryDocumentPage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:documentPage .
+
+dblp:primaryHomepage
+    a rdf:Property ;
+    rdfs:comment "The primary URL of an academic homepage of this creator."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "primaryHomepage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:homepage .
+
+dblp:primaryStreamTitle
+    a rdf:Property ;
+    rdfs:comment "The primary title of the stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "primaryStreamTitle"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dbo:commonName, dblp:streamTitle .
+
+dblp:proxyAmbiguousCreator
+    a rdf:Property ;
+    rdfs:comment "This creator (and any of her fellow homonymous creators) is also represented by the given ambiguous creator in cases where the authorship of a publication is undetermined."@en ;
+    rdfs:domain dblp:Creator ;
+    rdfs:label "proxyAmbiguousCreator"@en ;
+    rdfs:range dblp:AmbiguousCreator ;
+    rdfs:subPropertyOf dblp:homonymousCreator ;
+    owl:inverseOf dblp:possibleActualCreator .
+
+dblp:publicationNote
+    a rdf:Property ;
+    rdfs:comment "An additional note to the publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publicationNote"@en ;
+    rdfs:range xsd:string .
+
+dblp:publishedAsPartOf
+    a rdf:Property, owl:TransitiveProperty ;
+    rdfs:comment "The publication has been published as a part of the other publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedAsPartOf"@en ;
+    rdfs:range dblp:Publication ;
+    rdfs:subPropertyOf wd:P1433, schema:isPartOf .
+
+dblp:publishedBy
+    a rdf:Property ;
+    rdfs:comment "The publisher of the publication. (Remark: This property currently just gives literal xsd:string values until publishers are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedBy"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dc:publisher ;
+    owl:equivalentProperty dct:publisher, wd:P123, schema:publisher .
+
+dblp:publishedIn
+    a rdf:Property ;
+    rdfs:comment "The name of the series, the journal, or the book in which the publication has been published. (Remark: This property currently just gives literal xsd:string values until journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedIn"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P1433, schema:isPartOf .
+
+dblp:publishedInBook
+    a rdf:Property ;
+    rdfs:comment "The name of the book in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInBook"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dblp:publishedIn .
+
+dblp:publishedInBookChapter
+    a rdf:Property ;
+    rdfs:comment "The chapter of the book in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInBookChapter"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P792, schema:position ;
+    owl:equivalentProperty bibo:chapter .
+
+dblp:publishedInJournal
+    a rdf:Property ;
+    rdfs:comment "The name of the journal in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInJournal"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dblp:publishedIn .
+
+dblp:publishedInJournalVolume
+    a rdf:Property ;
+    rdfs:comment "The volume of the journal in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInJournalVolume"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P478, schema:volumeNumber ;
+    owl:equivalentProperty bibo:volume .
+
+dblp:publishedInJournalVolumeIssue
+    a rdf:Property ;
+    rdfs:comment "The issue of the journal in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInJournalIssue"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P433, schema:issueNumber ;
+    owl:equivalentProperty bibo:issue .
+
+dblp:publishedInSeries
+    a rdf:Property ;
+    rdfs:comment "The name of the series in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInSeries"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dblp:publishedIn .
+
+dblp:publishedInSeriesVolume
+    a rdf:Property ;
+    rdfs:comment "The volume of the series in which the publication has been published. (Remark: This is currently an intermediate property that will be removed once journals and conference series are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInSeriesVolume"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P478, schema:volumeNumber ;
+    owl:equivalentProperty bibo:volume .
+
+dblp:publishedInStream
+    a rdf:Property ;
+    rdfs:comment "The conference series, the journal, or the repository in which the publication has been published."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishedInStream"@en ;
+    rdfs:range dblp:Stream ;
+    rdfs:subPropertyOf wd:P1433, schema:isPartOf .
+
+dblp:publishersAddress
+    a rdf:Property ;
+    rdfs:comment "The address of the publisher. (Remark: This is currently an intermediate property that will be removed once publishers are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "publishersAddress"@en ;
+    rdfs:range xsd:string .
+
+dblp:relatedStream
+    a rdf:Property, owl:SymmetricProperty ;
+    rdfs:comment "This stream is related to the other stream in some unspecified way."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "relatedStream"@en ;
+    rdfs:range dblp:Stream .
+
+dblp:signatureCreator
+    a rdf:Property ;
+    rdfs:comment "A linked creator of the publication."@en ;
+    rdfs:domain dblp:Signature ;
+    rdfs:label "signatureCreator"@en ;
+    rdfs:range dblp:Creator .
+
+dblp:signatureDblpName
+    a rdf:Property ;
+    rdfs:comment "A dblp name (including any possible trailing homonym number) that links the publication to a creator."@en ;
+    rdfs:domain dblp:Signature ;
+    rdfs:label "signatureDblpName"@en ;
+    rdfs:range xsd:string .
+
+dblp:signatureOrcid
+    a rdf:Property ;
+    rdfs:comment "An ORCID that links the publication to a creator."@en ;
+    rdfs:domain dblp:Signature ;
+    rdfs:label "signatureOrcid"@en ;
+    rdfs:range xsd:anyUri .
+
+dblp:signatureOrdinal
+    a rdf:Property ;
+    rdfs:comment "The ordinal number of this signature for the publication, starting with 1."@en ;
+    rdfs:domain dblp:Signature ;
+    rdfs:label "signatureOrdinal"@en ;
+    rdfs:range xsd:integer .
+
+dblp:signaturePublication
+    a rdf:Property ;
+    rdfs:comment "The publication of this signature."@en ;
+    rdfs:domain dblp:Signature ;
+    rdfs:label "signaturePublication"@en ;
+    rdfs:range dblp:Publication ;
+    owl:inverseOf dblp:hasSignature .
+
+dblp:streamTitle
+    a rdf:Property ;
+    rdfs:comment "A title of the stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "streamTitle"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf wd:P2561, foaf:name, schema:name .
+
+dblp:subStream
+    a rdf:Property ;
+    rdfs:comment "This stream is (or was) a part of the other stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "subStream"@en ;
+    rdfs:range dblp:Stream ;
+    rdfs:subPropertyOf dblp:relatedStream ;
+    owl:inverseOf dblp:superStream .
+
+dblp:successorStream
+    a rdf:Property ;
+    rdfs:comment "This stream is a successor of the other stream."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "successorStream"@en ;
+    rdfs:range dblp:Stream ;
+    rdfs:subPropertyOf dblp:relatedStream ;
+    owl:inverseOf dblp:predecessorStream .
+
+dblp:superStream
+    a rdf:Property ;
+    rdfs:comment "This stream has (or had) the other stream as a part."@en ;
+    rdfs:domain dblp:Stream ;
+    rdfs:label "superStream"@en ;
+    rdfs:range dblp:Stream ;
+    rdfs:subPropertyOf dblp:relatedStream ;
+    owl:inverseOf dblp:subStream .
+
+dblp:thesisAcceptedBySchool
+    a rdf:Property ;
+    rdfs:comment "The school where the publication (typically a thesis) has been accepted. (Remark: This property currently just gives literal xsd:string values until institutions are modelled as proper entities.)"@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "thesisAcceptedBySchool"@en ;
+    rdfs:range xsd:string .
+
+dblp:title
+    a rdf:Property ;
+    rdfs:comment "The title of the publication."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "title"@en ;
+    rdfs:range xsd:string ;
+    rdfs:subPropertyOf dc:title, schema:name ;
+    owl:equivalentProperty dct:title, wd:P1476 .
+
+dblp:versionConcept
+    a rdf:Property ;
+    rdfs:comment "The linked general (concept) publication."@en ;
+    rdfs:domain dblp:VersionRelation ;
+    rdfs:label "versionConcept"@en ;
+    rdfs:range dblp:Publication .
+
+dblp:versionInstance
+    a rdf:Property ;
+    rdfs:comment "The linked specific (instance) publication version."@en ;
+    rdfs:domain dblp:VersionRelation ;
+    rdfs:label "versionInstance"@en ;
+    rdfs:range dblp:Publication .
+
+dblp:versionLabel
+    a rdf:Property ;
+    rdfs:comment "The human-readable version label of the specific (instance) publication version."@en ;
+    rdfs:domain dblp:VersionRelation ;
+    rdfs:label "versionLabel"@en ;
+    rdfs:range xsd:string .
+
+dblp:versionOrdinal
+    a rdf:Property ;
+    rdfs:comment "The ordinal number of the specific (instance) publication version. This number is solely intended for sorting purposes: bigger numbers indicate later versions. Version ordinals do not need to describe a complete number range, nor is there a necessary relationship to the version labels."@en ;
+    rdfs:domain dblp:VersionRelation ;
+    rdfs:label "versionOrdinal"@en ;
+    rdfs:range xsd:integer .
+
+dblp:versionUri
+    a rdf:Property ;
+    rdfs:comment "An (optional) URI of identifying the linked specific (instance) publication version."@en ;
+    rdfs:domain dblp:VersionRelation ;
+    rdfs:label "versionUri"@en ;
+    rdfs:range xsd:anyUri .
+
+dblp:webpage
+    a rdf:Property ;
+    rdfs:comment "The URL of a web page about this item."@en ;
+    rdfs:domain dblp:Entity ;
+    rdfs:label "webpage"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf wd:P2699, schema:url ;
+    owl:equivalentProperty foaf:page .
+
+dblp:wikidata
+    a rdf:Property ;
+    rdfs:comment "A wikidata item."@en ;
+    rdfs:domain dblp:Entity ;
+    rdfs:label "wikidata"@en ;
+    rdfs:range xsd:anyUri ;
+    rdfs:subPropertyOf dblp:identifier ;
+    owl:equivalentProperty locid:wikidata, datacite:wikidata .
+
+dblp:wikipedia
+    a rdf:Property ;
+    rdfs:comment "The URL of an (English) Wikipedia article about this item."@en ;
+    rdfs:domain dblp:Entity ;
+    rdfs:label "wikipedia"@en ;
+    rdfs:range foaf:Document ;
+    rdfs:subPropertyOf dblp:webpage .
+
+dblp:yearOfEvent
+    a rdf:Property ;
+    rdfs:comment "The year the conference or workshop contribution has been presented."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "yearOfEvent"@en ;
+    rdfs:range xsd:gYear .
+
+dblp:yearOfPublication
+    a rdf:Property ;
+    rdfs:comment "The year the publication's issue or volume has been published."@en ;
+    rdfs:domain dblp:Publication ;
+    rdfs:label "yearOfPublication"@en ;
+    rdfs:range xsd:gYear ;
+    owl:equivalentProperty dbo:publicationDate, dct:issued, wd:P577, schema:publication .

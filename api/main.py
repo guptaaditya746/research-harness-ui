@@ -19,7 +19,7 @@ from harness_baseline import Baseline20
 from harness_corpus.store import CorpusStore
 from harness_evaluation import evaluate_run
 from harness_extraction import ExtractionEngine, OpenAICompatibleModel
-from harness_observability import hello_span
+from harness_observability import hello_span, run_observation
 from harness_observability import init as init_observability
 from harness_runs import ArtifactStore, GoldCandidateStore
 from harness_schema.models import Run, TraceRow
@@ -123,15 +123,14 @@ class RunRuntime:
 
         def execute() -> None:
             try:
-                if request.path == "agentic" and not self.custom_runner:
-                    runner = AgenticResearch(self._runner(sink, True), sink)
-                else:
-                    runner = self.runner_factory(sink) if self.custom_runner else self._runner(
-                        sink, request.path == "baseline-enhanced"
-                    )
-                result = runner.run(
-                    request.question.strip(), request.budget, run_id
-                )
+                with run_observation(run_id, request.question.strip(), request.path, request.budget):
+                    if request.path == "agentic" and not self.custom_runner:
+                        runner = AgenticResearch(self._runner(sink, True), sink)
+                    else:
+                        runner = self.runner_factory(sink) if self.custom_runner else self._runner(
+                            sink, request.path == "baseline-enhanced"
+                        )
+                    result = runner.run(request.question.strip(), request.budget, run_id)
                 run = result["run"]
                 with self.lock:
                     stopped = run_id in self.stop_requested

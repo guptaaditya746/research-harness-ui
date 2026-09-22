@@ -10,6 +10,7 @@ dependencies = [
     "harness-runs",
     "harness-schema",
     "harness-semantic",
+    "harness-observability",
 ]
 
 [build-system]
@@ -23,3 +24,4 @@ harness-graphstore = { workspace = true }
 harness-runs = { workspace = true }
 harness-schema = { workspace = true }
 harness-semantic = { workspace = true }
+harness-observability = { workspace = true }

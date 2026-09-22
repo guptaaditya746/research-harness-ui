@@ -119,8 +119,14 @@ class CorpusStore:
         self.papers = read_jsonl(root / "papers.jsonl")
         self.passages = read_jsonl(root / "passages.jsonl")
         self.references = read_jsonl(root / "references.jsonl")
+        self.by_reference = {r["reference_id"]: r for r in self.references}
         self.fact_rows = read_jsonl(root / "facts.jsonl")
         self.by_paper = {p["paper_id"]: p for p in self.papers}
+        self.by_dblp = {
+            str(p["dblp_iri"]): p["paper_id"]
+            for p in self.papers
+            if p.get("dblp_iri")
+        }
         self.by_passage = {p["passage_id"]: p for p in self.passages}
         index_path = root / "index" / "bm25"
         self.bm25 = (
@@ -136,6 +142,29 @@ class CorpusStore:
             for row in self.fact_rows
             if row.get("predicate") != "cites" or row.get("in_corpus") is True
         ]
+
+    def canonical_paper_iri(self, value: str) -> str | None:
+        """Return a verified DBLP IRI for an internal paper key or IRI."""
+        raw = str(value).strip()
+        if raw.startswith("https://dblp.org/rec/"):
+            return raw if raw in self.by_dblp else None
+        paper = self.by_paper.get(raw)
+        iri = paper.get("dblp_iri") if paper else None
+        return str(iri) if iri else None
+
+    def paper_title(self, value: str) -> str | None:
+        raw = str(value).strip()
+        paper = self.by_paper.get(raw)
+        if paper:
+            return str(paper.get("title") or "") or None
+        pid = self.by_dblp.get(raw)
+        return str(self.by_paper[pid].get("title") or "") if pid else None
+
+    def reference_title(self, reference_id: str) -> str | None:
+        row = self.by_reference.get(str(reference_id))
+        if not row:
+            return None
+        return str(row.get("title") or row.get("raw") or "") or None
 
     def list_papers(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return paged([p for p in self.papers if in_scope(p, scope)], offset, limit)

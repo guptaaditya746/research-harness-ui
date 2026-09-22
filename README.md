@@ -72,6 +72,11 @@ selection at `POST /runs/{id}/reading`, cooperative cancellation at
 `POST /runs/{id}/stop`, artifact evaluation at `POST /runs/{id}/evaluate`, and
 `GET|PUT /settings`.
 
+Each live run creates a Langfuse parent observation (`research.run`) and child
+stage observations for retrieval, schema inference, extraction, and answer
+assembly. The local `trace.json` artifact and SSE stream remain the UI-facing
+trace; exporter failures do not fail the research run.
+
 ## Artifact storage and DB
 
 `ArtifactStore` writes each run's required artifact files under `ARTIFACT_ROOT`,
@@ -110,6 +115,11 @@ and JDK dependencies can be downloaded. It uses the CRF models and CPUs, matchin
 the previously pinned Docker setup.
 
 ## M1 corpus
+
+The immutable ontology seed is `seed/dblp_schema_2024-06-14.ttl`, the official
+DBLP RDF schema. Enhanced run artifacts record its version and SHA-256. Verified
+paper individuals use their DBLP record IRIs in graph artifacts; internal `pN`
+keys remain only in corpus storage and provenance.
 
 The M1 ingest command reads PDFs with GROBID, uses Docling for individual PDFs
 that have no usable TEI, resolves in-corpus references by DOI then title, writes
