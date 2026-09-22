@@ -1104,6 +1104,12 @@ requires-dist = [
 name = "harness-evaluation"
 version = "0.1.0"
 source = { editable = "packages/evaluation" }
+dependencies = [
+    { name = "harness-schema" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "harness-schema", editable = "packages/schema" }]
 
 [[package]]
 name = "harness-extraction"
@@ -3648,6 +3654,7 @@ dependencies = [
     { name = "harness-agent" },
     { name = "harness-baseline" },
     { name = "harness-corpus" },
+    { name = "harness-evaluation" },
     { name = "harness-extraction" },
     { name = "harness-graphstore" },
     { name = "harness-ledger" },
@@ -3676,6 +3683,7 @@ requires-dist = [
     { name = "harness-agent", editable = "packages/agent" },
     { name = "harness-baseline", editable = "packages/baseline" },
     { name = "harness-corpus", editable = "packages/corpus" },
+    { name = "harness-evaluation", editable = "packages/evaluation" },
     { name = "harness-extraction", editable = "packages/extraction" },
     { name = "harness-graphstore", editable = "packages/graphstore" },
     { name = "harness-ledger", editable = "packages/ledger" },

@@ -16,6 +16,7 @@ dependencies = [
     "harness-extraction",
     "harness-baseline",
     "harness-agent",
+    "harness-evaluation",
     "sse-starlette>=3.0",
     "python-dotenv>=1.0",
 ]
@@ -38,6 +39,7 @@ harness-graphstore = { workspace = true }
 harness-extraction = { workspace = true }
 harness-baseline = { workspace = true }
 harness-agent = { workspace = true }
+harness-evaluation = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["api"]
