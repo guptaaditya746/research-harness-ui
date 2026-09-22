@@ -168,6 +168,16 @@ On the real 37-paper corpus, `qwen-chat` found no incoming citation edge for
 `p17` and identified `p4` as introducing Video Prediction Policy, citing
 `p4-abstract`. The recorded calls and tool results are under `docs/evidence/`.
 
+The web API's agentic path connects to the managed Streamable HTTP server at
+`MCP_CORPUS_URL`. Start the MCP service separately before launching an agentic
+run. The supervisor discovers the registered corpus tools and lets retrieval,
+structure, and verification roles call them over one session. Complete tool-call
+records are persisted as `tool_calls.jsonl`; compact events are streamed and
+written to `trace.json`; Langfuse receives one child observation per tool call.
+The API does not impose a corpus-wide result or triple cap. MCP's page size is
+50, and the supervisor can request additional pages when a tool reports more
+results.
+
 ## M2 semantic core
 
 `harness_ledger` owns monotonic coverage obligations and closes structural

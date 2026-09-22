@@ -1046,14 +1046,20 @@ source = { editable = "packages/agent" }
 dependencies = [
     { name = "deepagents" },
     { name = "harness-baseline" },
+    { name = "harness-observability" },
     { name = "harness-schema" },
+    { name = "httpx" },
+    { name = "mcp" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "deepagents", specifier = ">=0.7.16,<1" },
     { name = "harness-baseline", editable = "packages/baseline" },
+    { name = "harness-observability", editable = "packages/observability" },
     { name = "harness-schema", editable = "packages/schema" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mcp", specifier = ">=1.0,<2.0" },
 ]
 
 [[package]]

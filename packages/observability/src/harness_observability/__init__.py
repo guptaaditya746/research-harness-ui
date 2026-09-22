@@ -104,3 +104,32 @@ def record_stage(name: str, returned: str, *, run_id: str | None = None) -> None
             pass
     except Exception:
         _logger.debug("Langfuse stage observation failed", exc_info=True)
+
+
+def record_tool_call(record: dict[str, Any], *, run_id: str | None = None) -> None:
+    """Record an MCP call while keeping large payloads out of telemetry."""
+    if _client is None:
+        return
+    try:
+        tool = str(record.get("tool", "unknown"))
+        output = {
+            "status": record.get("status"),
+            "result_count": record.get("result_count"),
+            "duration_ms": record.get("duration_ms"),
+            "error": record.get("error"),
+            "result_preview": _bounded(record.get("result")),
+        }
+        with _client.start_as_current_observation(
+            as_type="span",
+            name=f"research.tool_call.{tool}",
+            input={"arguments": _bounded(record.get("arguments", {}))},
+            output=output,
+            metadata={
+                "harness.run_id": run_id,
+                "harness.agent": record.get("agent", "supervisor"),
+                "harness.call_id": record.get("call_id"),
+            },
+        ):
+            pass
+    except Exception:
+        _logger.debug("Langfuse tool observation failed", exc_info=True)

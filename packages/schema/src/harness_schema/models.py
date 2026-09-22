@@ -106,12 +106,14 @@ AGENTIC_ARTIFACTS = (
     "citations.json",
     "verification.json",
     "trace.json",
+    "tool_calls.jsonl",
+    "agent_draft.md",
     "run.json",
 )
 BASELINE_ARTIFACTS = tuple(
     name
     for name in AGENTIC_ARTIFACTS
-    if name not in {"plans.json", "disagreement.json", "readings.json", "verification.json"}
+    if name not in {"plans.json", "disagreement.json", "readings.json", "verification.json", "tool_calls.jsonl", "agent_draft.md"}
 )
 ENHANCED_BASELINE_ARTIFACTS = BASELINE_ARTIFACTS + ("retrieval.json", "extraction_batches.json", "seed_manifest.json")
 
