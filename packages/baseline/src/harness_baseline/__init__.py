@@ -389,7 +389,7 @@ class Baseline20:
                 if subject_value.startswith("https://dblp.org/rec/")
                 else f"https://harness.local/resource/{quote(subject_value, safe='')}"
             )
-            expected = schema.graph.value(local_predicate, RDFS.range)
+            expected = schema.graph.value(predicate, RDFS.range) or schema.graph.value(local_predicate, RDFS.range)
             raw = title if predicate_name == "citesTitle" else row.get("object")
             target_iri = self.corpus.canonical_paper_iri(str(raw))
             object_ = Literal(raw) if predicate_name == "citesTitle" or (expected and str(expected).startswith(str(XSD))) else URIRef(
@@ -409,7 +409,7 @@ class Baseline20:
                     "venue": DBLP.publishedIn,
                 }.get(item.predicate, local_predicate)
             )
-            expected = schema.graph.value(local_predicate, RDFS.range)
+            expected = schema.graph.value(predicate, RDFS.range) or schema.graph.value(local_predicate, RDFS.range)
             subject_iri = self.corpus.canonical_paper_iri(item.subject)
             object_iri = self.corpus.canonical_paper_iri(item.object)
             if expected and str(expected) == str(HRN.Paper) and not object_iri:
