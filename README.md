@@ -1,8 +1,8 @@
 # Research Harness
 
-M0 is a contract and interface fixture build. The API serves sample runs from
-`web/fixtures`; the UI uses them to show the handoff states. Research execution,
-corpus ingest, and evaluation arrive in later milestones.
+The harness includes the fixture contract, live baseline and enhanced retrieval,
+agentic research, corpus tools, artifact evaluation, and the React UI. Runs use
+the same corpus and provenance checks across all paths.
 
 ## Setup
 
@@ -62,9 +62,15 @@ through scene changes.
 ## Commands
 
 `make fixtures` regenerates `web/src/generated/run.ts`, JSON Schema and the
-four fixture runs from Pydantic models. `make test` runs Python tests, the
-TypeScript build, and Playwright screen checks. `make up`, `make ingest`, and
-`make eval` are milestone placeholders until their services exist.
+fixture runs from Pydantic models. `make test` runs Python tests, the TypeScript
+build, and Playwright screen checks. `make up` starts GROBID, `make ingest`
+builds corpus artifacts, and `make eval DATASET=...` evaluates completed run
+artifacts with the pure evaluator.
+
+The live API supports `POST /runs`, SSE at `/runs/{id}/events`, reading
+selection at `POST /runs/{id}/reading`, cooperative cancellation at
+`POST /runs/{id}/stop`, artifact evaluation at `POST /runs/{id}/evaluate`, and
+`GET|PUT /settings`.
 
 ## Artifact storage and DB
 
@@ -107,8 +113,10 @@ the previously pinned Docker setup.
 
 The M1 ingest command reads PDFs with GROBID, uses Docling for individual PDFs
 that have no usable TEI, resolves in-corpus references by DOI then title, writes
-structural facts with source IDs, and builds a BM25S index. The first nine corpus
-tools are registered in `harness_mcp_corpus.server` for stdio or Streamable HTTP.
+structural facts with source IDs, and builds a BM25S index. The corpus tools are
+registered in `harness_mcp_corpus.server` for stdio or Streamable HTTP, including
+retrieval, expansion, keyphrases, results, tables, sections, citation contexts,
+ranking, entities, prior triples, and corpus maps.
 
 ```sh
 make up
@@ -132,8 +140,8 @@ The current sample ingest contains 37 DBLP-verified papers, 2,683 passages,
 TEI parsing, citation resolution, BM25 retrieval, search DSL, and MCP
 registration are tested with `uv run pytest -q packages/corpus/tests`.
 
-The M1 bare-agent probe exposes only the nine corpus tools to an OpenAI-compatible
-chat endpoint. With a completed ingest and a reachable model, run:
+The M1 bare-agent probe exposes the corpus tools to an OpenAI-compatible chat
+endpoint. With a completed ingest and a reachable model, run:
 
 ```sh
 set -a && . ./.env && set +a
@@ -159,3 +167,21 @@ checks SPARQL terms against that schema, derives coverage plans from query
 shape and the fact domain, and stores extraction events in provenance-bearing
 named graphs. The M2 real-corpus closure evidence is
 `docs/evidence/m2-structural-ledger.json`.
+
+## Live runs and evaluation
+
+The baseline and enhanced paths use lexical/structural retrieval and EDC
+extraction. Agentic runs add planner lenses and shared verification artifacts.
+Completed runs are stored under `ARTIFACT_ROOT` with explicit artifact sets and
+SHA-256 manifests, including empty files for failed terminal runs.
+
+To score stored runs offline, create a JSONL dataset with `question` and
+`gold_triples`, then run:
+
+```sh
+uv run harness-eval run --artifacts artifacts --dataset datasets/dev.jsonl
+```
+
+The evaluator computes metrics from stored triples and never trusts model
+reported metrics. It writes a timestamped JSON report and prints a compact
+comparison table.
