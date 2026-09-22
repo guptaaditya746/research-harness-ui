@@ -25,7 +25,7 @@ test:
 	cd web && corepack pnpm build && corepack pnpm test:e2e
 
 eval:
-	@echo "Evaluation runner is scheduled for M7."
+	uv run --python 3.12 harness-eval run --artifacts $${ARTIFACT_ROOT:-artifacts} --dataset $${DATASET:-datasets/dev.jsonl} $(if $(PATH_FILTER),--path $(PATH_FILTER),)
 
 web-build:
 	cd web && corepack pnpm build
