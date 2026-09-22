@@ -268,13 +268,17 @@ class Baseline20:
             candidates,
             key=lambda item: len(terms & set(re.findall(r"[a-z0-9]+", item.object.casefold()))),
         )
+        sources = sorted(
+            {selected.source_id}
+            | {item.source_id for item in state["extracted"] if item.subject == selected.subject}
+        )
         return AnswerResult(
             sparql=(
                 "PREFIX hrn: <https://harness.local/schema#>\n"
                 "SELECT ?paper ?title WHERE { ?paper hrn:title ?title . }"
             ),
-            answer=f"{selected.object} ({selected.subject}) [{selected.source_id}].",
-            cited_source_ids=[selected.source_id],
+            answer=f"{selected.object} ({selected.subject}) [{'; '.join(sources)}].",
+            cited_source_ids=sources,
         )
 
     def run(self, question: str, budget: str = "fast", run_id: str | None = None) -> BaselineResult:
