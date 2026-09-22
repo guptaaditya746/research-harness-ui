@@ -65,6 +65,62 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def expand(passage_id: str, window: int = 2) -> dict:
         return corpus.expand(passage_id, window)
 
+    @mcp.tool(description="List grounded corpus glossary terms.")
+    def glossary(term: str | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.glossary(term, offset, limit)
+
+    @mcp.tool(description="Read an indexed table for a paper.")
+    def table(paper_id: str, table_id: str | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.table(paper_id, table_id, offset, limit)
+
+    @mcp.tool(description="Search indexed table cells or captions.")
+    def table_search(query: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.table_search(query, scope, offset, limit)
+
+    @mcp.tool(description="Read passages belonging to a section role.")
+    def section(role: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.section(role, scope, offset, limit)
+
+    @mcp.tool(description="Read citation contexts with passage IDs.")
+    def citation_contexts(paper_id: str, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.citation_contexts(paper_id, offset, limit)
+
+    @mcp.tool(description="Search the corpus from a natural-language query.")
+    def query2doc(query: str, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.query2doc(query, offset, limit)
+
+    @mcp.tool(description="Find numeric evidence matching a pattern.")
+    def find_number(pattern: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.find_number(pattern, scope, offset, limit)
+
+    @mcp.tool(description="Find papers sharing cited references.")
+    def co_cited(paper_id: str, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.co_cited(paper_id, offset, limit)
+
+    @mcp.tool(description="Rank passages lexically for a query.")
+    def rank(query: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.rank(query, scope, offset, limit)
+
+    @mcp.tool(description="List named entities with supporting passages.")
+    def entities(scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.entities(scope, offset, limit)
+
+    @mcp.tool(description="Find passages mentioning one entity.")
+    def entity_index(entity: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.entity_index(entity, scope, offset, limit)
+
+    @mcp.tool(description="Rank candidate evidence for a question.")
+    def candidates_for(question: str, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.candidates_for(question, offset, limit)
+
+    @mcp.tool(description="Read prior seeded triples for selected papers.")
+    def prior_triples(paper_ids: list[str] | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.prior_triples(paper_ids, offset, limit)
+
+    @mcp.tool(description="Map corpus papers to passage counts and metadata.")
+    def corpus_map(scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return corpus.corpus_map(scope, offset, limit)
+
     return mcp
 
 

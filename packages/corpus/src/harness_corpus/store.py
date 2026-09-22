@@ -325,3 +325,97 @@ class CorpusStore:
         if window < 0 or window > 5:
             raise ValueError("window must be between 0 and 5")
         return self.read_passage(passage_id, window)
+
+    def glossary(self, term: str | None = None, offset: int = 0, limit: int = 10) -> dict:
+        """Return corpus terms with stable supporting fact or passage IDs."""
+        rows = []
+        for value in sorted({str(f.get("object")) for f in self.fact_rows if f.get("object")}):
+            if term and term.casefold() not in value.casefold():
+                continue
+            support = [str(f.get("source_id")) for f in self.fact_rows if str(f.get("object")) == value]
+            rows.append({"term": value, "source_ids": sorted(set(support))})
+        return paged(rows, offset, limit)
+
+    def table(self, paper_id: str, table_id: str | None = None, offset: int = 0, limit: int = 10) -> dict:
+        path = self.root / "tables" / f"{paper_id}.json"
+        rows = read_jsonl(path) if path.suffix == ".jsonl" else (json.loads(path.read_text()) if path.exists() else [])
+        if isinstance(rows, dict):
+            rows = rows.get("tables", [])
+        if table_id:
+            rows = [row for row in rows if str(row.get("table_id", row.get("id"))) == table_id]
+        return paged(rows, offset, limit)
+
+    def table_search(self, query: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        rows = []
+        for paper in self.papers:
+            if not in_scope(paper, scope):
+                continue
+            table_rows = self.table(paper["paper_id"], limit=50)["items"]
+            for row in table_rows:
+                if query.casefold() in json.dumps(row).casefold():
+                    rows.append({"paper_id": paper["paper_id"], **row})
+        return paged(rows, offset, limit)
+
+    def section(self, role: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        rows = [p for p in self.passages if in_scope(self.by_paper[p["paper_id"]], scope) and role.casefold() in p["section_path"].casefold()]
+        return paged(rows, offset, limit)
+
+    def citation_contexts(self, paper_id: str, offset: int = 0, limit: int = 10) -> dict:
+        rows = []
+        for reference in self.references:
+            if reference.get("paper_id") != paper_id:
+                continue
+            rows.append({**reference, "context": self.by_passage.get(reference.get("passage_id", ""), {}).get("text", "")})
+        return paged(rows, offset, limit)
+
+    def query2doc(self, query: str, offset: int = 0, limit: int = 10) -> dict:
+        return self.search(query, offset=offset, limit=limit)
+
+    def find_number(self, pattern: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return self.results(pattern, scope, offset, limit)
+
+    def co_cited(self, paper_id: str, offset: int = 0, limit: int = 10) -> dict:
+        cited = {r.get("resolved_paper_id") for r in self.references if r.get("paper_id") == paper_id}
+        rows = [{"paper_id": pid, "co_cited_with": sorted(cited - {pid})} for pid in sorted(cited) if pid]
+        return paged(rows, offset, limit)
+
+    def rank(self, query: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        terms = [t.casefold() for t in re.findall(r"[A-Za-z0-9]+", query) if len(t) > 2]
+        rows = []
+        for passage in self.passages:
+            if not in_scope(self.by_paper[passage["paper_id"]], scope):
+                continue
+            text = passage["text"].casefold()
+            score = sum(text.count(term) for term in terms)
+            if score:
+                rows.append({"passage_id": passage["passage_id"], "paper_id": passage["paper_id"], "score": score})
+        return paged(sorted(rows, key=lambda row: (-row["score"], row["passage_id"])), offset, limit)
+
+    def entities(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        counts: Counter[str] = Counter()
+        support: dict[str, set[str]] = {}
+        for passage in self.passages:
+            if not in_scope(self.by_paper[passage["paper_id"]], scope):
+                continue
+            for entity in re.findall(r"\b[A-Z][A-Za-z0-9-]{2,}(?:\s+[A-Z][A-Za-z0-9-]{2,})*", passage["text"]):
+                counts[entity] += 1
+                support.setdefault(entity, set()).add(passage["passage_id"])
+        rows = [{"entity": entity, "count": count, "passage_ids": sorted(support[entity])[:10]} for entity, count in counts.most_common()]
+        return paged(rows, offset, limit)
+
+    def entity_index(self, entity: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        return self.grep(rf"\b{re.escape(entity)}\b", scope, offset, limit)
+
+    def candidates_for(self, question: str, offset: int = 0, limit: int = 10) -> dict:
+        return self.rank(question, offset=offset, limit=limit)
+
+    def prior_triples(self, paper_ids: list[str] | None = None, offset: int = 0, limit: int = 10) -> dict:
+        rows = [row for row in self.seed_facts() if not paper_ids or str(row.get("subject")) in paper_ids]
+        return paged(rows, offset, limit)
+
+    def corpus_map(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
+        rows = []
+        for paper in self.papers:
+            if in_scope(paper, scope):
+                rows.append({"paper_id": paper["paper_id"], "title": paper.get("title", ""), "year": paper.get("year"), "passages": sum(p["paper_id"] == paper["paper_id"] for p in self.passages)})
+        return paged(rows, offset, limit)
