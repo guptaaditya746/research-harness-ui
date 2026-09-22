@@ -4,6 +4,7 @@ import type { Reading, Run, Triple } from './generated/run';
 type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_result' | 'failed' | 'runs' | 'corpus' | 'settings' | 'gold';
 type TripleView = 'statements' | 'graph' | 'turtle';
 type GoldCandidate = { id: string; run_id: string; question: string; gold_triples: Triple[]; notes: string; status: string };
+type PaperLabel = { paper_id: string; title: string };
 const screenRun: Record<string, string> = { readings: 'r-0413', agentic_result: 'r-0412', baseline_result: 'r-0411', failed: 'r-0410' };
 const api = '/api';
 
@@ -48,18 +49,19 @@ function Sidebar({ run, reading, onRate, onPromote }: { run: Run; reading?: Read
   </aside>;
 }
 
-function Triples({ reading }: { reading: Reading }) {
+function Triples({ reading, labels }: { reading: Reading; labels: Record<string, string> }) {
   const [view, setView] = useState<TripleView>('statements');
+  const label = (value: string) => labels[value] ? `${labels[value]} (${value})` : value;
   return <section className="section" aria-label="Triples"><div className="section-top"><span className="section-title">Triples</span><div className="section-links">
     {(['statements', 'graph', 'turtle'] as const).map(v => <button key={v} className="text-button micro" style={{ color: view === v ? 'var(--color-text)' : undefined }} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
   </div></div>
-    {view === 'statements' && reading.triples.map((t: Triple, i: number) => <details className="row-details" key={i}><summary><span style={{ fontSize: 15.5 }}>{t.s}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{t.p}</span><span style={{ fontSize: 15.5 }}>{t.o}</span><span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{t.support}</span></summary><p style={{ margin: '12px 0 0', fontStyle: 'italic', fontSize: 14 }}>{t.evidence}</p><div className="muted micro">{t.source}</div></details>)}
-    {view === 'graph' && reading.triples.map((t: Triple, i: number) => <div className="graph-row" key={i}><span>{t.s}</span><span className="graph-edge">{t.p}</span><span style={{ textAlign: 'right' }}>{t.o}</span></div>)}
+    {view === 'statements' && reading.triples.map((t: Triple, i: number) => <details className="row-details" key={i}><summary><span style={{ fontSize: 15.5 }}>{label(t.s)}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{t.p}</span><span style={{ fontSize: 15.5 }}>{label(t.o)}</span><span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{t.support}</span></summary><p style={{ margin: '12px 0 0', fontStyle: 'italic', fontSize: 14 }}>{t.evidence}</p><div className="muted micro">{t.source}</div></details>)}
+    {view === 'graph' && reading.triples.map((t: Triple, i: number) => <div className="graph-row" key={i}><span>{label(t.s)}</span><span className="graph-edge">{t.p}</span><span style={{ textAlign: 'right' }}>{label(t.o)}</span></div>)}
     {view === 'turtle' && <pre className="code">{turtle(reading)}</pre>}
   </section>;
 }
 
-function Result({ run, pick, setPick, onDeeper }: { run: Run; pick: number; setPick: (index: number) => void; onDeeper: () => void }) {
+function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: number; setPick: (index: number) => void; onDeeper: () => void; labels: Record<string, string> }) {
   const [showOntology, setShowOntology] = useState(false);
   const [showQuery, setShowQuery] = useState(false);
   const reading = run.readings[pick] || run.readings[0];
@@ -80,7 +82,7 @@ function Result({ run, pick, setPick, onDeeper }: { run: Run; pick: number; setP
       <p className="muted" style={{ fontSize: 14, margin: '10px 0 16px' }}>{run.path === 'baseline' ? 'Unstated — inferred by the extractor. ' : ''}The answer is computed over {reading.classes.map(c => c.toLowerCase() + 's').join(', ')} only. Nothing outside these is read.</p>
       <div style={{ display: 'grid', gap: 12 }}>{reading.axioms.map(([property, domain, range]) => <div key={property}><div style={{ fontSize: 14.5 }}>A {domain.toLowerCase()} has {property.replaceAll('_', ' ')} relating it to {range.replace('xsd:', '')}.</div><div className="muted" style={{ font: '11.5px ui-monospace, Menlo, monospace' }}>{`hrn:${property}  rdfs:domain hrn:${domain}  rdfs:range ${range.includes(':') ? range : `hrn:${range}`}`}</div></div>)}</div>
       {showOntology && <pre className="code">{ontology(reading)}</pre>}{showQuery && <pre className="code">{reading.sparql}</pre>}
-    </section><Triples key={pick} reading={reading} /></>}
+    </section><Triples key={pick} reading={reading} labels={labels} /></>}
   </div>;
 }
 
@@ -98,11 +100,12 @@ export default function App() {
   const [artifactBody, setArtifactBody] = useState('');
   const [liveTrace, setLiveTrace] = useState<Run['trace']>([]);
   const [candidates, setCandidates] = useState<GoldCandidate[]>([]);
+  const [labels, setLabels] = useState<Record<string, string>>({});
   const [promotion, setPromotion] = useState('');
   const active = useMemo(() => runs.find(r => r.id === activeId), [runs, activeId]);
   const reading = active?.readings[pick] || active?.readings[0];
 
-  useEffect(() => { fetch(`${api}/runs`).then(r => r.json()).then((items: Run[]) => {
+  useEffect(() => { fetch(`${api}/corpus/papers`).then(r => r.json()).then((items: PaperLabel[]) => setLabels(Object.fromEntries(items.map(item => [item.paper_id, item.title])))); fetch(`${api}/runs`).then(r => r.json()).then((items: Run[]) => {
     setRuns(items);
     const id = screenRun[initial || ''];
     if (id) setQuestion(items.find(run => run.id === id)?.question || '');
@@ -146,7 +149,7 @@ export default function App() {
         {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'incomplete').slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
         {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Enhanced baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'Planner lenses · shared evidence graph · verification' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction' : 'Fixed pipeline · no verification pass'}</span></div>{liveTrace.map((step, i) => <div className="log-row" key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={stopRun}>Stop run</button></section>}
         {scene === 'readings' && active && <section style={{ marginTop: 60 }}><p style={{ maxWidth: '56ch' }}>The agent produced multiple supported readings. Choose one to continue.</p><p className="muted" style={{ fontSize: 13.5, marginBottom: 34 }}>Each binds a different subschema and produces a different query.</p>{active.readings.map((r, i) => <button key={i} className="reading-row" onClick={() => chooseReading(i)}><span className="muted micro">{i + 1}</span><span style={{ display: 'grid', gap: 4 }}><strong style={{ fontSize: 16.5 }}>{r.label}</strong><span className="muted" style={{ fontSize: 13.5 }}>{r.gloss}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{r.classes.join(' · ')} &nbsp; | &nbsp; {r.properties.join(' · ')}</span></span></button>)}<button className="text-button" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setScene('idle'); setQuestion(''); }}>None of these — rephrase the question</button></section>}
-        {['agentic_result', 'baseline_result', 'failed'].includes(scene) && active && <Result key={`${active.id}-${pick}`} run={active} pick={pick} setPick={setPick} onDeeper={() => { setActiveId('r-0413'); setScene('readings'); }} />}
+        {['agentic_result', 'baseline_result', 'failed'].includes(scene) && active && <Result key={`${active.id}-${pick}`} run={active} pick={pick} setPick={setPick} labels={labels} onDeeper={() => { setActiveId('r-0413'); setScene('readings'); }} />}
       </>}
     </div>{showSidebar && active && <><Sidebar run={active} reading={reading} onRate={changeRating} onPromote={promote} />{promotion && <span className="muted micro">{promotion}</span>}</>}</main></div>;
 }
