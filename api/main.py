@@ -115,10 +115,15 @@ class RunRuntime:
         self.fixture_overrides: dict[str, Run] = {}
         self.lock = threading.RLock()
 
-    def _runner(self, sink: Callable[[TraceRow], None], enhanced: bool = False) -> Baseline20:
+    def _runner(
+        self,
+        sink: Callable[[TraceRow], None],
+        enhanced: bool = False,
+        model_name: str | None = None,
+    ) -> Baseline20:
         schema = hand_written_subschema()
         budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15"))
-        model = OpenAICompatibleModel(timeout_s=budget_timeout)
+        model = OpenAICompatibleModel(model=model_name, timeout_s=budget_timeout)
         return Baseline20(
             CorpusStore(Path(os.getenv("CORPUS_ROOT", ROOT / "corpus_data"))),
             ExtractionEngine(model, schema),
@@ -148,12 +153,13 @@ class RunRuntime:
             try:
                 with run_observation(run_id, request.question.strip(), request.path, request.budget) as observation:
                     if request.path == "agentic" and not self.custom_runner:
-                        baseline = self._runner(sink, True)
+                        high_model = os.getenv(
+                            "HARNESS_MODEL_HIGH",
+                            os.getenv("HARNESS_MODEL_AGENT", "heavy-model"),
+                        )
+                        baseline = self._runner(sink, True, model_name=high_model)
                         agent_model = OpenAICompatibleModel(
-                            model=os.getenv(
-                                "HARNESS_MODEL_HIGH",
-                                os.getenv("HARNESS_MODEL_AGENT", "heavy-model"),
-                            ),
+                            model=high_model,
                             timeout_s=float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15")),
                         )
                         runner = AgenticResearch(baseline, sink, agent_model=agent_model)

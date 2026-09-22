@@ -47,6 +47,10 @@ class AgenticResearch:
             trace.append(row)
             self.trace_sink(row)
 
+        # Run the shared heavy-model baseline first. MCP is an enrichment path;
+        # a transport failure must not erase a valid evidence-backed answer.
+        result = self.baseline.run(question, budget, run_id)
+        base_run = result["run"]
         mcp = MCPToolClient(tool_sink, agent="supervisor")
         try:
             agent_final = mcp.run_agent(self.agent_model, question)
@@ -70,8 +74,6 @@ class AgenticResearch:
             trace.append(row)
             self.trace_sink(row)
 
-        result = self.baseline.run(question, budget, run_id)
-        base_run = result["run"]
         mcp_answer_used = base_run.status == "incomplete" and bool(agent_final) and not mcp_error
         if base_run.status == "incomplete" and agent_final and not mcp_error:
             # The MCP supervisor has a usable evidence-grounded text response
@@ -140,9 +142,9 @@ class AgenticResearch:
                 "readings": readings,
                 "model_agent": getattr(self.agent_model, "model", "recorded"),
                 "artifacts": list(required_artifacts("agentic")),
-                "status": "incomplete" if mcp_error else status,
-                "chosen_reading": None if mcp_error else chosen,
-                "reason": f"mcp_unavailable: {mcp_error}" if mcp_error else base_run.reason,
+                "status": status,
+                "chosen_reading": chosen,
+                "reason": base_run.reason,
             }
         )
         artifacts = {

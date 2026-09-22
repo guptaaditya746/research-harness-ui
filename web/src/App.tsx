@@ -76,7 +76,6 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
       : `The ${pathLabel} ended before it produced an answer (${run.reason || 'unknown failure'}).`;
   return <div style={{ marginTop: 64 }}>
     <p className="notice">{failed ? `Incomplete — ${pathLabel} stopped before answer composition.` : run.path === 'baseline' ? 'No criterion was stated and none was requested — the baseline chose one silently.' : `Interpreted as: ${reading?.label}.${run.coverage != null && run.coverage < 1 ? ` Evaluated ${Math.round(run.coverage * 100)}% of obligations; ranking is provisional.` : ''}`}</p>
-    <p className="answer">{failed ? failure : reading?.answer}</p>
     {failed && <button className="btn btn-secondary" style={{ marginTop: 24 }} onClick={onDeeper}>Try deeper research</button>}
     {!failed && run.path === 'agentic' && run.readings.length > 1 && <div style={{ marginTop: 20 }}><div className="muted micro" style={{ marginBottom: 8 }}>Re-answer under another reading</div><div style={{ display: 'flex', gap: '12px 24px', flexWrap: 'wrap' }}>{run.readings.map((r, i) => i !== pick && <button key={i} className="text-button" style={{ fontSize: 13 }} onClick={() => setPick(i)}>{r.label}</button>)}</div></div>}
     {!failed && run.path === 'baseline' && <div style={{ marginTop: 20 }}><div className="muted micro">Re-answer under a stated reading (agentic)</div><button className="text-button" style={{ fontSize: 13, marginTop: 8 }} onClick={onDeeper}>Citation count within the corpus</button></div>}
@@ -84,7 +83,8 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
       <p className="muted" style={{ fontSize: 14, margin: '10px 0 16px' }}>{run.path === 'baseline' ? 'Unstated — inferred by the extractor. ' : ''}The answer is computed over {reading.classes.map(c => c.toLowerCase() + 's').join(', ')} only. Nothing outside these is read.</p>
       <div style={{ display: 'grid', gap: 12 }}>{reading.axioms.map(([property, domain, range]) => <div key={property}><div style={{ fontSize: 14.5 }}>A {domain.toLowerCase()} has {property.replaceAll('_', ' ')} relating it to {range.replace('xsd:', '')}.</div><div className="muted" style={{ font: '11.5px ui-monospace, Menlo, monospace' }}>{`hrn:${property}  rdfs:domain hrn:${domain}  rdfs:range ${range.includes(':') ? range : `hrn:${range}`}`}</div></div>)}</div>
       {showOntology && <pre className="code">{ontology(reading)}</pre>}{showQuery && <pre className="code">{reading.sparql}</pre>}
-    </section><Triples key={pick} reading={reading} labels={labels} /></>}
+    </section><Triples key={pick} reading={reading} labels={labels} /><section className="section" aria-label="Natural-language answer" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span><span className="muted micro">Downstream of the returned triples</span></div><p className="answer">{reading.answer}</p></section></>}
+    {failed && <section className="section" aria-label="Run result" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span></div><p className="answer">{failure}</p></section>}
   </div>;
 }
 
