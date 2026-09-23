@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from harness_extraction import model_purpose
+
 MIN_CONCEPTS = 3
 MAX_CONCEPTS = 4
 
@@ -132,7 +134,8 @@ def propose_concepts(
             request["previous_attempt_problem"] = last_error
         user = json.dumps(request)
         try:
-            concepts = _parse(complete(system, user), allowed_classes)
+            with model_purpose("concept proposal"):
+                concepts = _parse(complete(system, user), allowed_classes)
         except Exception as exc:  # noqa: BLE001 - provider errors are reported below
             last_error = f"{type(exc).__name__}: {exc}"
             continue

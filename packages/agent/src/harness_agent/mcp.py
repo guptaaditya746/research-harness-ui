@@ -10,7 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
-from harness_extraction import ModelFailure, bounded_timeout, call_interrupted
+from harness_extraction import ModelFailure, bounded_timeout, call_interrupted, emit_model_event
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -174,6 +174,7 @@ class MCPToolClient:
             configured_reply = int(os.getenv("HARNESS_AGENT_REPLY_TOKENS", "2048"))
             reply_tokens = min(configured_reply, max(512, window // 4))
             retried_for_length = False
+            turn_number = 0
 
             def limit() -> int:
                 # Leave room for the reply and a margin for estimation error.
@@ -212,6 +213,13 @@ class MCPToolClient:
                             "tokens; serve the agent model with a larger max_model_len or set "
                             "HARNESS_AGENT_CONTEXT_TOKENS"
                         )
+                    turn_number += 1
+                    turn_started = time.monotonic()
+                    alias = getattr(model, "model", "agent")
+                    emit_model_event(
+                        "Model call started",
+                        f"{alias} · agent tool loop turn {turn_number} · {len(tools)} tools",
+                    )
                     turn = asyncio.ensure_future(client.post(
                         f"{model.base_url}/chat/completions",
                         timeout=turn_timeout,
@@ -232,9 +240,16 @@ class MCPToolClient:
                         if not turn.done() and call_interrupted():
                             turn.cancel()
                             return ""
-                    response = turn.result()
+                    try:
+                        response = turn.result()
+                    except httpx.TimeoutException:
+                        emit_model_event("Model call failed", f"{alias} · agent tool loop turn "
+                                         f"{turn_number} · timed out after {time.monotonic() - turn_started:.0f}s")
+                        raise
                     if response.status_code >= 400:
                         body = response.text[:600]
+                        emit_model_event("Model call failed", f"{alias} · agent tool loop turn "
+                                         f"{turn_number} · HTTP {response.status_code}: {body[:200]}")
                         if is_context_error(body) and not retried_for_length:
                             # Learn the real window from the provider and refit once.
                             retried_for_length = True
@@ -245,6 +260,12 @@ class MCPToolClient:
                         raise ModelFailure(f"model returned HTTP {response.status_code}: {body}")
                     message = response.json()["choices"][0]["message"]
                     requested = message.get("tool_calls") or []
+                    emit_model_event(
+                        "Model call finished",
+                        f"{alias} · agent tool loop turn {turn_number} · "
+                        f"{time.monotonic() - turn_started:.1f}s · "
+                        + (f"{len(requested)} tool calls" if requested else "final answer"),
+                    )
                     if not requested:
                         return str(message.get("content") or "")
                     assistant = {

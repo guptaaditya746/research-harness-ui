@@ -93,19 +93,38 @@ def check_models(quick: bool) -> None:
             report("FAIL", f"model alias {alias} ({role})", "not served by LiteLLM")
     if quick:
         return
+    from harness_extraction import model_options, strip_reasoning
+
     for role, alias in aliases.items():
         started = time.monotonic()
+        options = model_options(alias)
         try:
             response = httpx.post(f"{base}/chat/completions", headers=headers, timeout=120, json={
                 "model": alias, "temperature": 0, "response_format": {"type": "json_object"},
+                "max_tokens": int(options.get("max_tokens") or env("HARNESS_MAX_OUTPUT_TOKENS", "4096")),
                 "messages": [{"role": "system", "content": 'Return strict JSON {"ok": true}.'},
                              {"role": "user", "content": "ping"}],
+                **(options.get("extra_body") or {}),
             })
             response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            json.loads(content[content.find("{"): content.rfind("}") + 1])
+            payload = response.json()
+            message = payload["choices"][0]["message"]
+            content = str(message.get("content") or "")
+            answer = strip_reasoning(content)
+            json.loads(answer[answer.find("{"): answer.rfind("}") + 1])
             took = time.monotonic() - started
-            report("WARN" if took > 20 else "PASS", f"model {alias} ({role}) JSON round-trip", f"{took:.1f}s")
+            tokens = (payload.get("usage") or {}).get("completion_tokens")
+            thinking = bool(message.get("reasoning_content")) or "<think>" in content
+            detail = f"{took:.1f}s" + (f", {tokens} output tokens for a one-word answer" if tokens else "")
+            if thinking or (tokens and tokens > 200):
+                structured = role.startswith("extraction")
+                report("WARN", f"model {alias} ({role}) is reasoning before answering", detail + (
+                    "; every run makes ~30 structured calls with this model, so runs will be slow "
+                    "and may time out. Use an instruct model for HARNESS_MODEL_SMALL, or disable "
+                    "thinking via HARNESS_MODEL_OPTIONS" if structured else
+                    "; consider disabling thinking via HARNESS_MODEL_OPTIONS for structured calls"))
+            else:
+                report("WARN" if took > 20 else "PASS", f"model {alias} ({role}) JSON round-trip", detail)
         except Exception as exc:  # noqa: BLE001
             report("FAIL", f"model {alias} ({role}) JSON round-trip", f"{type(exc).__name__}: {exc}"[:200])
     agent = env("HARNESS_MODEL_AGENT")

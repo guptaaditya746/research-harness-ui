@@ -23,7 +23,7 @@ from harness_baseline import Baseline20
 from harness_baseline.planner import QueryPlanner
 from harness_corpus.store import CorpusStore
 from harness_evaluation import evaluate_run
-from harness_extraction import ExtractionEngine, OpenAICompatibleModel, call_budget
+from harness_extraction import ExtractionEngine, OpenAICompatibleModel, call_budget, model_events
 from harness_observability import hello_span, run_observation
 from harness_observability import init as init_observability
 from harness_runs import ArtifactStore, ClaimStore, GoldCandidateStore, RelationRegistry
@@ -212,7 +212,8 @@ class RunRuntime:
             self.events[run_id] = []
             self.running.add(run_id)
         self._mark_pending(run_id, request)
-        deadline = monotonic() + run_deadline_seconds(request.path, request.budget)
+        run_started = monotonic()
+        deadline = run_started + run_deadline_seconds(request.path, request.budget)
         question = request.question.strip()
 
         def check_cancelled() -> None:
@@ -224,6 +225,9 @@ class RunRuntime:
                 raise RunCancelled("deadline_exceeded")
 
         def sink(row: TraceRow) -> None:
+            # One clock for the whole run: pipeline, agent and model-call rows
+            # are stamped with seconds since the run started.
+            row = row.model_copy(update={"at_s": round(monotonic() - run_started, 2)})
             with self.lock:
                 self.events[run_id].append(row)
             # Every pipeline stage reports through the sink, so this is where a
@@ -257,6 +261,9 @@ class RunRuntime:
                 with (
                     run_observation(run_id, question, request.path, request.budget) as observation,
                     call_budget(deadline, lambda: run_id in self.stop_requested),
+                    model_events(lambda action, detail: sink(TraceRow(
+                        atS=round(monotonic() - run_started, 2), action=action, returned=detail,
+                    ))),
                 ):
                     result = self._execute(request, question, run_id, sink, acquire)
                     if observation is not None:
@@ -267,10 +274,18 @@ class RunRuntime:
                                 "claim_count": sum(len(item.claims) for item in result["run"].readings),
                             }
                         )
+                with self.lock:
+                    trace = list(self.events[run_id])
+                # The saved trace is exactly what streamed live, including
+                # model-call start/finish rows.
+                result["artifacts"]["trace.json"] = json.dumps(
+                    [item.model_dump(by_alias=True) for item in trace], indent=2
+                ).encode()
                 run = result["run"].model_copy(update={
                     "evaluation_mode": request.evaluation_mode,
                     "snapshot": request.snapshot,
                     "parent_run_id": request.parent_run_id,
+                    "trace": trace,
                 })
                 result["run"] = run
                 with self.lock:

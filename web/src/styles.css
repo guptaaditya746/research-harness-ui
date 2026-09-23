@@ -45,3 +45,7 @@
 .library-row:hover .library-run, .library-row:focus-within .library-run { visibility: visible; }
 @media (hover: none) { .library-run { visibility: visible; } }
 @media (max-width: 720px) { .library-row { grid-template-columns: 1fr; } }
+
+.log-model { opacity: 0.72; font-size: 13px; }
+.log-failed { opacity: 1; color: var(--color-accent-2-800); }
+.log-waiting { color: var(--color-accent-700); }

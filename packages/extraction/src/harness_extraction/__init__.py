@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, copy_context
 from dataclasses import replace
 from difflib import SequenceMatcher
+from functools import wraps
 from typing import Any, Protocol
 
 import httpx
@@ -100,11 +101,91 @@ def run_interruptible(call: Callable[[], Any]) -> Any:
                 raise ModelFailure(reason) from None
 
 
+# ─── Model-call observability ───────────────────────────────────────────────
+# What the current call is for (set by callers) and where start/finish events
+# go (set by the runtime for each run). Both follow the run's thread/tasks.
+_MODEL_PURPOSE: ContextVar[str] = ContextVar("harness_model_purpose", default="model call")
+_MODEL_EVENTS: ContextVar[Callable[[str, str], None] | None] = ContextVar(
+    "harness_model_events", default=None
+)
+
+
+@contextmanager
+def model_purpose(purpose: str) -> Iterator[None]:
+    """Label the model calls made inside the block (e.g. "schema inference")."""
+    token = _MODEL_PURPOSE.set(purpose)
+    try:
+        yield
+    finally:
+        _MODEL_PURPOSE.reset(token)
+
+
+@contextmanager
+def model_events(callback: Callable[[str, str], None]) -> Iterator[None]:
+    """Receive (action, detail) events for every model call inside the block."""
+    token = _MODEL_EVENTS.set(callback)
+    try:
+        yield
+    finally:
+        _MODEL_EVENTS.reset(token)
+
+
+def labelled(purpose: str) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """Decorator: label every model call made by the wrapped function."""
+    def wrap(function: Callable[..., Any]) -> Callable[..., Any]:
+        @wraps(function)
+        def inner(*args: Any, **kwargs: Any) -> Any:
+            with model_purpose(purpose):
+                return function(*args, **kwargs)
+        return inner
+    return wrap
+
+
+def emit_model_event(action: str, detail: str) -> None:
+    callback = _MODEL_EVENTS.get()
+    if callback is not None:
+        callback(action, detail)
+
+
+def current_purpose() -> str:
+    return _MODEL_PURPOSE.get()
+
+
+def model_options(alias: str) -> dict[str, Any]:
+    """Per-alias request options from HARNESS_MODEL_OPTIONS (JSON), if configured.
+
+    Example: {"heavy-model": {"max_tokens": 6144,
+              "extra_body": {"chat_template_kwargs": {"enable_thinking": false}}}}
+    """
+    raw = os.getenv("HARNESS_MODEL_OPTIONS", "").strip()
+    if not raw:
+        return {}
+    try:
+        options = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    value = options.get(alias) if isinstance(options, dict) else None
+    return value if isinstance(value, dict) else {}
+
+
+_THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+def strip_reasoning(text: str) -> str:
+    """Remove reasoning blocks a thinking model may emit before its answer."""
+    text = _THINK_BLOCK.sub("", text)
+    # An unterminated block means the answer never started.
+    if re.search(r"<think>", text, re.IGNORECASE):
+        text = re.split(r"<think>", text, flags=re.IGNORECASE)[0]
+    return text.strip()
+
+
 class ModelClient(Protocol):
     def complete_json(self, system: str, user: str) -> dict[str, Any]: ...
 
 
 def _json_object(text: str) -> dict[str, Any]:
+    text = strip_reasoning(text)
     fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL | re.IGNORECASE)
     candidate = fenced.group(1) if fenced else text[text.find("{") : text.rfind("}") + 1]
     value = json.loads(candidate)
@@ -131,35 +212,101 @@ class OpenAICompatibleModel:
         self.retries = retries or int(os.getenv("PROVIDER_MAX_RETRIES", "3"))
 
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
-        error: Exception | None = None
+        """One structured call, bounded in time and output, with visible progress.
+
+        Transient transport failures (connection errors, 429, 5xx) are
+        retried. A read timeout is not: repeating the same long generation
+        only multiplies the wait. A reply cut off by the output limit is
+        reported as such rather than as malformed JSON.
+        """
+        purpose = current_purpose()
+        options = model_options(self.model)
+        max_tokens = int(options.get("max_tokens") or os.getenv("HARNESS_MAX_OUTPUT_TOKENS", "4096"))
+        body: dict[str, Any] = {
+            "model": self.model,
+            "temperature": 0,
+            "max_tokens": max_tokens,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            **(options.get("extra_body") or {}),
+        }
+        error: str = "no attempt made"
         for attempt in range(self.retries):
             timeout_s = bounded_timeout(self.timeout_s)
+            started = time.monotonic()
+            emit_model_event(
+                "Model call started",
+                f"{self.model} · {purpose}" + (f" · attempt {attempt + 1}" if attempt else ""),
+            )
 
             def request(timeout_s: float = timeout_s) -> dict[str, Any]:
                 with httpx.Client(timeout=timeout_s) as client:
                     response = client.post(
                         f"{self.base_url}/chat/completions",
                         headers={"Authorization": f"Bearer {self.api_key}"},
-                        json={
-                            "model": self.model,
-                            "temperature": 0,
-                            "response_format": {"type": "json_object"},
-                            "messages": [
-                                {"role": "system", "content": system},
-                                {"role": "user", "content": user},
-                            ],
-                        },
+                        json=body,
                     )
-                    response.raise_for_status()
-                    return _json_object(response.json()["choices"][0]["message"]["content"])
+                    if response.status_code >= 400:
+                        raise _ProviderStatus(response.status_code, response.text[:400])
+                    return response.json()
 
             try:
-                return run_interruptible(request)
-            except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-                error = exc
-                if attempt + 1 < self.retries:
-                    time.sleep(0.25 * (2**attempt))
+                payload = run_interruptible(request)
+            except httpx.TimeoutException:
+                took = time.monotonic() - started
+                error = f"timed out after {took:.0f}s ({self.model} · {purpose})"
+                emit_model_event("Model call failed", error)
+                raise ModelFailure(error) from None
+            except _ProviderStatus as exc:
+                error = f"HTTP {exc.status}: {exc.body}"
+                emit_model_event("Model call failed", f"{self.model} · {purpose} · {error}")
+                if exc.status == 429 or exc.status >= 500:
+                    self._backoff(attempt)
+                    continue
+                raise ModelFailure(error) from None
+            except httpx.HTTPError as exc:
+                error = f"{type(exc).__name__}: {exc}"
+                emit_model_event("Model call failed", f"{self.model} · {purpose} · {error}")
+                self._backoff(attempt)
+                continue
+            took = time.monotonic() - started
+            try:
+                choice = payload["choices"][0]
+                content = str(choice["message"].get("content") or "")
+                usage = payload.get("usage") or {}
+                tokens = usage.get("completion_tokens")
+                if choice.get("finish_reason") == "length":
+                    raise ValueError(
+                        f"reply hit the {max_tokens}-token output limit before finishing"
+                        + (" (a thinking model spent it on reasoning)"
+                           if choice["message"].get("reasoning_content") or "<think>" in content else "")
+                    )
+                value = _json_object(content)
+            except (KeyError, TypeError, ValueError, IndexError) as exc:
+                error = f"unusable reply: {exc}"[:300]
+                emit_model_event("Model call failed", f"{self.model} · {purpose} · {error} · {took:.1f}s")
+                # A deterministic model repeats the same reply; do not retry.
+                raise ModelFailure(error) from None
+            emit_model_event(
+                "Model call finished",
+                f"{self.model} · {purpose} · {took:.1f}s" + (f" · {tokens} tokens" if tokens else ""),
+            )
+            return value
         raise ModelFailure(f"provider failed after {self.retries} attempts: {error}")
+
+    @staticmethod
+    def _backoff(attempt: int) -> None:
+        time.sleep(0.25 * (2**attempt))
+
+
+class _ProviderStatus(Exception):
+    def __init__(self, status: int, body: str) -> None:
+        super().__init__(f"HTTP {status}")
+        self.status = status
+        self.body = body
 
 
 class SchemaInference(BaseModel):
@@ -256,6 +403,7 @@ class ExtractionEngine:
         self.property_names[name] = iri
         return iri
 
+    @labelled("schema inference")
     def infer_schema(self, question: str, passages: list[dict[str, Any]]) -> SchemaInference:
         result = SchemaInference.model_validate(
             self.model.complete_json(
@@ -281,6 +429,7 @@ class ExtractionEngine:
             raise ValueError("schema inference returned no classes or properties")
         return result
 
+    @labelled("triple extraction")
     def extract(
         self, question: str, inferred: SchemaInference, passages: list[dict[str, Any]]
     ) -> ExtractionResult:
@@ -315,6 +464,7 @@ class ExtractionEngine:
         ]
         return result
 
+    @labelled("open extraction and relation mapping")
     def extract_edc(
         self, question: str, inferred: SchemaInference, passages: list[dict[str, Any]]
     ) -> tuple[ExtractionResult, list[dict[str, Any]]]:
@@ -492,6 +642,7 @@ class ExtractionEngine:
                     merged[key] = previous.model_copy(update={"evidence": f"{previous.evidence} | {triple.evidence}"})
         return list(merged.values()), reports
 
+    @labelled("evidence review")
     def refine_triples(
         self,
         question: str,
@@ -541,6 +692,7 @@ class ExtractionEngine:
             kept.extend(item for i, item in enumerate(batch) if i in indices)
         return kept, {"candidates": len(triples), "unique": len(candidates), "kept": len(kept), "model_calls": calls}
 
+    @labelled("answer composition and verification")
     def answer(
         self,
         question: str,

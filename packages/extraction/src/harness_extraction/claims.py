@@ -14,6 +14,8 @@ from typing import Any
 
 from harness_schema.models import ClaimField, ClaimRelation, ClaimSubgraph, EvidenceAnchor, Triple
 
+from . import labelled
+
 PLACEHOLDERS = {"", "null", "none", "n/a", "unknown", "undefined"}
 NUMERIC = re.compile(r"(?<!\w)(\d+(?:\.\d+)?)\s*(%|percent(?:age points?)?)", re.IGNORECASE)
 METRICS = re.compile(r"\b(success rate|accuracy|error rate|f1|precision|recall|completion rate)\b", re.IGNORECASE)
@@ -178,6 +180,7 @@ def derive_query_claim(question: str, claims: list[ClaimSubgraph]) -> ClaimSubgr
     )
 
 
+@labelled("claim context enrichment")
 def enrich_result_claims(
     claims: list[ClaimSubgraph], passages: list[dict[str, Any]], model: Any,
 ) -> list[ClaimSubgraph]:

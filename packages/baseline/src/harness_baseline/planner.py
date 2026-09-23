@@ -22,6 +22,7 @@ import re
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
+from harness_extraction import model_purpose
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 Operation = Literal[
@@ -138,7 +139,8 @@ class QueryPlanner:
                 "label": concept.get("label"), "description": concept.get("gloss"),
             }
         try:
-            payload = self.model.complete_json(SYSTEM_PROMPT, json.dumps(request))
+            with model_purpose("question understanding"):
+                payload = self.model.complete_json(SYSTEM_PROMPT, json.dumps(request))
         except Exception as exc:  # noqa: BLE001 - planning must never fail a run
             return QueryPlan.fallback(f"planner unavailable: {type(exc).__name__}")
         try:

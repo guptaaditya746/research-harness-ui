@@ -20,6 +20,14 @@ Check `.env` against `.env.example`. These settings matter for a live session:
 | `HARNESS_RUN_DEADLINE_FAST_S` / `_SLOW_S` | `300` / `900` | hard limit per run; the run ends as `deadline_exceeded` |
 | `HARNESS_AGENT_CONTEXT_TOKENS` | the Granite `max_model_len` | the agent's conversation is fitted to this window; if unset it is asked from LiteLLM or learned from the first length error |
 
+**Models.** Each run makes about 30 structured calls (planning, schema, extraction, review,
+enrichment) through `HARNESS_MODEL_SMALL`, and agentic concepts and review go through
+`HARNESS_MODEL_HIGH`. Point `HARNESS_MODEL_SMALL` at an instruct model. A thinking model
+reasons for hundreds of tokens before every JSON reply, so runs take minutes and time out.
+If a thinking model has to be used, turn its thinking off for these calls with
+`HARNESS_MODEL_OPTIONS` (see `.env.example`). `make preflight` warns when a model reasons
+before answering.
+
 Start the laptop tunnel and the stack:
 
 ```sh
@@ -73,6 +81,8 @@ Gold and benchmark flow:
 
 | Symptom | Meaning | Action |
 |---|---|---|
+| A run seems stuck | the trace shows "Waiting Ns · <model> · <stage>" for the model call in flight | if one model stage keeps taking long, that model is the bottleneck; see the model note in section 1 |
+| Failed: "A model call failed: timed out after …" | that model call exceeded its per-call timeout | a thinking model on structured calls is the usual cause (section 1) |
 | "Queued for model capacity" in the trace | another agentic run holds the single heavy slot | wait, or **Stop run** on the other one (stop is immediate) |
 | "Agentic execution degraded" | MCP server or agent model unavailable; you see the grounded baseline answer | check `make preflight`; restart `make dev` |
 | Failed: "exceeded its time limit" | the run hit `HARNESS_RUN_DEADLINE_*` | the model is overloaded; retry with the fast budget |
