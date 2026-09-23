@@ -23,7 +23,7 @@ from harness_baseline import Baseline20
 from harness_baseline.planner import QueryPlanner
 from harness_corpus.store import CorpusStore
 from harness_evaluation import evaluate_run
-from harness_extraction import ExtractionEngine, OpenAICompatibleModel
+from harness_extraction import ExtractionEngine, OpenAICompatibleModel, call_budget
 from harness_observability import hello_span, run_observation
 from harness_observability import init as init_observability
 from harness_runs import ArtifactStore, ClaimStore, GoldCandidateStore, RelationRegistry
@@ -168,6 +168,7 @@ class RunRuntime:
         self.fixture_overrides: dict[str, Run] = {}
         self.picks: dict[str, tuple[str, int, ConceptChoice]] = {}
         self.lock = threading.RLock()
+        self._recover_interrupted()
 
     def _runner(
         self,
@@ -210,6 +211,7 @@ class RunRuntime:
         with self.lock:
             self.events[run_id] = []
             self.running.add(run_id)
+        self._mark_pending(run_id, request)
         deadline = monotonic() + run_deadline_seconds(request.path, request.budget)
         question = request.question.strip()
 
@@ -252,7 +254,10 @@ class RunRuntime:
         def execute() -> None:
             result: dict | None = None
             try:
-                with run_observation(run_id, question, request.path, request.budget) as observation:
+                with (
+                    run_observation(run_id, question, request.path, request.budget) as observation,
+                    call_budget(deadline, lambda: run_id in self.stop_requested),
+                ):
                     result = self._execute(request, question, run_id, sink, acquire)
                     if observation is not None:
                         observation.update(
@@ -272,6 +277,11 @@ class RunRuntime:
                     stopped = run_id in self.stop_requested
                 if stopped:
                     run = run.model_copy(update={"status": "stopped", "chosen_reading": None})
+                    result["run"] = run
+                elif run.status == "incomplete" and monotonic() > deadline:
+                    # A model call refused to start after the deadline; report
+                    # the cause, not the provider symptom.
+                    run = run.model_copy(update={"reason": "deadline_exceeded"})
                     result["run"] = run
                 self.artifacts.finalize(run, result["artifacts"])
                 if run.status == "answered" and run.chosen_reading is not None:
@@ -302,6 +312,8 @@ class RunRuntime:
                     message=f"Run failed unexpectedly: {type(exc).__name__}",
                 )
             finally:
+                if (self.artifacts.root / run_id / "run.json").exists():
+                    self._pending_path(run_id).unlink(missing_ok=True)
                 with self.lock:
                     self.running.discard(run_id)
                     self.stop_requested.discard(run_id)
@@ -358,6 +370,42 @@ class RunRuntime:
             result["run"] = result["run"].model_copy(update={"concepts": proposal["run"].concepts})
             result["artifacts"]["plans.json"] = proposal["artifacts"]["plans.json"]
         return result
+
+    # ─── Crash safety: a run that was active when the API stopped ──────────
+
+    def _pending_path(self, run_id: str) -> Path:
+        return self.artifacts.root / run_id / "pending.json"
+
+    def _mark_pending(self, run_id: str, request: RunRequest) -> None:
+        try:
+            path = self._pending_path(run_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(request.model_dump_json())
+        except OSError:
+            LOGGER.warning("Could not write pending marker for %s", run_id, exc_info=True)
+
+    def _recover_interrupted(self) -> None:
+        """Close runs that were active when the API process last stopped."""
+        root = self.artifacts.root
+        if not root.exists():
+            return
+        for marker in root.glob("*/pending.json"):
+            run_id = marker.parent.name
+            if (marker.parent / "run.json").exists():
+                marker.unlink(missing_ok=True)
+                continue
+            try:
+                request = RunRequest.model_validate_json(marker.read_text())
+            except (OSError, ValueError):
+                LOGGER.warning("Unreadable pending marker for %s", run_id)
+                continue
+            self._finalize_terminal(
+                request, request.question.strip(), run_id, status="incomplete",
+                reason="interrupted", message="The API stopped while this run was active.",
+            )
+            if (marker.parent / "run.json").exists():
+                marker.unlink(missing_ok=True)
+            LOGGER.warning("Marked interrupted run %s as incomplete", run_id)
 
     def _finalize_terminal(
         self, request: RunRequest, question: str, run_id: str, *,

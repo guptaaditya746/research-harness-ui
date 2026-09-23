@@ -129,3 +129,24 @@ def test_tei_does_not_turn_affiliations_into_authors() -> None:
     paper, _, _ = parse_tei(xml, "p6")
     assert paper["authors"] == ["Xianmin Wang"]
     assert paper["excluded_affiliation_authors"] == 1
+
+
+def test_model_written_patterns_have_a_time_budget() -> None:
+    import time as _time
+
+    from harness_corpus.store import BoundedPattern
+
+    started = _time.monotonic()
+    pattern = BoundedPattern(r"(x+x+)+y", budget_s=0.3)
+    try:
+        pattern.search("x" * 5000)
+    except ValueError as exc:
+        assert "time budget" in str(exc)
+    else:
+        raise AssertionError("pathological pattern was not bounded")
+    assert _time.monotonic() - started < 2
+    assert BoundedPattern("succ?ess rate").search("Success rate improved")
+    try:
+        BoundedPattern("a" * 400)
+    except ValueError as exc:
+        assert "longer than" in str(exc)

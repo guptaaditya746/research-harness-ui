@@ -6,6 +6,11 @@ import json
 import os
 import re
 import time
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
+from contextlib import contextmanager
+from contextvars import ContextVar, copy_context
 from dataclasses import replace
 from difflib import SequenceMatcher
 from typing import Any, Protocol
@@ -18,6 +23,81 @@ from rdflib import RDF, RDFS, XSD, Literal, URIRef
 
 class ModelFailure(RuntimeError):
     """Raised after the configured provider retries are exhausted."""
+
+
+# ─── Run call budget ─────────────────────────────────────────────────────────
+# A run's wall-clock deadline and stop flag, visible to every model call made
+# on its behalf (context variables follow the run's thread and asyncio tasks).
+_CALL_BUDGET: ContextVar[tuple[float, Callable[[], bool]] | None] = ContextVar(
+    "harness_call_budget", default=None
+)
+
+
+@contextmanager
+def call_budget(deadline: float, stopped: Callable[[], bool]) -> Iterator[None]:
+    """Bound every model call inside the block by ``deadline`` (time.monotonic)."""
+    token = _CALL_BUDGET.set((deadline, stopped))
+    try:
+        yield
+    finally:
+        _CALL_BUDGET.reset(token)
+
+
+def bounded_timeout(timeout_s: float) -> float:
+    """The per-call timeout, shortened to the time the run has left.
+
+    Raises ModelFailure when the run was stopped or its deadline has passed,
+    so no new model call starts after cancellation.
+    """
+    budget = _CALL_BUDGET.get()
+    if budget is None:
+        return timeout_s
+    deadline, stopped = budget
+    if stopped():
+        raise ModelFailure("run stopped")
+    remaining = deadline - time.monotonic()
+    if remaining <= 1.0:
+        raise ModelFailure("run deadline reached")
+    return min(timeout_s, remaining)
+
+
+def call_interrupted() -> str | None:
+    """Why the current run's model calls must stop, or None."""
+    budget = _CALL_BUDGET.get()
+    if budget is None:
+        return None
+    deadline, stopped = budget
+    if stopped():
+        return "run stopped"
+    if time.monotonic() > deadline:
+        return "run deadline reached"
+    return None
+
+
+_CALL_POOL = ThreadPoolExecutor(
+    max_workers=int(os.getenv("HARNESS_MODEL_CALL_THREADS", "16")), thread_name_prefix="model-call"
+)
+
+
+def run_interruptible(call: Callable[[], Any]) -> Any:
+    """Run a blocking provider call that Stop and the run deadline can abandon.
+
+    The HTTP request runs on a worker thread; the run's own thread waits in
+    short intervals and gives up as soon as the run is stopped or out of time,
+    so the run (and its model slot) is released without waiting for the
+    provider. An abandoned request finishes in the background and is ignored.
+    """
+    if _CALL_BUDGET.get() is None:
+        return call()
+    future = _CALL_POOL.submit(copy_context().run, call)
+    while True:
+        try:
+            return future.result(timeout=0.25)
+        except FutureTimeout:
+            reason = call_interrupted()
+            if reason:
+                future.cancel()
+                raise ModelFailure(reason) from None
 
 
 class ModelClient(Protocol):
@@ -53,8 +133,10 @@ class OpenAICompatibleModel:
     def complete_json(self, system: str, user: str) -> dict[str, Any]:
         error: Exception | None = None
         for attempt in range(self.retries):
-            try:
-                with httpx.Client(timeout=self.timeout_s) as client:
+            timeout_s = bounded_timeout(self.timeout_s)
+
+            def request(timeout_s: float = timeout_s) -> dict[str, Any]:
+                with httpx.Client(timeout=timeout_s) as client:
                     response = client.post(
                         f"{self.base_url}/chat/completions",
                         headers={"Authorization": f"Bearer {self.api_key}"},
@@ -70,6 +152,9 @@ class OpenAICompatibleModel:
                     )
                     response.raise_for_status()
                     return _json_object(response.json()["choices"][0]["message"]["content"])
+
+            try:
+                return run_interruptible(request)
             except (httpx.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
                 error = exc
                 if attempt + 1 < self.retries:

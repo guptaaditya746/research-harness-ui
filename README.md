@@ -4,6 +4,10 @@ The harness includes the fixture contract, live baseline and enhanced retrieval,
 agentic research, corpus tools, artifact evaluation, and the React UI. Runs use
 the same corpus and provenance checks across all paths.
 
+For a live session, follow [docs/DEMO.md](docs/DEMO.md): `make dev` starts the MCP corpus
+server, API and UI; `make preflight` checks every dependency; `make eval-planner` measures
+question understanding on the live model.
+
 ## Setup
 
 Requires Python 3.12, `uv`, Node 20.19+ and `pnpm` via Corepack.
@@ -212,3 +216,20 @@ uv run harness-eval run --artifacts artifacts --dataset datasets/dev.jsonl
 The evaluator computes metrics from stored triples and never trusts model
 reported metrics. It writes a timestamped JSON report and prints a compact
 comparison table.
+
+## Question understanding
+
+Every run starts with `Understanding question`. The planner (`harness_baseline.planner`)
+asks the extraction model for a typed `QueryPlan` (operation, paper mentions, year,
+extreme, rank or minimum paper count, evidence focus, benchmark), validates it, and
+resolves paper mentions against corpus titles. Metadata, citation and aggregation
+operations are answered from verified facts. Everything else goes through full-text
+research, scoped by the resolved papers and the plan's evidence focus. Invalid plans,
+unresolved papers and uncovered facts fall back to research visibly in the trace. The
+question's wording never selects a route.
+
+On the agentic path the agent first proposes 3–4 concept readings, each grounded with
+corpus search hits. The chosen concept travels with the unchanged question as structured
+input (`Run.concept`); picking is idempotent, and each child run records `parentRunId`.
+Stop and the per-run deadline cancel runs cooperatively, including model calls that are
+already in flight.

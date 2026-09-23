@@ -7,10 +7,10 @@ async function openScreen(page: Page, scene: string) {
 }
 
 const screens = [
-  ['idle', 'Recent'], ['running', 'Agentic research'], ['readings', 'Four readings'],
+  ['idle', 'Recent'], ['running', 'Agentic research'], ['readings', 'interpretations of this question'],
   ['agentic_result', 'Subschema'], ['baseline_result', 'Unstated — inferred by the extractor'],
-  ['failed', 'Try deeper research'], ['runs', 'Every run keeps its artifacts'],
-  ['corpus', 'Add PDFs'], ['settings', 'Fast baseline budget'],
+  ['failed', 'Try agentic research'], ['runs', 'Every run keeps its artifacts'],
+  ['corpus', 'papers indexed'], ['settings', 'Fast baseline budget'],
 ] as const;
 
 for (const [scene, label] of screens) {
@@ -33,15 +33,26 @@ test('evaluation sidebar is present on result and supports plans and rating', as
   await expect(sidebar).toHaveScreenshot('evaluation-sidebar.png');
 });
 
-test('reading choice switches answer, schema and triples together', async ({ page }) => {
+test('choosing an interpretation starts research without rewriting the question', async ({ page }) => {
   await openScreen(page, 'readings');
+  const question = await page.getByRole('textbox', { name: 'Question' }).inputValue();
   await page.getByRole('button', { name: /First-author publication count/ }).click();
-  await expect(page.getByText(/Tomer Wolfson ranks first/)).toBeVisible();
-  await expect(page.getByText('Interpreted as: First-author publication count.')).toBeVisible();
-  await page.getByRole('button', { name: 'Graph' }).click();
-  await expect(page.locator('.graph-row')).toHaveCount(2);
-  await page.getByRole('button', { name: 'Turtle', exact: true }).click();
-  await expect(page.locator('section[aria-label="Triples"] pre')).toContainText('xsd:integer');
+  await expect(page.getByText('Stop run').or(page.getByText('Researched as:')).or(page.locator('.notice')).first()).toBeVisible();
+  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue(question);
+});
+
+test('gold editor keeps a partially typed JSON draft and reports invalid JSON on save', async ({ page }) => {
+  await page.route('**/api/datasets/candidates', route => route.fulfill({ json: [
+    { id: 'gold-1', run_id: 'r-1', question: 'Draft question?', gold_triples: [], gold_claims: [], notes: '', status: 'draft' },
+  ] }));
+  await page.goto('/');
+  await page.getByRole('link', { name: 'Gold' }).click();
+  await page.getByText('Draft question?').click();
+  const claims = page.getByRole('textbox', { name: 'Claims for Draft question?' });
+  await claims.fill('[{');
+  await expect(claims).toHaveValue('[{');
+  await page.getByRole('button', { name: 'Save and approve' }).click();
+  await expect(page.getByRole('status')).toContainText('Invalid JSON');
 });
 
 test('runs open an artifact inline from the API', async ({ page }) => {

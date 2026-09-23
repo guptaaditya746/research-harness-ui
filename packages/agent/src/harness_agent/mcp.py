@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
+from harness_extraction import ModelFailure, bounded_timeout, call_interrupted
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -164,8 +165,14 @@ class MCPToolClient:
                 })
             async with httpx.AsyncClient(timeout=model.timeout_s) as client:
                 while True:
-                    response = await client.post(
+                    try:
+                        turn_timeout = bounded_timeout(float(model.timeout_s))
+                    except ModelFailure:
+                        # Stopped or out of time: end the loop with what we have.
+                        return ""
+                    turn = asyncio.ensure_future(client.post(
                         f"{model.base_url}/chat/completions",
+                        timeout=turn_timeout,
                         headers={"Authorization": f"Bearer {model.api_key}"},
                         json={
                             "model": getattr(model, "model", ""),
@@ -175,7 +182,15 @@ class MCPToolClient:
                             "tools": tools,
                             "tool_choice": "auto",
                         },
-                    )
+                    ))
+                    # Wait in short intervals so Stop or the run deadline can
+                    # abandon a slow model turn immediately.
+                    while not turn.done():
+                        await asyncio.wait({turn}, timeout=0.25)
+                        if not turn.done() and call_interrupted():
+                            turn.cancel()
+                            return ""
+                    response = turn.result()
                     response.raise_for_status()
                     message = response.json()["choices"][0]["message"]
                     requested = message.get("tool_calls") or []
@@ -259,6 +274,8 @@ class MCPToolClient:
             # single slow turn discards everything gathered so far.
             per_turn = float(getattr(model, "timeout_s", 120) or 120)
             timeout_s = max(float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "240")), 2 * per_turn)
+            # Never outlive the run itself.
+            timeout_s = bounded_timeout(timeout_s)
             return asyncio.run(asyncio.wait_for(
                 self._run_agent_async(model, question, grounded_context), timeout_s
             ))

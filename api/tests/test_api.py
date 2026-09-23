@@ -267,3 +267,35 @@ def test_malformed_gold_claims_are_rejected_at_write_time(tmp_path: Path) -> Non
         assert "gold_claims[0]" in str(exc)
     else:
         raise AssertionError("malformed gold claim was accepted")
+
+
+def test_runs_active_during_an_api_restart_are_closed_as_interrupted(tmp_path: Path) -> None:
+    first = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
+    first._mark_pending("r-lost", main.RunRequest(question="Q?", path="agentic", budget="slow"))
+    restarted = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
+    run = restarted.get("r-lost")
+    assert run.status == "incomplete"
+    assert run.reason == "interrupted"
+    assert not (tmp_path / "artifacts" / "r-lost" / "pending.json").exists()
+
+
+def test_model_calls_respect_the_run_budget() -> None:
+    from harness_extraction import ModelFailure, bounded_timeout, call_budget
+
+    assert bounded_timeout(120) == 120
+    with call_budget(time.monotonic() + 30, lambda: False):
+        assert 28 < bounded_timeout(120) <= 30
+    with call_budget(time.monotonic() + 0.5, lambda: False):
+        try:
+            bounded_timeout(120)
+        except ModelFailure as exc:
+            assert "deadline" in str(exc)
+        else:
+            raise AssertionError("call started after the deadline")
+    with call_budget(time.monotonic() + 60, lambda: True):
+        try:
+            bounded_timeout(120)
+        except ModelFailure as exc:
+            assert "stopped" in str(exc)
+        else:
+            raise AssertionError("call started after stop")

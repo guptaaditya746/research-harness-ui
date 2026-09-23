@@ -1,4 +1,4 @@
-.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev test eval web-build
+.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev test eval web-build preflight eval-planner
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -29,3 +29,9 @@ eval:
 
 web-build:
 	cd web && corepack pnpm build
+
+preflight:
+	uv run --python 3.12 python scripts/preflight.py
+
+eval-planner:
+	uv run --python 3.12 python scripts/eval_planner.py

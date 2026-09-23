@@ -4,11 +4,42 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import Counter
 from pathlib import Path
 
 import bm25s
+import regex as safe_regex
 
+PATTERN_MAX_LENGTH = 300
+PATTERN_BUDGET_S = 2.0
+
+
+class BoundedPattern:
+    """A model-written regex with a total time budget per tool call.
+
+    Tool callers are language models; a pathological pattern (catastrophic
+    backtracking) would otherwise block the single-threaded tool server for
+    every later run. The ``regex`` engine supports per-search timeouts.
+    """
+
+    def __init__(self, pattern: str, budget_s: float = PATTERN_BUDGET_S) -> None:
+        if len(pattern) > PATTERN_MAX_LENGTH:
+            raise ValueError(f"pattern is longer than {PATTERN_MAX_LENGTH} characters; simplify it")
+        try:
+            self.compiled = safe_regex.compile(pattern, safe_regex.IGNORECASE)
+        except safe_regex.error as exc:
+            raise ValueError(f"invalid pattern: {exc}") from exc
+        self.deadline = time.monotonic() + budget_s
+
+    def search(self, text: str):
+        remaining = self.deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("pattern search exceeded its time budget; use a simpler pattern")
+        try:
+            return self.compiled.search(text, timeout=remaining)
+        except TimeoutError as exc:
+            raise ValueError("pattern search exceeded its time budget; use a simpler pattern") from exc
 
 def read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
@@ -297,7 +328,7 @@ class CorpusStore:
         return paged(rows, offset, limit)
 
     def grep(self, regex: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
-        pattern = re.compile(regex, re.IGNORECASE)
+        pattern = BoundedPattern(regex)
         rows = []
         for passage in self.passages:
             if not in_scope(self.by_paper[passage["paper_id"]], scope):
@@ -365,7 +396,7 @@ class CorpusStore:
     def bulk_check(
         self, pattern: str, paper_ids: list[str], offset: int = 0, limit: int = 10
     ) -> dict:
-        regex = re.compile(pattern, re.IGNORECASE)
+        regex = BoundedPattern(pattern)
         rows = []
         for pid in paper_ids:
             hits = [p for p in self.passages if p["paper_id"] == pid and regex.search(p["text"])]
@@ -407,7 +438,7 @@ class CorpusStore:
 
     def results(self, pattern: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         """Find numeric result statements while retaining their evidence IDs."""
-        regex = re.compile(pattern, re.IGNORECASE)
+        regex = BoundedPattern(pattern)
         rows = []
         for passage in self.passages:
             if not in_scope(self.by_paper[passage["paper_id"]], scope):
