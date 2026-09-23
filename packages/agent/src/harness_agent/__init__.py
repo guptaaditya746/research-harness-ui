@@ -140,10 +140,13 @@ class AgenticResearch:
                 mcp_error = "invalid_agent_decision_shape"
             elif any(item not in available for item in verified):
                 mcp_error = "agent_claim_id_not_in_preliminary_graph"
-            elif hasattr(self.baseline, "corpus") and any(
-                item not in self._known_evidence_ids(self.baseline.corpus) for item in evidence_ids
-            ):
-                mcp_error = "agent_evidence_id_not_in_corpus"
+            elif hasattr(self.baseline, "corpus"):
+                unknown_evidence = [
+                    str(item) for item in evidence_ids
+                    if item not in self._known_evidence_ids(self.baseline.corpus)
+                ]
+                if unknown_evidence:
+                    mcp_error = "agent_evidence_id_not_in_corpus:" + ",".join(unknown_evidence[:5])
             elif not tool_calls:
                 mcp_error = "agent_used_no_corpus_tools"
             elif evidence_ids and hasattr(self.baseline, "seed_passage_ids"):
