@@ -177,6 +177,7 @@ class RunRuntime:
         model_name: str | None = None,
         timeout_s: float | None = None,
         refinement_model: OpenAICompatibleModel | None = None,
+        schema_model: OpenAICompatibleModel | None = None,
     ) -> Baseline20:
         schema = hand_written_subschema()
         # Qwen is shared by every path for claim construction. Its structured
@@ -186,7 +187,7 @@ class RunRuntime:
         model = OpenAICompatibleModel(model=model_name, timeout_s=timeout_s or budget_timeout)
         return Baseline20(
             CorpusStore(Path(os.getenv("CORPUS_ROOT", ROOT / "corpus_data"))),
-            ExtractionEngine(model, schema),
+            ExtractionEngine(model, schema, schema_model=schema_model),
             planner=QueryPlanner(model),
             retrieve_k=int(os.getenv("BASELINE_RETRIEVE_K", "20")),
             enhanced=enhanced,
@@ -350,9 +351,8 @@ class RunRuntime:
                 for slot in held:
                     slot.release()
 
-        # The lite model controls MCP tool use. The high-quality model handles
-        # concept interpretation and evidence review; the small model remains
-        # responsible for claim construction in the shared baseline pipeline.
+        # Temporary diagnostic routing: use the lite alias for every Agentic
+        # model role so a single run can isolate model latency from MCP issues.
         agent_timeout = float(os.getenv(
             "BUDGET_AGENTIC_SLOW_SECONDS" if request.budget == "slow" else "BUDGET_AGENTIC_FAST_SECONDS",
             "120" if request.budget == "slow" else "45",
@@ -360,10 +360,11 @@ class RunRuntime:
         agent_model = OpenAICompatibleModel(
             model=os.getenv("HARNESS_MODEL_AGENT", "lite-model"), timeout_s=agent_timeout,
         )
-        high_model = OpenAICompatibleModel(
-            model=os.getenv("HARNESS_MODEL_HIGH", "heavy-model"), timeout_s=agent_timeout,
+        high_model = agent_model
+        baseline = self._runner(
+            sink, True, model_name=agent_model.model, timeout_s=agent_timeout,
+            refinement_model=agent_model, schema_model=agent_model,
         )
-        baseline = self._runner(sink, True, refinement_model=high_model)
         runner = AgenticResearch(
             baseline, sink, agent_model=agent_model, high_model=high_model,
         )
@@ -380,7 +381,7 @@ class RunRuntime:
             concept = proposal["run"].concepts[0].model_copy(update={"auto_selected": True})
             sink(TraceRow(atS=0.0, action="Concept auto-selected for evaluation",
                           returned=concept.label))
-        held = acquire(HEAVY_MODEL_SLOT, MODEL_SLOT)
+        held = acquire(MODEL_SLOT)
         try:
             result = runner.run(question, request.budget, run_id, concept=concept)
         finally:

@@ -378,8 +378,11 @@ def local_name(value: URIRef) -> str:
 class ExtractionEngine:
     """One interface shared by baseline and the later agentic path."""
 
-    def __init__(self, model: ModelClient, schema: Subschema) -> None:
+    def __init__(
+        self, model: ModelClient, schema: Subschema, schema_model: ModelClient | None = None
+    ) -> None:
         self.model = model
+        self.schema_model = schema_model or model
         self.schema = schema
         self.class_names = {local_name(iri): iri for iri in schema.classes}
         self.property_names = {local_name(iri): iri for iri in schema.properties}
@@ -406,7 +409,7 @@ class ExtractionEngine:
     @labelled("schema inference")
     def infer_schema(self, question: str, passages: list[dict[str, Any]]) -> SchemaInference:
         result = SchemaInference.model_validate(
-            self.model.complete_json(
+            self.schema_model.complete_json(
                 "Select only terms from the supplied ontology. Return strict JSON with label, gloss, classes, properties.",
                 json.dumps(
                     {
