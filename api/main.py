@@ -50,6 +50,8 @@ class RunRequest(BaseModel):
     budget: str
     evaluation_mode: bool = False
     snapshot: EvaluationSnapshot | None = None
+    # Agent-proposed concept chosen by the user; required before agentic research.
+    concept: dict | None = None
 
 
 class RatingRequest(BaseModel):
@@ -210,12 +212,17 @@ class RunRuntime:
                         runner = self.runner_factory(sink) if self.custom_runner else self._runner(
                             sink, request.path == "baseline-enhanced"
                         )
+                    run_kwargs = {"concept": request.concept} if request.concept else {}
                     if request.path == "agentic" and not self.custom_runner:
                         with HEAVY_MODEL_SLOT, MODEL_SLOT:
-                            result = runner.run(request.question.strip(), request.budget, run_id)
+                            result = runner.run(
+                                request.question.strip(), request.budget, run_id, **run_kwargs
+                            )
                     else:
                         with MODEL_SLOT:
-                            result = runner.run(request.question.strip(), request.budget, run_id)
+                            result = runner.run(
+                                request.question.strip(), request.budget, run_id, **run_kwargs
+                            )
                     if observation is not None:
                         observation.update(
                             output={
@@ -316,8 +323,12 @@ class RunRuntime:
                 "ranked subject", run.question, flags=re.IGNORECASE,
             )
             clarified = f"{topic} Use this criterion: {reading.label}. {reading.gloss}"
+        concept = (
+            {"label": reading.label, "gloss": reading.gloss, "classes": reading.classes}
+            if run.path == "agentic" else None
+        )
         selected_id = self.start(RunRequest(
-            question=clarified, path=run.path, budget=run.budget
+            question=clarified, path=run.path, budget=run.budget, concept=concept
         ))
         return run.model_copy(update={
             "id": selected_id, "question": clarified,
