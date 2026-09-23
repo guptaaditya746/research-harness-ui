@@ -110,6 +110,17 @@ def check_models(quick: bool) -> None:
             report("FAIL", f"model {alias} ({role}) JSON round-trip", f"{type(exc).__name__}: {exc}"[:200])
     agent = env("HARNESS_MODEL_AGENT")
     if agent:
+        from harness_agent.context import DEFAULT_WINDOW, discover_window
+        from harness_extraction import OpenAICompatibleModel
+
+        window = discover_window(OpenAICompatibleModel(base_url=base, model=agent, api_key=key))
+        if env("HARNESS_AGENT_CONTEXT_TOKENS") or window != DEFAULT_WINDOW:
+            report("PASS" if window >= 16_384 else "WARN", f"agent context window ({agent})",
+                   f"{window} tokens" + ("" if window >= 16_384 else "; the agent will see fewer tools and claims"))
+        else:
+            report("WARN", f"agent context window ({agent})",
+                   f"not reported by LiteLLM; assuming {DEFAULT_WINDOW}. Set HARNESS_AGENT_CONTEXT_TOKENS "
+                   "to the served max_model_len (it is also learned from the first length error)")
         try:
             response = httpx.post(f"{base}/chat/completions", headers=headers, timeout=120, json={
                 "model": agent, "temperature": 0,

@@ -152,6 +152,8 @@ class Baseline20:
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
         self.concept: dict[str, Any] | None = None
+        # How the last run was answered: "verified_facts" or "research".
+        self.last_route: str | None = None
         self.graph = self._graph()
 
     @staticmethod
@@ -750,6 +752,7 @@ class Baseline20:
                 direct = self._fact_query(plan, papers)
                 if direct is None:
                     self._emit("Verified facts do not cover this", "continuing with full-text research")
+            self.last_route = "verified_facts" if direct is not None else "research"
             if direct is not None:
                 answer, triples = direct
                 properties = list(dict.fromkeys(item.predicate for item in triples))

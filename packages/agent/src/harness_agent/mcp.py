@@ -14,6 +14,13 @@ from harness_extraction import ModelFailure, bounded_timeout, call_interrupted
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from .context import (
+    Conversation,
+    cap_tool_result,
+    discover_window,
+    is_context_error,
+    window_from_error,
+)
 from .research_state import ResearchLedger
 from .skills import catalog, relevant
 
@@ -132,7 +139,7 @@ class MCPToolClient:
                     "purpose": "Load a reusable research strategy for the active question.",
                     "expected_evidence_type": "research_skill",
                 })
-            messages: list[dict[str, Any]] = [
+            fixed: list[dict[str, Any]] = [
                 {
                     "role": "system",
                     "content": (
@@ -152,17 +159,43 @@ class MCPToolClient:
                 },
                 {"role": "user", "content": question},
             ]
-            if grounded_context:
-                messages.append({
-                    "role": "user",
-                    "content": (
-                        "Preliminary corpus result (verify or challenge with MCP). "
-                        "Source IDs are provenance handles, not paper IDs. When a tool needs paper_id, "
-                        "use the corresponding local paper_id from evidence_map. For corpus aggregation, "
-                        "retrieve every indexed paper rather than one default page: "
-                        + json.dumps(grounded_context, ensure_ascii=False)
-                    ),
-                })
+            conversation = Conversation(fixed, grounded=grounded_context or None)
+            # Priority order: the evidence tools the supervisor is told to prefer,
+            # then the specialist tools, which are dropped first when space is short.
+            core_names = ["search_evidence", "read_evidence", "structured_facts",
+                          "citations", "tables", "evidence_for_claim"]
+            tools.sort(key=lambda tool: (
+                core_names.index(tool["function"]["name"])
+                if tool["function"]["name"] in core_names else len(core_names)
+            ))
+            core_count = sum(1 for tool in tools if tool["function"]["name"] in core_names)
+            all_tools = list(tools)
+            window = discover_window(model)
+            configured_reply = int(os.getenv("HARNESS_AGENT_REPLY_TOKENS", "2048"))
+            reply_tokens = min(configured_reply, max(512, window // 4))
+            retried_for_length = False
+
+            def limit() -> int:
+                # Leave room for the reply and a margin for estimation error.
+                return max(2_048, int((window - reply_tokens) * 0.9))
+
+            def compact() -> None:
+                before = conversation.tokens(tools)
+                if conversation.fit(limit(), tools, ledger.summary(), core_tools=core_count):
+                    self._counter += 1
+                    self.sink({
+                        "call_id": f"context-{self._counter:03d}", "agent": self.agent,
+                        "tool": "context_checkpoint", "arguments": {},
+                        "result": {"window": window, "before_tokens": before,
+                                   "after_tokens": conversation.tokens(tools),
+                                   "tools_offered": len(tools), "tools_available": len(all_tools),
+                                   "archived_exchanges": conversation.dropped_exchanges,
+                                   "evidence_ids": sorted(ledger.evidence_ids)},
+                        "result_count": len(ledger.evidence_ids), "duration_ms": 0.0, "status": "ok",
+                        "purpose": "Keep the conversation within the model context window.",
+                        "expected_evidence_type": "research_ledger",
+                    })
+
             async with httpx.AsyncClient(timeout=model.timeout_s) as client:
                 while True:
                     try:
@@ -170,6 +203,15 @@ class MCPToolClient:
                     except ModelFailure:
                         # Stopped or out of time: end the loop with what we have.
                         return ""
+                    compact()
+                    needed = conversation.tokens(tools)
+                    if needed > limit():
+                        raise ModelFailure(
+                            f"agent context window ({window} tokens) is too small: the minimal "
+                            f"prompt with {len(tools)} core tools needs about {needed + reply_tokens} "
+                            "tokens; serve the agent model with a larger max_model_len or set "
+                            "HARNESS_AGENT_CONTEXT_TOKENS"
+                        )
                     turn = asyncio.ensure_future(client.post(
                         f"{model.base_url}/chat/completions",
                         timeout=turn_timeout,
@@ -177,8 +219,8 @@ class MCPToolClient:
                         json={
                             "model": getattr(model, "model", ""),
                             "temperature": 0,
-                            "max_tokens": 1024,
-                            "messages": messages,
+                            "max_tokens": reply_tokens,
+                            "messages": conversation.messages(),
                             "tools": tools,
                             "tool_choice": "auto",
                         },
@@ -191,18 +233,26 @@ class MCPToolClient:
                             turn.cancel()
                             return ""
                     response = turn.result()
-                    response.raise_for_status()
+                    if response.status_code >= 400:
+                        body = response.text[:600]
+                        if is_context_error(body) and not retried_for_length:
+                            # Learn the real window from the provider and refit once.
+                            retried_for_length = True
+                            learned = window_from_error(body)
+                            window = min(window, learned) if learned else int(window * 0.6)
+                            reply_tokens = min(configured_reply, max(512, window // 4))
+                            continue
+                        raise ModelFailure(f"model returned HTTP {response.status_code}: {body}")
                     message = response.json()["choices"][0]["message"]
                     requested = message.get("tool_calls") or []
                     if not requested:
                         return str(message.get("content") or "")
-                    messages.append(
-                        {
-                            "role": "assistant",
-                            "content": message.get("content"),
-                            "tool_calls": requested,
-                        }
-                    )
+                    assistant = {
+                        "role": "assistant",
+                        "content": message.get("content"),
+                        "tool_calls": requested,
+                    }
+                    tool_messages: list[dict[str, Any]] = []
                     for call in requested:
                         name = call["function"]["name"]
                         started = time.monotonic()
@@ -243,27 +293,18 @@ class MCPToolClient:
                             record["error"] = error
                         self.sink(record)
                         ledger.record(name, result, record["purpose"])
-                        messages.append(
-                            {
-                                "role": "tool",
-                                "tool_call_id": call["id"],
-                                "content": json.dumps(result, ensure_ascii=False, default=str),
-                            }
-                        )
-                        checkpoint = ledger.checkpoint(messages)
-                        if checkpoint:
-                            self._counter += 1
-                            self.sink({
-                                "call_id": f"context-{self._counter:03d}", "agent": self.agent,
-                                "tool": "context_checkpoint", "arguments": {}, "result": checkpoint,
-                                "result_count": len(ledger.evidence_ids), "duration_ms": 0.0, "status": "ok",
-                                "purpose": "Preserve research state and exact evidence handles while compacting context.",
-                                "expected_evidence_type": "research_ledger",
-                            })
-                            messages = messages[:2] + [{
-                                "role": "user",
-                                "content": "Research ledger checkpoint (raw evidence remains available by ID): " + ledger.summary(),
-                            }] + messages[-4:]
+                        tool_messages.append({
+                            "role": "tool",
+                            "tool_call_id": call["id"],
+                            # The full result is kept in tool_calls.jsonl; the
+                            # model sees a page bounded by the window.
+                            "content": cap_tool_result(
+                                json.dumps(result, ensure_ascii=False, default=str), limit() // 4
+                            ),
+                        })
+                    # An exchange is only added whole: the assistant request
+                    # together with one result per requested call.
+                    conversation.add_exchange(assistant, tool_messages)
 
     def run_agent(
         self, model: Any, question: str, grounded_context: dict[str, Any] | None = None

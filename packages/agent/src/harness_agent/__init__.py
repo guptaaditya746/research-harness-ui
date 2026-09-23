@@ -117,32 +117,7 @@ class AgenticResearch:
         if not heavy_busy and not clarification_needed and base_run.status == "answered":
             mcp = MCPToolClient(tool_sink, agent="supervisor")
             try:
-                grounded_context = {
-                    "preliminary_answer": (
-                        base_run.readings[base_run.chosen_reading].answer
-                        if base_run.chosen_reading is not None else None
-                    ),
-                    "preliminary_triples": [
-                        {"subject": triple.s, "predicate": triple.p,
-                         "object": triple.o, "source_id": triple.source}
-                        for reading in base_run.readings for triple in reading.triples
-                    ],
-                    "preliminary_claims": [
-                        {"id": claim.id, "kind": claim.kind, "paper_id": claim.paper_id,
-                         "fields": {key: field.value for key, field in claim.fields.items()},
-                         "source_ids": claim.source_ids}
-                        for reading in base_run.readings for claim in reading.claims
-                    ],
-                    "selected_concept": concept_input,
-                    "evidence_map": [
-                        {
-                            "source_id": str(fact["source_id"]),
-                            "paper_id": str(fact["subject"]),
-                            "kind": "dblp_fact",
-                        }
-                        for fact in getattr(getattr(self.baseline, "corpus", None), "fact_rows", [])
-                    ],
-                }
+                grounded_context = self._grounded_context(base_run, concept_input)
                 agent_final = mcp.run_agent(self.agent_model, question, grounded_context)
                 if agent_final:
                     try:
@@ -189,6 +164,10 @@ class AgenticResearch:
                     mcp_error = "agent_evidence_id_not_in_corpus:" + ",".join(unknown_evidence[:5])
                 elif not tool_calls:
                     mcp_error = "agent_used_no_corpus_tools"
+                elif getattr(self.baseline, "last_route", None) == "verified_facts":
+                    # The answer was computed from verified corpus facts; the
+                    # agent's review is recorded but cannot drop correct facts.
+                    pass
                 elif evidence_ids and hasattr(self.baseline, "seed_passage_ids"):
                     # The agent found further evidence: rerun the shared
                     # pipeline seeded with it, under the same concept.
@@ -324,6 +303,47 @@ class AgenticResearch:
         artifacts["tool_calls.jsonl"] = baseline_calls + agent_calls
         artifacts["agent_draft.md"] = agent_final.encode()
         return {"run": run, "artifacts": artifacts}
+
+    def _grounded_context(self, base_run: Run, concept: dict | None) -> dict:
+        """What the agent needs to verify the preliminary answer, without duplication.
+
+        Claims carry their own fields, so triples are only sent when there are
+        no claims. Paper handles are limited to papers the preliminary result
+        mentions; the agent reads anything else through the corpus tools.
+        """
+        reading = (
+            base_run.readings[base_run.chosen_reading]
+            if base_run.chosen_reading is not None and base_run.readings else None
+        )
+        claims = list(reading.claims) if reading else []
+        answer_ids = set(reading.answer_claim_ids) if reading else set()
+        claims.sort(key=lambda claim: claim.id not in answer_ids)
+        mentioned = {claim.paper_id for claim in claims}
+        if reading and not claims:
+            mentioned |= {triple.s for triple in reading.triples}
+        corpus = getattr(self.baseline, "corpus", None)
+        papers = []
+        for paper_id in sorted(mentioned):
+            title = corpus.paper_title(paper_id) if corpus is not None else None
+            papers.append({"paper_id": paper_id, "title": title})
+        context: dict = {
+            "preliminary_answer": reading.answer if reading else None,
+            "answer_source": getattr(self.baseline, "last_route", None) or "research",
+            "selected_concept": concept,
+            "papers": papers,
+            "preliminary_claims": [
+                {"id": claim.id, "kind": claim.kind, "paper_id": claim.paper_id,
+                 "fields": {key: field.value for key, field in claim.fields.items()},
+                 "source_ids": claim.source_ids}
+                for claim in claims
+            ],
+        }
+        if reading and not claims:
+            context["preliminary_triples"] = [
+                {"subject": t.s, "predicate": t.p, "object": t.o, "source_id": t.source}
+                for t in reading.triples
+            ]
+        return context
 
     def _allowed_classes(self) -> set[str]:
         extraction = getattr(self.baseline, "extraction", None)

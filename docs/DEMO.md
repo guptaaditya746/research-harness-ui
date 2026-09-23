@@ -18,6 +18,7 @@ Check `.env` against `.env.example`. These settings matter for a live session:
 | `BUDGET_BASELINE_FAST_SECONDS` / `_SLOW_SECONDS` | `60` / `90` | per model call; Qwen structured calls often exceed 15 s |
 | `HARNESS_MCP_AGENT_TIMEOUT_S` | `240` | the agent's tool loop (never below two agent turns) |
 | `HARNESS_RUN_DEADLINE_FAST_S` / `_SLOW_S` | `300` / `900` | hard limit per run; the run ends as `deadline_exceeded` |
+| `HARNESS_AGENT_CONTEXT_TOKENS` | the Granite `max_model_len` | the agent's conversation is fitted to this window; if unset it is asked from LiteLLM or learned from the first length error |
 
 Start the laptop tunnel and the stack:
 
