@@ -26,6 +26,31 @@ def test_artifact_preview_is_accessible() -> None:
     assert "SELECT" in result.json()["content"]
 
 
+def test_reading_selection_starts_a_new_criterion_run(tmp_path: Path, monkeypatch) -> None:
+    test_runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
+    option = Reading(
+        label="Most distinct papers", gloss="Count distinct works.",
+        classes=[], axioms=[], sparql="", answer="", triples=[], metrics=Metrics(),
+    )
+    original = Run(
+        id="r-ambiguous", startedAt=datetime.now(UTC), durationS=0.0,
+        question="Who is the best author in the corpus?", path="baseline-enhanced",
+        budget="slow", status="awaiting_reading", readings=[option],
+        artifacts=list(required_artifacts("baseline-enhanced")),
+    )
+    test_runtime.artifacts.finalize(original, {})
+    submitted = []
+    monkeypatch.setattr(test_runtime, "start", lambda request: submitted.append(request) or "r-selected")
+
+    selected = test_runtime.pick_reading("r-ambiguous", 0)
+
+    assert selected.id == "r-selected"
+    assert selected.status == "awaiting_reading"
+    assert selected.chosen_reading == 0
+    assert submitted[0].question == "Which author appears on the most distinct papers in the corpus?"
+    assert test_runtime.get("r-ambiguous").status == "awaiting_reading"
+
+
 class FakeRunner:
     def __init__(self, sink) -> None:
         self.sink = sink
@@ -102,7 +127,7 @@ def test_live_run_sse_rating_promotion_and_editor(tmp_path: Path, monkeypatch) -
     rated = client.post(f"/runs/{run_id}/rating", json={"rating": "useful"})
     assert rated.json()["rating"] == "useful"
     candidate = client.post(f"/runs/{run_id}/promote").json()
-    assert candidate["status"] == "candidate"
+    assert candidate["status"] == "draft"
     edited = client.put(
         f"/datasets/candidates/{candidate['id']}",
         json={"notes": "Reviewed", "status": "approved"},

@@ -1,5 +1,276 @@
 {
   "$defs": {
+    "ClaimField": {
+      "additionalProperties": false,
+      "properties": {
+        "value": {
+          "title": "Value",
+          "type": "string"
+        },
+        "sourceIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sourceids",
+          "type": "array"
+        },
+        "quote": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Quote"
+        },
+        "evidenceIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Evidenceids",
+          "type": "array"
+        }
+      },
+      "required": [
+        "value",
+        "sourceIds"
+      ],
+      "title": "ClaimField",
+      "type": "object"
+    },
+    "ClaimRelation": {
+      "additionalProperties": false,
+      "properties": {
+        "sourceClaim": {
+          "title": "Sourceclaim",
+          "type": "string"
+        },
+        "targetClaim": {
+          "title": "Targetclaim",
+          "type": "string"
+        },
+        "relation": {
+          "enum": [
+            "supports",
+            "contradicts",
+            "qualifies",
+            "sameContext",
+            "differentContext",
+            "possibleConflict",
+            "confirmedConflict",
+            "equivalentTo"
+          ],
+          "title": "Relation",
+          "type": "string"
+        },
+        "reason": {
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sourceClaim",
+        "targetClaim",
+        "relation",
+        "reason"
+      ],
+      "title": "ClaimRelation",
+      "type": "object"
+    },
+    "ClaimSubgraph": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "MetadataClaim",
+            "ResultClaim",
+            "ComparisonClaim",
+            "MethodClaim",
+            "LimitationClaim",
+            "RankingClaim",
+            "SynthesisClaim"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "paperId": {
+          "title": "Paperid",
+          "type": "string"
+        },
+        "fields": {
+          "additionalProperties": {
+            "$ref": "#/$defs/ClaimField"
+          },
+          "title": "Fields",
+          "type": "object"
+        },
+        "sourceIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sourceids",
+          "type": "array"
+        },
+        "evidence": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "title": "Evidence",
+          "type": "object"
+        },
+        "evidenceAnchors": {
+          "items": {
+            "$ref": "#/$defs/EvidenceAnchor"
+          },
+          "title": "Evidenceanchors",
+          "type": "array"
+        },
+        "supportedBy": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Supportedby",
+          "type": "array"
+        },
+        "status": {
+          "default": "accepted",
+          "enum": [
+            "accepted",
+            "partial"
+          ],
+          "title": "Status",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "paperId",
+        "fields",
+        "sourceIds",
+        "evidence"
+      ],
+      "title": "ClaimSubgraph",
+      "type": "object"
+    },
+    "EvaluationSnapshot": {
+      "additionalProperties": false,
+      "properties": {
+        "corpusSnapshotId": {
+          "title": "Corpussnapshotid",
+          "type": "string"
+        },
+        "ontologyVersion": {
+          "title": "Ontologyversion",
+          "type": "string"
+        },
+        "claimSchemaVersion": {
+          "title": "Claimschemaversion",
+          "type": "string"
+        },
+        "goldVersion": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Goldversion"
+        },
+        "retrievalIndexVersion": {
+          "title": "Retrievalindexversion",
+          "type": "string"
+        }
+      },
+      "required": [
+        "corpusSnapshotId",
+        "ontologyVersion",
+        "claimSchemaVersion",
+        "retrievalIndexVersion"
+      ],
+      "title": "EvaluationSnapshot",
+      "type": "object"
+    },
+    "EvidenceAnchor": {
+      "additionalProperties": false,
+      "description": "A reproducible source location, independent of the tool that found it.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "dblp_fact",
+            "passage",
+            "table_cell",
+            "figure_annotation",
+            "citation_fact"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "paperId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Paperid"
+        },
+        "sourceId": {
+          "title": "Sourceid",
+          "type": "string"
+        },
+        "locator": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              }
+            ]
+          },
+          "title": "Locator",
+          "type": "object"
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Text"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "sourceId"
+      ],
+      "title": "EvidenceAnchor",
+      "type": "object"
+    },
     "Metrics": {
       "additionalProperties": false,
       "properties": {
@@ -116,6 +387,27 @@
           "title": "Triples",
           "type": "array"
         },
+        "claims": {
+          "items": {
+            "$ref": "#/$defs/ClaimSubgraph"
+          },
+          "title": "Claims",
+          "type": "array"
+        },
+        "claimRelations": {
+          "items": {
+            "$ref": "#/$defs/ClaimRelation"
+          },
+          "title": "Claimrelations",
+          "type": "array"
+        },
+        "answerClaimIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Answerclaimids",
+          "type": "array"
+        },
         "metrics": {
           "$ref": "#/$defs/Metrics"
         },
@@ -193,6 +485,42 @@
           ],
           "default": null,
           "title": "Spanid"
+        },
+        "purpose": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Purpose"
+        },
+        "targetClaim": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targetclaim"
+        },
+        "expectedEvidenceType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expectedevidencetype"
         }
       },
       "required": [
@@ -277,7 +605,8 @@
     "path": {
       "enum": [
         "agentic",
-        "baseline"
+        "baseline",
+        "baseline-enhanced"
       ],
       "title": "Path",
       "type": "string"
@@ -293,6 +622,8 @@
     "status": {
       "enum": [
         "answered",
+        "corpus_absent",
+        "no_evidence_found",
         "awaiting_reading",
         "incomplete",
         "stopped"
@@ -361,6 +692,94 @@
       ],
       "default": null,
       "title": "Reason"
+    },
+    "producingPath": {
+      "anyOf": [
+        {
+          "enum": [
+            "agentic",
+            "baseline",
+            "baseline-enhanced",
+            "baseline_fallback"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Producingpath"
+    },
+    "executionStatus": {
+      "anyOf": [
+        {
+          "enum": [
+            "completed",
+            "degraded",
+            "failed"
+          ],
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Executionstatus"
+    },
+    "evidenceSurface": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evidencesurface"
+    },
+    "searchCoverage": {
+      "anyOf": [
+        {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Searchcoverage"
+    },
+    "evaluationMode": {
+      "default": false,
+      "title": "Evaluationmode",
+      "type": "boolean"
+    },
+    "snapshot": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/EvaluationSnapshot"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
     },
     "coverage": {
       "anyOf": [

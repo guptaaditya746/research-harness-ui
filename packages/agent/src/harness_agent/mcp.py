@@ -16,6 +16,15 @@ from mcp.client.streamable_http import streamablehttp_client
 ToolSink = Callable[[dict[str, Any]], None]
 
 
+def _intent(name: str) -> tuple[str, str]:
+    evidence_type = {
+        "facts": "canonical_metadata", "citations": "citation_fact", "search": "passage",
+        "passages": "passage", "tables": "table_cell", "rank_evidence": "ranked_passage",
+        "prior_triples": "claim_subgraph", "related": "related_entity",
+    }.get(name, "corpus_evidence")
+    return (f"Collect {evidence_type.replace('_', ' ')} relevant to the active research question.", evidence_type)
+
+
 def _serialise(value: Any) -> Any:
     if hasattr(value, "model_dump"):
         return value.model_dump(mode="json")
@@ -24,6 +33,22 @@ def _serialise(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): _serialise(item) for key, item in value.items()}
     return value
+
+
+def _tool_payload(result: Any) -> Any:
+    """Unwrap the MCP text envelope before passing data back to the model."""
+    if not isinstance(result, dict) or not isinstance(result.get("content"), list):
+        return result
+    texts = [
+        item["text"] for item in result["content"]
+        if isinstance(item, dict) and isinstance(item.get("text"), str)
+    ]
+    if len(texts) != 1:
+        return result
+    try:
+        return json.loads(texts[0])
+    except json.JSONDecodeError:
+        return {"text": texts[0]}
 
 
 class MCPUnavailable(RuntimeError):
@@ -68,7 +93,9 @@ class MCPToolClient:
                 for name, arguments, _ in calls
             ]
 
-    async def _run_agent_async(self, model: Any, question: str) -> str:
+    async def _run_agent_async(
+        self, model: Any, question: str, grounded_context: dict[str, Any] | None = None
+    ) -> str:
         async with streamablehttp_client(self.url, timeout=30, sse_read_timeout=300) as (
             read_stream,
             write_stream,
@@ -91,14 +118,25 @@ class MCPToolClient:
                 {
                     "role": "system",
                     "content": (
-                        "You are the research supervisor. Use the corpus tools to gather evidence "
-                        "before answering. Delegate tool calls mentally to retrieval, structure, "
-                        "verification, and answer roles. Never invent facts or counts. "
-                        "Return a concise evidence-grounded answer when finished."
+                        "You are the research supervisor. Form a search strategy and freely choose "
+                        "among the corpus MCP tools: search, rank_evidence, facts, citations, "
+                        "prior_triples, tables, passages, and related tools. Preliminary claims are "
+                        "candidates, not authority. Verify or challenge them and follow additional "
+                        "evidence when it could materially change the answer. Stop when the answer "
+                        "requirements are evidenced or a complete indexed absence procedure is "
+                        "exhausted. Return only JSON with verified_claim_ids (list of preliminary "
+                        "claim IDs), additional_evidence_ids (list of observed passage IDs), and "
+                        "reasoning_summary. Never invent IDs, facts, or counts."
                     ),
                 },
                 {"role": "user", "content": question},
             ]
+            if grounded_context:
+                messages.append({
+                    "role": "user",
+                    "content": "Preliminary corpus result (verify or challenge with MCP): "
+                    + json.dumps(grounded_context, ensure_ascii=False),
+                })
             async with httpx.AsyncClient(timeout=model.timeout_s) as client:
                 while True:
                     response = await client.post(
@@ -107,6 +145,7 @@ class MCPToolClient:
                         json={
                             "model": getattr(model, "model", ""),
                             "temperature": 0,
+                            "max_tokens": 1024,
                             "messages": messages,
                             "tools": tools,
                             "tool_choice": "auto",
@@ -132,7 +171,7 @@ class MCPToolClient:
                         error: str | None = None
                         try:
                             raw = await session.call_tool(name, arguments)
-                            result = _serialise(raw)
+                            result = _tool_payload(_serialise(raw))
                         except Exception as exc:  # noqa: BLE001
                             result = {"error": str(exc)}
                             status = "error"
@@ -148,6 +187,7 @@ class MCPToolClient:
                             "duration_ms": round((time.monotonic() - started) * 1000, 1),
                             "status": status,
                         }
+                        record["purpose"], record["expected_evidence_type"] = _intent(name)
                         if error:
                             record["error"] = error
                         self.sink(record)
@@ -159,11 +199,15 @@ class MCPToolClient:
                             }
                         )
 
-    def run_agent(self, model: Any, question: str) -> str:
+    def run_agent(
+        self, model: Any, question: str, grounded_context: dict[str, Any] | None = None
+    ) -> str:
         """Run an open-ended model/tool conversation over one MCP session."""
         try:
             timeout_s = float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "60"))
-            return asyncio.run(asyncio.wait_for(self._run_agent_async(model, question), timeout_s))
+            return asyncio.run(asyncio.wait_for(
+                self._run_agent_async(model, question, grounded_context), timeout_s
+            ))
         except Exception as exc:
             def detail(error: BaseException) -> str:
                 children = getattr(error, "exceptions", ())
@@ -197,6 +241,7 @@ class MCPToolClient:
                 "duration_ms": elapsed,
                 "status": status,
             }
+            record["purpose"], record["expected_evidence_type"] = _intent(name)
             if error:
                 record["error"] = error
             self.sink(record)
@@ -222,6 +267,7 @@ class MCPToolClient:
                 "duration_ms": round((time.monotonic() - started) * 1000, 1),
                 "status": "ok",
             }
+            record["purpose"], record["expected_evidence_type"] = _intent(name)
             self.sink(record)
         return results
 

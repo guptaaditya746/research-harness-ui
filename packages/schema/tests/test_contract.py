@@ -31,6 +31,8 @@ def sample(status: str, path: str = "agentic", reason: str | None = None) -> Run
                 }
             ],
             "chosenReading": 0 if status == "answered" else None,
+            "evidenceSurface": "indexed_full_text" if status == "no_evidence_found" else None,
+            "searchCoverage": {"coverage_complete": False} if status == "no_evidence_found" else None,
         }
     )
 
@@ -39,6 +41,7 @@ def sample(status: str, path: str = "agentic", reason: str | None = None) -> Run
     "status,scene",
     [
         ("answered", "agentic_result"),
+        ("no_evidence_found", "agentic_result"),
         ("awaiting_reading", "readings"),
         ("incomplete", "failed"),
         ("stopped", "idle"),
@@ -59,4 +62,5 @@ def test_incomplete_requires_reason() -> None:
 def test_artifact_contract_per_path() -> None:
     assert "run.json" in required_artifacts("agentic")
     assert "verification.json" not in required_artifacts("baseline")
-    assert len(required_artifacts("agentic")) == 17
+    assert "claims.json" in required_artifacts("agentic")
+    assert len(required_artifacts("agentic")) == 18

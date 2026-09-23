@@ -20,9 +20,26 @@ from harness_extraction import (
     ModelFailure,
     SchemaInference,
 )
+from harness_extraction.claims import (
+    CHANGE,
+    NUMERIC,
+    build_claims,
+    classify_claim_relations,
+    derive_query_claim,
+    enrich_result_claims,
+    valid_edge,
+)
 from harness_graphstore import ProvenanceDataset, sparql_check
 from harness_observability import record_stage, record_tool_call
-from harness_schema.models import Metrics, Reading, Run, TraceRow, Triple, required_artifacts
+from harness_schema.models import (
+    ClaimSubgraph,
+    Metrics,
+    Reading,
+    Run,
+    TraceRow,
+    Triple,
+    required_artifacts,
+)
 from harness_semantic import DBLP, HRN, validate_subschema
 from langgraph.graph import END, START, StateGraph
 from rdflib import RDFS, XSD, Literal, URIRef
@@ -47,6 +64,20 @@ class BaselineResult(TypedDict):
 
 class NoResults(RuntimeError):
     pass
+
+
+class CorpusAbsent(NoResults):
+    def __init__(self, message: str, evidence_surface: str, inspected: int):
+        super().__init__(message)
+        self.evidence_surface = evidence_surface
+        self.inspected = inspected
+
+
+class NoEvidenceFound(NoResults):
+    """A completed semantic search, deliberately weaker than corpus absence."""
+    def __init__(self, message: str, coverage: dict[str, Any]):
+        super().__init__(message)
+        self.coverage = coverage
 
 
 def retrieval_dsl(question: str) -> str:
@@ -95,6 +126,9 @@ class Baseline20:
         trace_sink: TraceSink | None = None,
         refine: bool = False,
         refinement_model: Any | None = None,
+        claim_lookup: Callable[[str], list[ClaimSubgraph]] | None = None,
+        relation_proposer: Callable[[str, str, str | None], dict] | None = None,
+        seed_passage_ids: list[str] | None = None,
     ) -> None:
         self.corpus = corpus
         self.extraction = extraction
@@ -104,6 +138,9 @@ class Baseline20:
         self.trace_sink = trace_sink or (lambda _: None)
         self.refine = refine
         self.refinement_model = refinement_model
+        self.claim_lookup = claim_lookup
+        self.relation_proposer = relation_proposer
+        self.seed_passage_ids = seed_passage_ids or []
         self.started = 0.0
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
@@ -131,21 +168,24 @@ class Baseline20:
         return graph.compile()
 
     def _retrieve(self, state: BaselineState) -> dict[str, Any]:
-        dsl = retrieval_dsl(state["question"])
+        question = state["question"]
+        mentioned_papers = self.corpus.mentioned_paper_ids(question)
+        dsl = retrieval_dsl(question)
         queries = [dsl]
         if self.enhanced:
-            terms = [t for t in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", state["question"]) if len(t) >= 4]
+            terms = [t for t in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", question) if len(t) >= 4]
             phrases = [f'"{" ".join(terms[i : i + 2])}"' for i in range(max(0, len(terms) - 1))]
             queries.extend(phrases[:4])
         found: dict[str, dict[str, Any]] = {}
         rounds: list[dict[str, Any]] = []
         for round_no, query in enumerate(queries, start=1):
-            # Enhanced retrieval must inspect every query before applying the
-            # final cap; otherwise the broad first query fills the cap and
-            # phrase expansion never runs.
-            per_query_limit = 50 if self.enhanced else self.retrieve_k
+            # Scope explicit paper questions before broad lexical expansion.
+            # Inspect all matches, then use the existing BM25S index to select
+            # evidence by relevance rather than by a fixed passage count.
+            per_query_limit = max(1, len(self.corpus.passages))
             query_started = time.monotonic()
-            hits = self.corpus.search(query, limit=per_query_limit)["items"]
+            scope = {"paper_ids": mentioned_papers} if mentioned_papers else None
+            hits = self.corpus.search(query, scope=scope, limit=per_query_limit)["items"]
             before = len(found)
             found.update({row["passage_id"]: row for row in hits})
             rounds.append({
@@ -154,13 +194,77 @@ class Baseline20:
                 "passage_ids": [str(row["passage_id"]) for row in hits],
                 "duration_ms": round((time.monotonic() - query_started) * 1000, 1),
             })
-            if not self.enhanced and len(found) >= self.retrieve_k:
-                break
-        rows = list(found.values()) if self.enhanced else list(found.values())[: self.retrieve_k]
+        reused_claims = self.claim_lookup(question) if self.claim_lookup else []
+        for claim in reused_claims:
+            for source_id in claim.source_ids:
+                passage = self.corpus.by_passage.get(source_id)
+                if passage is not None:
+                    found.setdefault(source_id, passage)
+        for source_id in self.seed_passage_ids:
+            passage = self.corpus.by_passage.get(source_id)
+            if passage is not None:
+                found.setdefault(source_id, passage)
+        if not found:
+            raise NoEvidenceFound("No evidence was found in the indexed full text.", {
+                "coverage_complete": False, "queries": len(queries), "passages_inspected": 0,
+                "papers_in_scope": len(mentioned_papers) or len(self.corpus.papers),
+                "retrieval_methods": "lexical+semantic-rank", "parser_failures": 0,
+            })
+        focus = question
+        for paper_id in mentioned_papers:
+            title = self.corpus.paper_title(paper_id) or ""
+            prefix = " ".join(title.split()[:3])
+            if prefix:
+                focus = re.sub(re.escape(prefix), " ", focus, flags=re.IGNORECASE)
+            brand = re.split(r"[^A-Za-z0-9]+", title, maxsplit=1)[0]
+            if brand and (brand.isupper() or any(char.isdigit() for char in brand) or any(char.isupper() for char in brand[1:])):
+                focus = re.sub(rf"(?i)\b{re.escape(brand)}\b", " ", focus)
+        if not re.search(r"[A-Za-z]{3,}", focus):
+            focus = question
+        rank_started = time.monotonic()
+        ranked = self.corpus.rank_evidence(
+            focus, passage_ids=list(found), limit=max(1, len(found))
+        )["items"]
+        rank_duration_ms = round((time.monotonic() - rank_started) * 1000, 1)
+        best_by_paper: dict[str, float] = {}
+        for row in ranked:
+            key = str(row["paper_id"]) if mentioned_papers else "all"
+            best_by_paper[key] = max(best_by_paper.get(key, 0.0), float(row["score"]))
+        relative_threshold = 0.70
+        limitation_question = "limitation" in question.casefold()
+        rows = [
+            {key: value for key, value in row.items() if key != "score"}
+            for row in ranked
+            if row["score"] > 0
+            and (
+                row["score"] >= relative_threshold * best_by_paper[
+                    str(row["paper_id"]) if mentioned_papers else "all"
+                ]
+                or limitation_question and re.search(r"\blimitations?\b", row["text"], re.IGNORECASE)
+            )
+        ]
+        if not self.enhanced:
+            rows = rows[: self.retrieve_k]
         if not rows:
-            raise NoResults("retrieval returned no passages")
+            raise NoEvidenceFound("No evidence was found after the configured full-text search.", {
+                "coverage_complete": False, "queries": len(queries), "passages_inspected": len(ranked),
+                "papers_in_scope": len(mentioned_papers) or len(self.corpus.papers),
+                "retrieval_methods": "lexical+semantic-rank", "parser_failures": 0,
+            })
         self._emit("Retrieving top passages", f"{len(rows)} passages across {len(rounds)} rounds")
-        return {"passages": rows, "retrieval": {"queries": rounds, "stop_reason": "coverage_or_limit"}}
+        return {"passages": rows, "retrieval": {
+            "queries": rounds, "stop_reason": "relative_bm25_relevance",
+            "mentioned_paper_ids": mentioned_papers,
+            "reused_claim_ids": [claim.id for claim in reused_claims],
+            "agent_seed_passage_ids": self.seed_passage_ids,
+            "candidates": len(found), "selected": len(rows),
+            "relative_score_threshold": relative_threshold,
+            "ranking": {
+                "query": focus, "candidate_ids": list(found),
+                "passage_ids": [str(row["passage_id"]) for row in ranked],
+                "duration_ms": rank_duration_ms,
+            },
+        }}
 
     def _infer_schema(self, state: BaselineState) -> dict[str, Any]:
         inferred = self.extraction.infer_schema(state["question"], state["passages"])
@@ -174,7 +278,9 @@ class Baseline20:
         if self.edc:
             extracted = []
             reports = []
-            batch_size = 8 if self.enhanced else len(state["passages"])
+            # Small evidence batches keep the structured response focused and
+            # avoid a single long generation blocking the whole run.
+            batch_size = 2
             for start in range(0, len(state["passages"]), max(1, batch_size)):
                 extraction, batch_reports = self.extraction.extract_edc(
                     state["question"], state["inferred"], state["passages"][start : start + batch_size]
@@ -215,6 +321,38 @@ class Baseline20:
             reports.append({"fallback": "corpus-seed", "triples": len(extracted)})
         if not extracted:
             raise NoResults("extractor and corpus seed produced no supported triples")
+        extracted = [
+            item for item in extracted
+            if all(str(value).strip().casefold() not in {"", "null", "none", "n/a", "undefined"}
+                   for value in (item.subject, item.predicate, item.object, item.source_id, item.evidence))
+        ]
+        normalized: list[ExtractedTriple] = []
+        added_relations: set[str] = set()
+        for item in extracted:
+            if item.predicate == "usesDataset":
+                object_text = item.object.casefold()
+                evidence_text = item.evidence.casefold()
+                replacement = None
+                if re.search(r"\b(model|representation)\b", object_text):
+                    replacement = ("usesModel", "A paper reports use of a model or representation.")
+                elif "environment" in object_text or re.search(r"\benvironments?\b", evidence_text):
+                    replacement = ("evaluatedInEnvironment", "A paper reports evaluation in an environment.")
+                if replacement:
+                    name, definition = replacement
+                    self.extraction.register_local_relation(name, definition)
+                    if self.relation_proposer:
+                        self.relation_proposer(name, definition, self.current_run_id)
+                    added_relations.add(name)
+                    item = item.model_copy(update={"predicate": name})
+            normalized.append(item)
+        extracted = normalized
+        if added_relations:
+            state["inferred"] = state["inferred"].model_copy(update={
+                "properties": list(dict.fromkeys([*state["inferred"].properties, *sorted(added_relations)])),
+            })
+            reports.append({"stage": "local_subschema", "relations": sorted(added_relations)})
+        if not extracted:
+            raise NoResults("extraction contained no valid supported propositions")
         if self.refine:
             extracted, review = self.extraction.refine_triples(
                 state["question"], extracted, state["passages"], reviewer=self.refinement_model
@@ -222,14 +360,72 @@ class Baseline20:
             reports.append({"stage": "evidence_review", **review})
             if not extracted:
                 raise NoResults("No in-corpus evidence found for a question-relevant triple")
+        mentioned = self.corpus.mentioned_paper_ids(state["question"])
+        if self.enhanced and len(mentioned) > 1 and re.search(r"\bmetrics?\b", state["question"], re.IGNORECASE):
+            covered = {
+                self.corpus.by_passage[item.source_id]["paper_id"]
+                for item in extracted if item.source_id in self.corpus.by_passage
+            }
+            recovered = 0
+            for paper_id in mentioned:
+                if paper_id in covered:
+                    continue
+                for passage in state["passages"]:
+                    if passage["paper_id"] != paper_id:
+                        continue
+                    for sentence in re.split(r"(?<=[.!?])\s+", passage["text"]):
+                        match = re.search(
+                            r"\b(?:reports?|measures?)\s+(?:both\s+)?(.+?)(?:,\s|\.|$)",
+                            sentence, re.IGNORECASE,
+                        )
+                        if not match or not re.search(
+                            r"\b(metric|quality|accuracy|PSNR|SSIM|rate|score)\b",
+                            match.group(1), re.IGNORECASE,
+                        ):
+                            continue
+                        for criterion in re.split(r"\s+and\s+", match.group(1)):
+                            criterion = criterion.strip(" ,;.")
+                            if not criterion:
+                                continue
+                            extracted.append(ExtractedTriple(
+                                subject=paper_id, predicate="reportsMetric", object=criterion,
+                                source_id=str(passage["passage_id"]), evidence=sentence,
+                            ))
+                            recovered += 1
+                    if recovered:
+                        break
+            if recovered:
+                reports.append({"stage": "missing_paper_metric_coverage", "triples": recovered})
         self._emit("Extracting triples", f"{len(extracted)} supported triples")
-        return {"extracted": extracted, "extraction_batches": reports}
+        return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports}
 
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
         direct, direct_triples = self._direct_metadata_answer(state)
         if direct is not None:
             self._emit("Querying graph and composing answer", f"{len(direct.cited_source_ids)} cited passages")
             return {"answer": direct, "extracted": direct_triples}
+        if re.search(r"\b(improv\w*|increase|decrease|reduction|gain|comparison)\b", state["question"], re.IGNORECASE):
+            target_context = re.search(r"\bon\s+(.+?)\??$", state["question"], re.IGNORECASE)
+            context_terms = (
+                {term.casefold() for term in re.findall(r"[A-Za-z]{4,}", target_context.group(1))}
+                if target_context else set()
+            )
+            numeric = [
+                item for item in state["extracted"]
+                if item.predicate == "reportsMetric" and NUMERIC.search(item.object)
+                and CHANGE.search(f"{item.object} {item.evidence}")
+                and (not context_terms or any(term in item.object.casefold() for term in context_terms))
+            ]
+            if numeric:
+                selected = list({(item.subject, item.object, item.source_id): item for item in numeric}.values())
+                answer = AnswerResult(
+                    sparql="SELECT ?paper ?result WHERE { ?paper <https://harness.local/schema#reportsMetric> ?result . }",
+                    answer="The indexed evidence reports: " + "; ".join(
+                        f"{item.object} [{item.source_id}]" for item in selected
+                    ) + ".",
+                    cited_source_ids=sorted({item.source_id for item in selected}),
+                )
+                return {"answer": answer, "extracted": selected}
         answer = self.extraction.answer(
             state["question"], state["inferred"], state["extracted"],
             verify=self.refine, verifier=self.refinement_model,
@@ -286,7 +482,8 @@ class Baseline20:
                     triples,
                 )
 
-        if "which papers cite" in question or "who cites" in question:
+        citation_lookup = bool(re.search(r"\b(?:which|what) papers\b.*\bcite\b|\bwho cites\b", question))
+        if citation_lookup:
             target = self._find_title_fact(question)
             if target is not None:
                 rows = self.corpus.citations(target["subject"], "in", 0, 50)["items"]
@@ -304,9 +501,10 @@ class Baseline20:
                     names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
                     answer = f"{', '.join(names)} cite {target['object']} [{', '.join(item.source_id for item in triples)}]."
                 else:
-                    raise NoResults(
+                    raise CorpusAbsent(
                         f"No in-corpus evidence found that a paper cites {target['object']}. "
-                        "This does not establish that no external citation exists."
+                        "This does not establish that no external citation exists.",
+                        "citation_index", len(self.corpus.references),
                     )
                 return (
                     AnswerResult(
@@ -349,7 +547,7 @@ class Baseline20:
                 triples,
             )
 
-        if "which paper" in question or "what paper" in question:
+        if ("which paper" in question or "what paper" in question) and not citation_lookup:
             target = self._find_title_fact(question)
             if target is not None:
                 triple = ExtractedTriple(
@@ -433,7 +631,7 @@ class Baseline20:
             if source:
                 rows = [row for row in self.corpus.references if row["paper_id"] == source["subject"] and row.get("resolved_paper_id")]
                 if not rows:
-                    raise NoResults(f"No resolved in-corpus citations found for {source['object']}.")
+                    raise CorpusAbsent(f"No resolved in-corpus citations found for {source['object']}.", "citation_index", len(self.corpus.references))
                 triples = [self._citation_triple(row) for row in rows]
                 names = [self.corpus.paper_title(item.object) or item.object for item in triples]
                 return self._fact_answer(triples, f"{source['object']} cites these indexed papers: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
@@ -443,7 +641,7 @@ class Baseline20:
             if target:
                 rows = [row for row in self.corpus.references if row.get("resolved_paper_id") == target["subject"]]
                 if not rows:
-                    raise NoResults(f"No resolved in-corpus citations found for {target['object']}.")
+                    raise CorpusAbsent(f"No resolved in-corpus citations found for {target['object']}.", "citation_index", len(self.corpus.references))
                 triples = [self._citation_triple(row) for row in rows]
                 count = len({item.subject for item in triples})
                 return self._fact_answer(triples, f"{count} indexed papers cite {target['object']} [{', '.join(item.source_id for item in triples)}].")
@@ -455,7 +653,7 @@ class Baseline20:
             if source and target:
                 rows = [row for row in self.corpus.references if row["paper_id"] == source["subject"] and row.get("resolved_paper_id") == target["subject"]]
                 if not rows:
-                    raise NoResults(f"No resolved in-corpus citation from {source['object']} to {target['object']}.")
+                    raise CorpusAbsent(f"No resolved in-corpus citation from {source['object']} to {target['object']}.", "citation_index", len(self.corpus.references))
                 triples = [self._citation_triple(row) for row in rows]
                 return self._fact_answer(triples, f"Yes. {source['object']} cites {target['object']} [{', '.join(item.source_id for item in triples)}].")
 
@@ -573,12 +771,59 @@ class Baseline20:
             cited_source_ids=sources,
         )
 
+    @staticmethod
+    def needs_clarification(question: str) -> bool:
+        text = question.casefold()
+        return bool(re.search(r"\bbest (?:author|paper)\b|\bhardest subset\b", text))
+
+    def _clarification(self, run_id: str, started_at: datetime, question: str, budget: str) -> BaselineResult:
+        if "author" in question.casefold():
+            options = (
+                ("Most distinct papers", "Count distinct works authored in the indexed corpus."),
+                ("Most in-corpus citations", "Count citations from other indexed papers."),
+                ("Most reported benchmark results", "Compare supported benchmark claims in indexed papers."),
+            )
+        else:
+            options = (
+                ("Reported benchmark performance", "Compare results on a named benchmark and metric."),
+                ("Methodological difficulty", "Compare the stated task and evaluation constraints."),
+                ("In-corpus evidence coverage", "Compare how much direct evidence the corpus contains."),
+            )
+        options += (("Combine all applicable interpretations", "Report each applicable criterion separately with its evidence."),)
+        readings = [
+            Reading(
+                label=label, gloss=gloss, classes=[], axioms=[], sparql="", answer="",
+                triples=[], metrics=Metrics(), status="proposed",
+            )
+            for label, gloss in options
+        ]
+        self._emit("Clarification required", f"{len(readings)} criteria offered before retrieval")
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        run = Run(
+            id=run_id, startedAt=started_at,
+            durationS=round(time.monotonic() - self.started, 3),
+            question=question, path=path, budget=budget,
+            status="awaiting_reading", readings=readings, chosenReading=None,
+            trace=self.trace, modelSmall=getattr(self.extraction.model, "model", "recorded"),
+            artifacts=list(required_artifacts(path)),
+        )
+        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
+        artifacts["trace.json"] = json.dumps(
+            [row.model_dump(by_alias=True) for row in self.trace], indent=2
+        ).encode()
+        artifacts["answer.md"] = b"Choose a criterion to continue the research."
+        if self.enhanced:
+            artifacts["retrieval.json"] = b'{"queries": [], "stop_reason": "awaiting_reading"}'
+        return {"run": run, "artifacts": artifacts}
+
     def run(self, question: str, budget: str = "fast", run_id: str | None = None) -> BaselineResult:
         run_id = run_id or f"r-{uuid.uuid4().hex[:8]}"
         started_at = datetime.now(UTC)
         self.started = time.monotonic()
         self.current_run_id = run_id
         self.trace = []
+        if self.needs_clarification(question):
+            return self._clarification(run_id, started_at, question, budget)
         try:
             lookup_started = time.monotonic()
             direct, triples = self._direct_metadata_answer({"question": question, "extracted": []})
@@ -605,6 +850,10 @@ class Baseline20:
             else:
                 state = self.graph.invoke({"question": question})
             run, artifacts = self._success(run_id, started_at, question, budget, state)
+        except CorpusAbsent as exc:
+            run, artifacts = self._absence(run_id, started_at, question, budget, exc)
+        except NoEvidenceFound as exc:
+            run, artifacts = self._no_evidence(run_id, started_at, question, budget, exc)
         except NoResults as exc:
             run, artifacts = self._failure(
                 run_id, started_at, question, budget, "no_results", str(exc)
@@ -652,6 +901,53 @@ class Baseline20:
             [r.model_dump(by_alias=True) for r in self.trace], indent=2
         ).encode()
         artifacts["answer.md"] = detail.encode()
+        return run, artifacts
+
+    def _absence(
+        self, run_id: str, started_at: datetime, question: str, budget: str,
+        absence: CorpusAbsent,
+    ) -> tuple[Run, dict[str, bytes]]:
+        self._emit("Corpus absence verified", str(absence))
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        coverage = {"exhaustive": True, "inspected": absence.inspected, "matches": 0, "failures": 0}
+        run = Run(
+            id=run_id, startedAt=started_at,
+            durationS=round(time.monotonic() - self.started, 3),
+            question=question, path=path, budget=budget, status="corpus_absent",
+            reason=str(absence), evidenceSurface=absence.evidence_surface,
+            searchCoverage=coverage, trace=self.trace,
+            producingPath=path, executionStatus="completed",
+            artifacts=list(required_artifacts(path)),
+        )
+        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
+        artifacts["answer.md"] = str(absence).encode()
+        artifacts["claims.json"] = b'{"claims": [], "relations": []}'
+        artifacts["coverage_plan.json"] = json.dumps({
+            "evidence_surface": absence.evidence_surface, **coverage,
+        }).encode()
+        artifacts["trace.json"] = json.dumps(
+            [row.model_dump(by_alias=True) for row in self.trace], indent=2,
+        ).encode()
+        return run, artifacts
+
+    def _no_evidence(
+        self, run_id: str, started_at: datetime, question: str, budget: str,
+        absence: NoEvidenceFound,
+    ) -> tuple[Run, dict[str, bytes]]:
+        self._emit("Semantic search completed", str(absence))
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        run = Run(
+            id=run_id, startedAt=started_at, durationS=round(time.monotonic() - self.started, 3),
+            question=question, path=path, budget=budget, status="no_evidence_found",
+            reason=str(absence), evidenceSurface="indexed_full_text", searchCoverage=absence.coverage,
+            trace=self.trace, producingPath=path, executionStatus="completed",
+            artifacts=list(required_artifacts(path)),
+        )
+        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
+        artifacts["answer.md"] = str(absence).encode()
+        artifacts["claims.json"] = b'{"claims": [], "relations": []}'
+        artifacts["coverage_plan.json"] = json.dumps({"evidence_surface": "indexed_full_text", **absence.coverage}).encode()
+        artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in self.trace], indent=2).encode()
         return run, artifacts
 
     def _success(
@@ -712,6 +1008,12 @@ class Baseline20:
         if seed_rdf:
             dataset.add_event("corpus-seed", seed_rdf, sorted({str(row["source_id"]) for row in seed_rows}))
         for index, item in enumerate(extracted, start=1):
+            candidate = Triple(
+                s=item.subject, p=item.predicate, o=item.object,
+                support="1 passage", evidence=item.evidence, source=item.source_id,
+            )
+            if not valid_edge(candidate):
+                continue
             local_predicate = URIRef(HRN[item.predicate])
             predicate = URIRef(
                 {
@@ -751,6 +1053,41 @@ class Baseline20:
                     tripleId=f"t-{index:03d}",
                 )
             )
+        def paper_for_source(source_id: str, subject: str) -> str:
+            row = self.corpus.by_passage.get(source_id)
+            paper_id = str(row["paper_id"]) if row else subject
+            return self.corpus.canonical_paper_iri(paper_id) or paper_id
+
+        claims, claim_relations = build_claims(ui_triples, paper_for_source)
+        if state["passages"] and any(claim.kind == "ResultClaim" for claim in claims):
+            try:
+                claims = enrich_result_claims(
+                    claims, state["passages"], self.refinement_model or self.extraction.model,
+                )
+                self._emit("Enriching claim context", f"{len(claims)} provenance-bearing claims")
+            except (ModelFailure, ValueError, TypeError) as exc:
+                self._emit("Claim context remains partial", type(exc).__name__)
+        claim_relations = classify_claim_relations(claims)
+        query_claim = derive_query_claim(question, claims)
+        if query_claim is not None:
+            claims.append(query_claim)
+        if state.get("retrieval", {}).get("stop_reason") != "verified_facts" and claims:
+            grouped: dict[str, list[str]] = {}
+            for claim in claims:
+                if "object" not in claim.fields:
+                    continue
+                title = self.corpus.paper_title(claim.paper_id) or claim.paper_id
+                statement = claim.fields["object"].value
+                grouped.setdefault(title, []).append(
+                    f"{statement} [{', '.join(claim.source_ids)}]"
+                )
+            answer = answer.model_copy(update={
+                "answer": "The indexed papers report: " + " ".join(
+                    f"{title}: {'; '.join(statements)}."
+                    for title, statements in grouped.items()
+                ),
+                "cited_source_ids": sorted({source for claim in claims for source in claim.source_ids}),
+            })
         reading = Reading(
             label=inferred.label,
             gloss=inferred.gloss,
@@ -760,6 +1097,10 @@ class Baseline20:
             sparql=answer.sparql,
             answer=answer.answer,
             triples=ui_triples,
+            claims=claims,
+            claimRelations=claim_relations,
+            # The prose renderer below only enumerates these source-backed claims.
+            answerClaimIds=[claim.id for claim in claims],
             metrics=Metrics(),
             status="answered",
         )
@@ -771,6 +1112,8 @@ class Baseline20:
             path=path,
             budget=budget,
             status="answered",
+            producingPath=path,
+            executionStatus="completed",
             readings=[reading],
             chosenReading=0,
             trace=self.trace,
@@ -779,20 +1122,6 @@ class Baseline20:
             modelSmall=getattr(self.extraction.model, "model", "recorded"),
             artifacts=list(required_artifacts(path)),
         )
-        if self.enhanced and any(
-            marker in question.casefold()
-            for marker in ("hardest", "best", "successful", "most effective", "winner")
-        ):
-            options = (
-                ("Reported benchmark performance", "Rank by the reported metric in the papers."),
-                ("Methodological difficulty", "Interpret difficulty from benchmark design and limitations."),
-                ("In-corpus evidence coverage", "Rank by the amount of directly supported evidence."),
-            )
-            readings = [
-                reading.model_copy(update={"label": label, "gloss": gloss, "status": "proposed"})
-                for label, gloss in options
-            ]
-            run = run.model_copy(update={"status": "awaiting_reading", "chosen_reading": None, "readings": readings})
         report = validate_subschema(schema.graph)
         artifacts = {
             "subschema.ttl": schema.graph.serialize(format="turtle").encode(),
@@ -803,6 +1132,10 @@ class Baseline20:
             "ledger.json": json.dumps({"available": False}, indent=2).encode(),
             "graph.trig": dataset.export_trig().encode(),
             "triples.ttl": dataset.export_turtle().encode(),
+            "claims.json": json.dumps({
+                "claims": [claim.model_dump(by_alias=True) for claim in claims],
+                "relations": [relation.model_dump(by_alias=True) for relation in claim_relations],
+            }, ensure_ascii=False, indent=2).encode(),
             "shacl_report.ttl": report.graph.serialize(format="turtle").encode(),
             "answer.md": answer.answer.encode(),
             "citations.json": json.dumps(answer.cited_source_ids, indent=2).encode(),
@@ -844,6 +1177,24 @@ class Baseline20:
                 "result": {"passage_ids": query.get("passage_ids", [])},
                 "result_count": query.get("returned", 0),
                 "duration_ms": query.get("duration_ms", 0.0),
+                "status": "ok",
+            }
+            records.append(record)
+            record_tool_call(record, run_id=run_id)
+        ranking = retrieval.get("ranking")
+        if ranking:
+            record = {
+                "call_id": f"tool-baseline-{len(records) + 1:03d}",
+                "agent": "baseline",
+                "tool": "rank_evidence",
+                "transport": "local",
+                "arguments": {
+                    "query": ranking["query"],
+                    "passage_ids": ranking["candidate_ids"],
+                },
+                "result": {"passage_ids": ranking["passage_ids"]},
+                "result_count": len(ranking["passage_ids"]),
+                "duration_ms": ranking["duration_ms"],
                 "status": "ok",
             }
             records.append(record)

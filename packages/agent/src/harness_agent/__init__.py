@@ -34,6 +34,7 @@ class AgenticResearch:
         trace: list[TraceRow] = []
         mcp_error: str | None = None
         agent_final = ""
+        agent_decision: dict = {}
 
         def tool_sink(record: dict) -> None:
             tool_calls.append(record)
@@ -45,11 +46,14 @@ class AgenticResearch:
                     f"{record.get('status')} · {record.get('result_count', 0)} items · "
                     f"{record.get('duration_ms', 0)} ms"
                 ),
+                purpose=record.get("purpose"),
+                expectedEvidenceType=record.get("expected_evidence_type"),
             )
             trace.append(row)
             self.trace_sink(row)
 
-        queue_depth = self._heavy_queue_depth()
+        clarification_needed = self.baseline.enhanced and self.baseline.needs_clarification(question)
+        queue_depth = None if clarification_needed else self._heavy_queue_depth()
         queue_limit = int(os.getenv("HARNESS_HEAVY_QUEUE_THRESHOLD", "8"))
         heavy_busy = queue_depth is not None and queue_depth >= queue_limit
         if heavy_busy:
@@ -63,14 +67,38 @@ class AgenticResearch:
         # quality model has capacity; a transport failure preserves its triples.
         result = self.baseline.run(question, budget, run_id)
         base_run = result["run"]
-        if not heavy_busy:
+        if not heavy_busy and not clarification_needed and base_run.status == "answered":
             mcp = MCPToolClient(tool_sink, agent="supervisor")
             try:
-                agent_final = mcp.run_agent(self.agent_model, question)
+                grounded_context = {
+                    "preliminary_answer": (
+                        base_run.readings[base_run.chosen_reading].answer
+                        if base_run.chosen_reading is not None else None
+                    ),
+                    "preliminary_triples": [
+                        {"subject": triple.s, "predicate": triple.p,
+                         "object": triple.o, "source_id": triple.source}
+                        for reading in base_run.readings for triple in reading.triples
+                    ],
+                    "preliminary_claims": [
+                        {"id": claim.id, "kind": claim.kind, "paper_id": claim.paper_id,
+                         "fields": {key: field.value for key, field in claim.fields.items()},
+                         "source_ids": claim.source_ids}
+                        for reading in base_run.readings for claim in reading.claims
+                    ],
+                }
+                agent_final = mcp.run_agent(self.agent_model, question, grounded_context)
                 if agent_final:
+                    try:
+                        start, end = agent_final.find("{"), agent_final.rfind("}")
+                        agent_decision = json.loads(agent_final[start:end + 1])
+                        if not isinstance(agent_decision, dict):
+                            raise TypeError("agent decision must be an object")
+                    except (ValueError, TypeError):
+                        mcp_error = "agent_final_not_structured"
                     row = TraceRow(
                         atS=round(monotonic() - started, 3),
-                        action="Agent answer draft",
+                        action="Agent research decision",
                         returned=agent_final[:500],
                     )
                     trace.append(row)
@@ -84,6 +112,55 @@ class AgenticResearch:
                 )
                 trace.append(row)
                 self.trace_sink(row)
+        if base_run.status == "answered" and not clarification_needed and not heavy_busy and not agent_decision and not mcp_error:
+            mcp_error = "agent_returned_no_research_decision"
+        if agent_decision and not mcp_error:
+            available = {claim.id for reading in base_run.readings for claim in reading.claims}
+            verified = agent_decision.get("verified_claim_ids")
+            evidence_ids = agent_decision.get("additional_evidence_ids")
+            if not isinstance(verified, list) or not isinstance(evidence_ids, list):
+                mcp_error = "invalid_agent_decision_shape"
+            elif any(item not in available for item in verified):
+                mcp_error = "agent_claim_id_not_in_preliminary_graph"
+            elif hasattr(self.baseline, "corpus") and any(
+                item not in self.baseline.corpus.by_passage for item in evidence_ids
+            ):
+                mcp_error = "agent_evidence_id_not_in_corpus"
+            elif not tool_calls:
+                mcp_error = "agent_used_no_corpus_tools"
+            elif evidence_ids and hasattr(self.baseline, "seed_passage_ids"):
+                self.baseline.seed_passage_ids = list(dict.fromkeys(evidence_ids))
+                result = self.baseline.run(question, budget, run_id)
+                base_run = result["run"]
+            elif verified and base_run.chosen_reading is not None:
+                reading = base_run.readings[base_run.chosen_reading]
+                selected = [claim for claim in reading.claims if claim.id in verified]
+                keys = {
+                    (claim.fields["subject"].value, claim.fields["relation"].value,
+                     claim.fields["object"].value)
+                    for claim in selected
+                }
+                triples = [item for item in reading.triples if (item.s, item.p, item.o) in keys]
+                if selected and triples:
+                    answer = "The verified corpus claims report: " + "; ".join(
+                        f"{claim.fields['object'].value} [{', '.join(claim.source_ids)}]"
+                        for claim in selected
+                    ) + "."
+                    reading = reading.model_copy(update={
+                        "claims": selected, "triples": triples, "answer": answer,
+                        "claim_relations": [link for link in reading.claim_relations
+                                            if link.source_claim in verified and link.target_claim in verified],
+                    })
+                    base_run = base_run.model_copy(update={"readings": [reading]})
+                    result["artifacts"]["answer.md"] = answer.encode()
+                    result["artifacts"]["claims.json"] = json.dumps({
+                        "claims": [claim.model_dump(by_alias=True) for claim in selected],
+                        "relations": [link.model_dump(by_alias=True) for link in reading.claim_relations],
+                    }).encode()
+                else:
+                    mcp_error = "agent_selected_no_supported_claims"
+            else:
+                mcp_error = "agent_verified_no_claims"
         if mcp_error:
             tool_sink({
                 "call_id": f"tool-{len(tool_calls) + 1:03d}",
@@ -97,11 +174,8 @@ class AgenticResearch:
                 "error": mcp_error,
             })
 
-        plans = [
-            "Evidence coverage: compare claims and reported metrics across retrieved papers.",
-            "Corpus structure: inspect metadata, citations, and shared entities.",
-            "Counterevidence: search for limitations, disagreements, and missing definitions.",
-        ]
+        plans = [str(agent_decision.get("reasoning_summary"))] if agent_decision.get("reasoning_summary") else []
+        plans.extend(f"MCP: {record['tool']}" for record in tool_calls if record.get("tool") != "mcp_session")
         trace = sorted(list(base_run.trace) + trace, key=lambda row: row.at_s)
         at_s = (trace[-1].at_s if trace else 0.0) + 0.01
         for plan in plans:
@@ -109,27 +183,10 @@ class AgenticResearch:
             self.trace_sink(row)
             trace.append(row)
             at_s += 0.01
-        ambiguous = any(
-            marker in question.casefold()
-            for marker in ("hardest", "best", "successful", "most effective", "winner")
-        )
+        ambiguous = base_run.status == "awaiting_reading"
         readings = list(base_run.readings)
         status = base_run.status
         chosen = base_run.chosen_reading
-        if ambiguous and readings:
-            first = readings[0].model_copy(
-                update={"label": "Reported benchmark performance", "status": "proposed"}
-            )
-            second = readings[0].model_copy(
-                update={
-                    "label": "Methodological difficulty",
-                    "gloss": "Interpret difficulty from limitations and benchmark design.",
-                    "status": "proposed",
-                }
-            )
-            readings = [first, second]
-            status = "awaiting_reading"
-            chosen = None
         run = base_run.model_copy(
             update={
                 "path": "agentic",
@@ -141,10 +198,12 @@ class AgenticResearch:
                 "artifacts": list(required_artifacts("agentic")),
                 "status": status,
                 "chosen_reading": chosen,
+                "producing_path": "baseline_fallback" if mcp_error or base_run.status == "incomplete" else "agentic",
+                "execution_status": "degraded" if mcp_error else "failed" if base_run.status == "incomplete" else "completed",
                 "reason": (
-                    base_run.reason
-                    if base_run.status == "incomplete"
-                    else f"agentic_degraded: {mcp_error}" if mcp_error else None
+                    f"agentic_degraded: {mcp_error}" if mcp_error
+                    else base_run.reason if base_run.status in {"incomplete", "corpus_absent", "no_evidence_found"}
+                    else None
                 ),
             }
         )

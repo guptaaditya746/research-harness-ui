@@ -7,7 +7,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from urllib.parse import unquote, urlsplit
 
-from harness_schema.models import Run, Triple
+from harness_schema.models import ClaimSubgraph, Run, Triple
 
 
 @dataclass(frozen=True)
@@ -97,9 +97,71 @@ def score_triples(predicted: Iterable[Triple | Mapping[str, object]], gold: Iter
     return TripleScore(len(predicted_set), len(gold_set), len(predicted_set & gold_set))
 
 
-def evaluate_run(run: Run, gold_triples: Iterable[Triple | Mapping[str, object]]) -> dict:
+def _claim_fields(claim: ClaimSubgraph) -> dict[str, str]:
+    return {
+        key: " ".join(field.value.casefold().split())
+        for key, field in claim.fields.items()
+        if key != "relation"
+    }
+
+
+def score_claims(
+    predicted: Iterable[ClaimSubgraph | Mapping[str, object]],
+    gold: Iterable[ClaimSubgraph | Mapping[str, object]],
+) -> dict:
+    """Align attributed claims, then expose complete and per-field correctness."""
+    predictions = [item if isinstance(item, ClaimSubgraph) else ClaimSubgraph.model_validate(item)
+                   for item in predicted]
+    targets = [item if isinstance(item, ClaimSubgraph) else ClaimSubgraph.model_validate(item)
+               for item in gold]
+    candidate_pairs = []
+    for pi, prediction in enumerate(predictions):
+        for gi, target in enumerate(targets):
+            if prediction.kind != target.kind or prediction.paper_id != target.paper_id:
+                continue
+            predicted_fields, gold_fields = _claim_fields(prediction), _claim_fields(target)
+            common = sum(predicted_fields.get(key) == value for key, value in gold_fields.items()
+                         if key in predicted_fields)
+            if common:
+                candidate_pairs.append((common, pi, gi))
+    matches: list[tuple[int, int]] = []
+    used_predictions: set[int] = set()
+    used_targets: set[int] = set()
+    for _common, pi, gi in sorted(candidate_pairs, key=lambda row: (-row[0], row[1], row[2])):
+        if pi not in used_predictions and gi not in used_targets:
+            matches.append((pi, gi))
+            used_predictions.add(pi)
+            used_targets.add(gi)
+    correct_claims = 0
+    correct_fields = 0
+    details = []
+    for pi, gi in matches:
+        left, right = _claim_fields(predictions[pi]), _claim_fields(targets[gi])
+        exact = left == right
+        correct_claims += int(exact)
+        matched = sorted(key for key in left.keys() & right.keys() if left[key] == right[key])
+        correct_fields += len(matched)
+        details.append({
+            "predicted_id": predictions[pi].id, "gold_id": targets[gi].id,
+            "exact": exact, "matched_fields": matched,
+            "wrong_or_extra_fields": sorted(key for key in left if key not in matched),
+            "missing_fields": sorted(key for key in right if key not in matched),
+        })
+    predicted_fields = sum(len(_claim_fields(item)) for item in predictions)
+    gold_fields = sum(len(_claim_fields(item)) for item in targets)
+    claim_score = TripleScore(len(predictions), len(targets), correct_claims)
+    field_score = TripleScore(predicted_fields, gold_fields, correct_fields)
+    return {"claim": claim_score.as_dict(), "fields": field_score.as_dict(),
+            "aligned": len(matches), "details": details}
+
+
+def evaluate_run(
+    run: Run, gold_triples: Iterable[Triple | Mapping[str, object]],
+    gold_claims: Iterable[ClaimSubgraph | Mapping[str, object]] | None = None,
+) -> dict:
     """Evaluate every reading and the selected reading without mutating the run."""
     gold = list(gold_triples)
+    claim_gold = list(gold_claims) if gold_claims is not None else None
     gold_keys = {canonical_triple_key(item) for item in gold}
     rows = []
     for index, reading in enumerate(run.readings):
@@ -109,6 +171,9 @@ def evaluate_run(run: Run, gold_triples: Iterable[Triple | Mapping[str, object]]
         answer_sources = set(re.findall(r"\[([^\]]+)\]", reading.answer))
         declared_sources = {part.strip() for group in answer_sources for part in group.split(",")}
         triple_sources = {item.source for item in reading.triples}
+        claim_ids = {claim.id for claim in reading.claims}
+        answer_claim_ids = set(reading.answer_claim_ids)
+        claim_grounded = (not reading.answer.strip() or bool(answer_claim_ids)) and answer_claim_ids <= claim_ids
         rows.append(
             {
                 "index": index,
@@ -116,12 +181,24 @@ def evaluate_run(run: Run, gold_triples: Iterable[Triple | Mapping[str, object]]
                 "score": score.as_dict(),
                 "provenance_coverage": supported / len(reading.triples) if reading.triples else 0.0,
                 "unsupported_ratio": 1 - (score.correct / score.predicted if score.predicted else 0.0),
-                "answer_supported": declared_sources <= triple_sources if declared_sources else True,
+                # New runs declare exactly which accepted/partial source claims feed
+                # the prose. Older artifacts retain the citation-only fallback.
+                "answer_supported": claim_grounded and (
+                    declared_sources <= triple_sources if declared_sources else True
+                ),
+                "answer_claim_ids": sorted(answer_claim_ids),
                 "missing_gold": len(gold_keys - predicted_keys),
+                "claim_score": score_claims(reading.claims, claim_gold) if claim_gold is not None else None,
             }
         )
     selected = next((row["score"] for row in rows if row["index"] == run.chosen_reading), None)
-    return {"run_id": run.id, "path": run.path, "status": run.status, "gold": len(gold_keys), "readings": rows, "chosen_reading": run.chosen_reading, "chosen": selected}
+    return {"run_id": run.id, "path": run.path, "status": run.status,
+            "producing_path": run.producing_path, "execution_status": run.execution_status,
+            "eligible_for_path_score": run.status == "answered" and run.execution_status != "degraded" and
+            not (run.reason or "").startswith("agentic_degraded:") and
+            run.producing_path in {None, run.path},
+            "gold": len(gold_keys), "gold_claims": len(claim_gold) if claim_gold is not None else None,
+            "readings": rows, "chosen_reading": run.chosen_reading, "chosen": selected}
 
 
-__all__ = ["TripleScore", "canonical_triple_key", "evaluate_run", "score_triples"]
+__all__ = ["TripleScore", "canonical_triple_key", "evaluate_run", "score_claims", "score_triples"]

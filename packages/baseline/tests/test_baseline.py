@@ -92,14 +92,15 @@ def test_baseline_runs_four_nodes_and_writes_complete_artifact_set(tmp_path: Pat
     assert [(call["tool"], call["result_count"]) for call in calls] == [("facts", 1)]
 
 
-def test_baseline_no_hits_is_a_terminal_failed_run(tmp_path: Path) -> None:
+def test_baseline_no_hits_is_a_completed_semantic_no_evidence_run(tmp_path: Path) -> None:
     runner = Baseline20(
         corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema())
     )
     result = runner.run("Unfindable zxqvterm", run_id="r-failed")
 
-    assert result["run"].status == "incomplete"
-    assert result["run"].reason == "no_results"
+    assert result["run"].status == "no_evidence_found"
+    assert "No evidence was found" in (result["run"].reason or "")
+    assert result["run"].search_coverage["coverage_complete"] is False
     assert set(result["artifacts"]) | {"run.json"} == set(required_artifacts("baseline"))
 
 
@@ -122,10 +123,18 @@ def test_missing_incoming_citations_do_not_return_unrelated_triples(tmp_path: Pa
     )
     result = runner.run("Which papers cite Video Prediction Policy?", run_id="r-citations")
 
-    assert result["run"].status == "incomplete"
-    assert result["run"].reason == "no_results"
+    assert result["run"].status == "corpus_absent"
+    assert result["run"].evidence_surface == "citation_index"
+    assert result["run"].search_coverage["exhaustive"] is True
     assert not result["run"].readings
     assert "No in-corpus evidence found" in result["artifacts"]["answer.md"].decode()
+
+
+def test_citation_absence_survives_question_paraphrase(tmp_path: Path) -> None:
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    run = runner.run("Which papers in this corpus cite Video Prediction Policy?")["run"]
+    assert run.status == "corpus_absent"
+    assert run.search_coverage["matches"] == 0
 
 
 def test_preprint_and_journal_version_count_as_one_work(tmp_path: Path) -> None:
@@ -150,7 +159,7 @@ def test_malformed_model_query_uses_verified_triple_predicate(tmp_path: Path) ->
     runner = Baseline20(corpus(tmp_path), ExtractionEngine(MalformedQueryModel(), hand_written_subschema()))
     runner.started = __import__("time").monotonic()
     state = {
-        "question": "What improvement did VPP report?",
+        "question": "Describe the VPP result.",
         "inferred": SchemaInference(label="Metric", gloss="Result", classes=["Metric"], properties=["reportsMetric"]),
         "extracted": [ExtractedTriple(subject="p4", predicate="reportsMetric", object="41.5%", source_id="p4-abstract", evidence="41.5% improvement")],
         "passages": [],
@@ -197,3 +206,82 @@ def test_resolved_citation_count_and_year_aggregation(tmp_path: Path) -> None:
     assert [(item.p, item.o) for item in count.readings[0].triples] == [("cites", "p4")]
     assert "2 corpus papers" in years.readings[0].answer
     assert len(years.readings[0].triples) == 2
+
+
+def test_named_paper_retrieval_ranks_target_evidence_without_unrelated_papers(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    store.papers.append({"paper_id": "p5", "title": "Unrelated Robot Policy", "year": 2025})
+    store.by_paper["p5"] = store.papers[-1]
+    store.passages.extend([
+        {"passage_id": "p4-result", "paper_id": "p4", "text": "The CALVIN ABC-D benchmark improved by 41.5%."},
+        {"passage_id": "p5-result", "paper_id": "p5", "text": "The CALVIN ABC-D benchmark improved by 99%."},
+    ])
+    store.by_passage.update({row["passage_id"]: row for row in store.passages})
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()), enhanced=True)
+    runner.started = __import__("time").monotonic()
+
+    state = runner._retrieve({"question": "What CALVIN ABC-D improvement did Video Prediction Policy report?"})
+
+    assert state["retrieval"]["mentioned_paper_ids"] == ["p4"]
+    assert "p4-result" in {row["passage_id"] for row in state["passages"]}
+    assert all(row["paper_id"] == "p4" for row in state["passages"])
+
+
+def test_adaptive_asks_for_best_author_criterion_before_retrieval(tmp_path: Path) -> None:
+    class FailModel:
+        def complete_json(self, system: str, user: str) -> dict:
+            raise AssertionError("clarification must precede model calls")
+
+    runner = Baseline20(
+        corpus(tmp_path), ExtractionEngine(FailModel(), hand_written_subschema()), enhanced=True
+    )
+    result = runner.run("Who is the best author in the corpus?")
+
+    assert result["run"].status == "awaiting_reading"
+    assert result["run"].chosen_reading is None
+    assert len(result["run"].readings) == 4
+    assert result["run"].readings[-1].label == "Combine all applicable interpretations"
+    assert all(not item.triples for item in result["run"].readings)
+    assert result["run"].trace[0].action == "Clarification required"
+    assert b'"queries": []' in result["artifacts"]["retrieval.json"]
+
+
+def test_fast_best_author_asks_for_a_criterion(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    store.fact_rows.append({
+        "fact_id": "p4-author", "subject": "p4", "predicate": "author",
+        "object": "Ada Scholar", "source_id": "p4-metadata",
+    })
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+
+    run = runner.run("Who is the best author in the corpus?")["run"]
+
+    assert run.status == "awaiting_reading"
+    assert run.readings[-1].label == "Combine all applicable interpretations"
+
+
+def test_conflicting_benchmark_percentages_are_both_reported(tmp_path: Path) -> None:
+    class FailModel:
+        def complete_json(self, system: str, user: str) -> dict:
+            raise AssertionError("the two extracted claims already answer this question")
+
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(FailModel(), hand_written_subschema()))
+    runner.started = __import__("time").monotonic()
+    state = {
+        "question": "What improvement did Video Prediction Policy report on CALVIN ABC→D?",
+        "extracted": [
+            ExtractedTriple(subject="p4", predicate="reportsMetric", object="18.6% relative improvement on CALVIN ABC-D generalization benchmark", source_id="p4-abstract", evidence="18.6% relative improvement"),
+            ExtractedTriple(subject="p4", predicate="reportsMetric", object="41.5% improvement on CALVIN ABC→D benchmark", source_id="p4-results", evidence="41.5% improvement"),
+                ExtractedTriple(subject="p4", predicate="reportsMetric", object="10% of CALVIN ABC training data", source_id="p4-training", evidence="using only 10% of annotated data"),
+                ExtractedTriple(subject="p4", predicate="reportsMetric", object="31.6% improvement in real-world success rate", source_id="p4-real", evidence="31.6% improvement in real-world success rate"),
+        ],
+    }
+
+    result = runner._query_answer(state)
+
+    assert "18.6%" in result["answer"].answer
+    assert "41.5%" in result["answer"].answer
+    assert "10%" not in result["answer"].answer
+    assert "31.6%" not in result["answer"].answer
+    assert result["answer"].cited_source_ids == ["p4-abstract", "p4-results"]
+    assert len(result["extracted"]) == 2

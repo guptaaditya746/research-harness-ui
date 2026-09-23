@@ -20,6 +20,61 @@ class Triple(Contract):
     triple_id: str | None = Field(default=None, alias="tripleId")
 
 
+class ClaimField(Contract):
+    value: str
+    source_ids: list[str] = Field(alias="sourceIds")
+    quote: str | None = None
+    evidence_ids: list[str] = Field(default_factory=list, alias="evidenceIds")
+
+
+class EvidenceAnchor(Contract):
+    """A reproducible source location, independent of the tool that found it."""
+    id: str
+    kind: Literal["dblp_fact", "passage", "table_cell", "figure_annotation", "citation_fact"]
+    paper_id: str | None = Field(default=None, alias="paperId")
+    source_id: str = Field(alias="sourceId")
+    locator: dict[str, str | int] = Field(default_factory=dict)
+    text: str | None = None
+
+
+class ClaimSubgraph(Contract):
+    id: str
+    kind: Literal["MetadataClaim", "ResultClaim", "ComparisonClaim", "MethodClaim", "LimitationClaim", "RankingClaim", "SynthesisClaim"]
+    paper_id: str = Field(alias="paperId")
+    fields: dict[str, ClaimField]
+    source_ids: list[str] = Field(alias="sourceIds")
+    evidence: dict[str, str]
+    evidence_anchors: list[EvidenceAnchor] = Field(default_factory=list, alias="evidenceAnchors")
+    supported_by: list[str] = Field(default_factory=list, alias="supportedBy")
+    status: Literal["accepted", "partial"] = "accepted"
+
+    @model_validator(mode="after")
+    def validate_provenance(self) -> "ClaimSubgraph":
+        if not self.fields or not self.source_ids:
+            raise ValueError("claim requires fields and provenance")
+        if any(not field.value.strip() or field.value.strip().casefold() in {"null", "none", "n/a"}
+               for field in self.fields.values()):
+            raise ValueError("claim contains a placeholder field")
+        if any(not field.source_ids or not set(field.source_ids) <= set(self.source_ids)
+               for field in self.fields.values()):
+            raise ValueError("field provenance must belong to the claim")
+        if not set(self.source_ids) <= set(self.evidence):
+            raise ValueError("claim evidence missing a cited source")
+        anchor_ids = {anchor.id for anchor in self.evidence_anchors}
+        if any(field.evidence_ids and not set(field.evidence_ids) <= anchor_ids for field in self.fields.values()):
+            raise ValueError("field evidence must belong to the claim")
+        if self.kind == "SynthesisClaim" and not self.supported_by:
+            raise ValueError("synthesis claims require supporting claims")
+        return self
+
+
+class ClaimRelation(Contract):
+    source_claim: str = Field(alias="sourceClaim")
+    target_claim: str = Field(alias="targetClaim")
+    relation: Literal["supports", "contradicts", "qualifies", "sameContext", "differentContext", "possibleConflict", "confirmedConflict", "equivalentTo"]
+    reason: str
+
+
 class Axiom(Contract):
     property: str
     domain: str
@@ -41,6 +96,9 @@ class Reading(Contract):
     sparql: str
     answer: str
     triples: list[Triple]
+    claims: list[ClaimSubgraph] = Field(default_factory=list)
+    claim_relations: list[ClaimRelation] = Field(default_factory=list, alias="claimRelations")
+    answer_claim_ids: list[str] = Field(default_factory=list, alias="answerClaimIds")
     metrics: Metrics
     status: Literal["proposed", "answered", "incomplete"] = "proposed"
     op: str = ""
@@ -53,6 +111,17 @@ class TraceRow(Contract):
     returned: str
     reading: int | None = None
     span_id: str | None = Field(default=None, alias="spanId")
+    purpose: str | None = None
+    target_claim: str | None = Field(default=None, alias="targetClaim")
+    expected_evidence_type: str | None = Field(default=None, alias="expectedEvidenceType")
+
+
+class EvaluationSnapshot(Contract):
+    corpus_snapshot_id: str = Field(alias="corpusSnapshotId")
+    ontology_version: str = Field(alias="ontologyVersion")
+    claim_schema_version: str = Field(alias="claimSchemaVersion")
+    gold_version: str | None = Field(default=None, alias="goldVersion")
+    retrieval_index_version: str = Field(alias="retrievalIndexVersion")
 
 
 class Run(Contract):
@@ -62,13 +131,19 @@ class Run(Contract):
     question: str
     path: Literal["agentic", "baseline", "baseline-enhanced"]
     budget: Literal["fast", "slow"]
-    status: Literal["answered", "awaiting_reading", "incomplete", "stopped"]
+    status: Literal["answered", "corpus_absent", "no_evidence_found", "awaiting_reading", "incomplete", "stopped"]
     readings: list[Reading] = Field(default_factory=list)
     chosen_reading: int | None = Field(default=None, alias="chosenReading")
     plans: list[str] = Field(default_factory=list)
     trace: list[TraceRow] = Field(default_factory=list)
     rating: Literal["useful", "partial", "not_useful"] | None = None
     reason: str | None = None
+    producing_path: Literal["agentic", "baseline", "baseline-enhanced", "baseline_fallback"] | None = Field(default=None, alias="producingPath")
+    execution_status: Literal["completed", "degraded", "failed"] | None = Field(default=None, alias="executionStatus")
+    evidence_surface: str | None = Field(default=None, alias="evidenceSurface")
+    search_coverage: dict[str, str | int | bool] | None = Field(default=None, alias="searchCoverage")
+    evaluation_mode: bool = Field(default=False, alias="evaluationMode")
+    snapshot: EvaluationSnapshot | None = None
     coverage: float | None = None
     theta: float = 0.30
     model_agent: str = Field(default="", alias="modelAgent")
@@ -84,6 +159,8 @@ class Run(Contract):
             self.chosen_reading is None or self.chosen_reading >= len(self.readings)
         ):
             raise ValueError("answered runs require a chosen reading")
+        if self.status in {"corpus_absent", "no_evidence_found"} and (self.evidence_surface is None or self.search_coverage is None):
+            raise ValueError("corpus absence requires an evidence surface and coverage")
         if self.chosen_reading is not None and self.chosen_reading < 0:
             raise ValueError("chosenReading must be non-negative")
         if self.coverage is not None and not 0 <= self.coverage <= 1:
@@ -101,6 +178,7 @@ AGENTIC_ARTIFACTS = (
     "ledger.json",
     "graph.trig",
     "triples.ttl",
+    "claims.json",
     "shacl_report.ttl",
     "answer.md",
     "citations.json",
@@ -134,6 +212,8 @@ def terminal_scene(run: Run) -> str:
     """Exhaustive mapping from v2 terminal states to UI scenes."""
     match run.status:
         case "answered":
+            return "agentic_result" if run.path == "agentic" else "baseline_result"
+        case "corpus_absent" | "no_evidence_found":
             return "agentic_result" if run.path == "agentic" else "baseline_result"
         case "awaiting_reading":
             return "readings"

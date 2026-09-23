@@ -59,7 +59,7 @@ class ArtifactStore:
 
     def finalize(self, run: Run, artifacts: dict[str, bytes]) -> None:
         expected = required_artifacts(run.path)
-        if run.status not in {"answered", "awaiting_reading", "incomplete", "stopped"}:
+        if run.status not in {"answered", "corpus_absent", "no_evidence_found", "awaiting_reading", "incomplete", "stopped"}:
             raise ValueError("only terminal runs can be finalized")
         extras = set(artifacts) - set(expected)
         if extras:
@@ -127,11 +127,13 @@ class GoldCandidateStore:
             if len(matches) < minimum_per_category:
                 errors.append({"category": category, "code": "minimum_questions", "count": len(matches), "required": minimum_per_category})
         for row in approved:
-            missing = [field for field in ("gold_triples", "evidence_refs", "gold_version", "corpus_fingerprint", "ontology_hash", "reviewer") if not row.get(field)]
+            missing = [field for field in ("gold_triples", "evidence_refs", "gold_version", "corpus_fingerprint", "ontology_hash", "reviewer", "snapshot") if not row.get(field)]
             if missing:
                 errors.append({"id": row.get("id"), "code": "missing_metadata", "fields": missing})
             if not row.get("gold_triples"):
                 errors.append({"id": row.get("id"), "code": "empty_gold_triples"})
+            if not row.get("gold_claims"):
+                errors.append({"id": row.get("id"), "code": "missing_gold_claims"})
         return {"valid": not errors, "mandatory_categories": list(mandatory), "approved_questions": len(approved), "errors": errors}
 
     def promote(self, run: Run) -> dict:
@@ -154,6 +156,10 @@ class GoldCandidateStore:
                     triple.model_dump(by_alias=True)
                     for triple in (reading.triples if reading else [])
                 ],
+                "gold_claims": [
+                    claim.model_dump(by_alias=True)
+                    for claim in (reading.claims if reading else [])
+                ],
                 "paper_ids": sorted(
                     {
                         triple.s
@@ -162,13 +168,18 @@ class GoldCandidateStore:
                     }
                 ),
                 "notes": "Promoted from a human-rated run; review required.",
-                "status": "candidate",
+                "status": "draft",
                 "category": "uncategorized",
                 "gold_version": "draft-1",
                 "corpus_fingerprint": os.getenv("CORPUS_FINGERPRINT", "unknown"),
                 "ontology_hash": os.getenv("ONTOLOGY_HASH", "unknown"),
                 "reviewer": None,
                 "reviewed_at": None,
+                "created_by": "run_rating",
+                "review_history": [{"at": datetime.now(UTC).isoformat(), "actor": "run_rating", "status": "draft", "comment": "Promoted from human-rated run."}],
+                "llm_proposals": [],
+                "forbidden_alternatives": [],
+                "snapshot": run.snapshot.model_dump(by_alias=True) if run.snapshot else None,
             }
             rows.append(row)
             self._write(rows)
@@ -176,9 +187,10 @@ class GoldCandidateStore:
 
     def update(self, candidate_id: str, changes: dict) -> dict:
         allowed = {
-            "ambiguous", "readings", "gold_triples", "paper_ids", "notes", "status",
+            "ambiguous", "readings", "gold_triples", "gold_claims", "paper_ids", "notes", "status",
             "category", "gold_version", "corpus_fingerprint", "ontology_hash",
             "reviewer", "reviewed_at", "accepted_readings", "evidence_refs",
+            "created_by", "review_history", "llm_proposals", "forbidden_alternatives", "snapshot",
         }
         if set(changes) - allowed:
             raise ValueError("unknown candidate fields")
@@ -187,8 +199,24 @@ class GoldCandidateStore:
             for index, row in enumerate(rows):
                 if row["id"] == candidate_id:
                     updated = {**row, **changes}
+                    old_status = row.get("status")
+                    new_status = updated.get("status")
+                    valid_statuses = {"draft", "under_review", "approved", "rejected", "superseded", "candidate"}
+                    if new_status not in valid_statuses:
+                        raise ValueError("unknown gold review status")
+                    if old_status == "superseded" and new_status != "superseded":
+                        raise ValueError("superseded gold cannot be reopened; create a revision")
                     if changes.get("status") == "approved":
                         updated.setdefault("reviewed_at", datetime.now(UTC).isoformat())
+                    if new_status != old_status:
+                        history = list(updated.get("review_history", row.get("review_history", [])))
+                        history.append({
+                            "at": datetime.now(UTC).isoformat(),
+                            "actor": str(changes.get("reviewer") or row.get("reviewer") or "unknown"),
+                            "status": new_status,
+                            "comment": str(changes.get("notes") or ""),
+                        })
+                        updated["review_history"] = history
                     rows[index] = updated
                     self._write(rows)
                     return rows[index]

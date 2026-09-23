@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -24,8 +25,8 @@ from harness_evaluation import evaluate_run
 from harness_extraction import ExtractionEngine, OpenAICompatibleModel
 from harness_observability import hello_span, run_observation
 from harness_observability import init as init_observability
-from harness_runs import ArtifactStore, GoldCandidateStore
-from harness_schema.models import Run, TraceRow, required_artifacts
+from harness_runs import ArtifactStore, ClaimStore, GoldCandidateStore, RelationRegistry
+from harness_schema.models import EvaluationSnapshot, Run, TraceRow, required_artifacts
 from harness_semantic import hand_written_subschema
 from pydantic import BaseModel, ConfigDict
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -47,6 +48,8 @@ class RunRequest(BaseModel):
     question: str
     path: str
     budget: str
+    evaluation_mode: bool = False
+    snapshot: EvaluationSnapshot | None = None
 
 
 class RatingRequest(BaseModel):
@@ -59,6 +62,7 @@ class CandidateUpdate(BaseModel):
     ambiguous: bool | None = None
     readings: list[dict] | None = None
     gold_triples: list[dict] | None = None
+    gold_claims: list[dict] | None = None
     paper_ids: list[str] | None = None
     notes: str | None = None
     status: str | None = None
@@ -80,6 +84,7 @@ class ReadingPick(BaseModel):
 class EvaluationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     gold_triples: list[dict]
+    gold_claims: list[dict] | None = None
 
 
 class BenchmarkRequest(BaseModel):
@@ -94,12 +99,18 @@ class BenchmarkExecuteRequest(BaseModel):
     path: str
     budget: str = "slow"
     repetitions: int = 3
+    snapshot: EvaluationSnapshot | None = None
 
 
 class SettingsUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     baseline: str | None = None
     agentic: str | None = None
+
+
+class RelationReviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    status: str
 
 
 def fixture_runs() -> list[Run]:
@@ -114,6 +125,8 @@ class RunRuntime:
         runner_factory: Callable[[Callable[[TraceRow], None]], Baseline20] | None = None,
     ) -> None:
         self.artifacts = ArtifactStore(artifact_root)
+        self.claims = ClaimStore(artifact_root / "claim_graph.sqlite")
+        self.relations = RelationRegistry(artifact_root / "relation_registry.sqlite")
         self.gold = GoldCandidateStore(datasets_root / "gold" / "candidates.jsonl")
         self.custom_runner = runner_factory is not None
         self.runner_factory = runner_factory or self._runner
@@ -144,6 +157,10 @@ class RunRuntime:
             trace_sink=sink,
             refine=enhanced,
             refinement_model=refinement_model,
+            claim_lookup=self.claims.search,
+            relation_proposer=lambda name, definition, run_id: self.relations.propose(
+                name, definition, run_id=run_id, domain="Paper", range_="Resource"
+            ),
         )
 
     def start(self, request: RunRequest) -> str:
@@ -201,15 +218,22 @@ class RunRuntime:
                             output={
                                 "status": result["run"].status,
                                 "triple_count": sum(len(item.triples) for item in result["run"].readings),
+                                "claim_count": sum(len(item.claims) for item in result["run"].readings),
                             }
                         )
-                run = result["run"]
+                run = result["run"].model_copy(update={
+                    "evaluation_mode": request.evaluation_mode,
+                    "snapshot": request.snapshot,
+                })
+                result["run"] = run
                 with self.lock:
                     stopped = run_id in self.stop_requested
                 if stopped:
                     run = run.model_copy(update={"status": "stopped", "chosen_reading": None})
                     result["run"] = run
                 self.artifacts.finalize(run, result["artifacts"])
+                if run.status == "answered" and run.chosen_reading is not None:
+                    self.claims.upsert(run.readings[run.chosen_reading].claims)
             except Exception as exc:
                 LOGGER.exception("Run %s failed unexpectedly", run_id)
                 row = TraceRow(atS=0.0, action="Run incomplete", returned="internal_error")
@@ -274,18 +298,29 @@ class RunRuntime:
 
     def pick_reading(self, run_id: str, index: int) -> Run:
         run = self.get(run_id)
-        if run.path not in {"agentic", "baseline-enhanced"}:
-            raise ValueError("reading selection is only available for adaptive or agentic runs")
-        if run.status not in {"awaiting_reading", "answered"}:
+        if run.path not in {"agentic", "baseline", "baseline-enhanced"}:
+            raise ValueError("reading selection is unavailable for this path")
+        if run.status != "awaiting_reading":
             raise ValueError("run is not waiting for a reading")
         if index < 0 or index >= len(run.readings):
             raise ValueError("reading index is out of range")
-        selected = run.model_copy(update={"chosen_reading": index, "status": "answered"})
-        try:
-            self.artifacts.update_run(selected)
-        except FileNotFoundError:
-            self.fixture_overrides[run_id] = selected
-        return selected
+        reading = run.readings[index]
+        if "best author" in run.question.casefold() and reading.label == "Most distinct papers":
+            clarified = "Which author appears on the most distinct papers in the corpus?"
+        else:
+            topic = re.sub(
+                r"\bbest (?:author|paper)\b|\bhardest subset\b",
+                "ranked subject", run.question, flags=re.IGNORECASE,
+            )
+            clarified = f"{topic} Use this criterion: {reading.label}. {reading.gloss}"
+        selected_id = self.start(RunRequest(
+            question=clarified, path=run.path, budget=run.budget
+        ))
+        return run.model_copy(update={
+            "id": selected_id, "question": clarified,
+            "started_at": datetime.now(UTC), "duration_s": 0.0,
+            "chosen_reading": index,
+        })
 
     def stop(self, run_id: str) -> Run | None:
         with self.lock:
@@ -293,7 +328,7 @@ class RunRuntime:
                 self.stop_requested.add(run_id)
                 return None
         run = self.get(run_id)
-        if run.status in {"answered", "awaiting_reading"}:
+        if run.status in {"answered", "corpus_absent", "no_evidence_found", "awaiting_reading"}:
             run = run.model_copy(update={"status": "stopped", "chosen_reading": None})
             try:
                 self.artifacts.update_run(run)
@@ -425,7 +460,7 @@ def stop_run(run_id: str) -> Run | None:
 @app.post("/runs/{run_id}/evaluate")
 def evaluate_run_endpoint(run_id: str, request: EvaluationRequest) -> dict:
     try:
-        return evaluate_run(runtime.get(run_id), request.gold_triples)
+        return evaluate_run(runtime.get(run_id), request.gold_triples, request.gold_claims)
     except KeyError as exc:
         raise HTTPException(404, "run not found") from exc
 
@@ -443,6 +478,21 @@ def promote_run(run_id: str) -> dict:
 @app.get("/datasets/candidates")
 def list_candidates() -> list[dict]:
     return runtime.gold.list()
+
+
+@app.get("/schema/relations")
+def list_relations() -> list[dict]:
+    return runtime.relations.list()
+
+
+@app.put("/schema/relations/{relation_id}")
+def review_relation(relation_id: str, request: RelationReviewRequest) -> dict:
+    try:
+        return runtime.relations.review(relation_id, request.status)
+    except KeyError as exc:
+        raise HTTPException(404, "relation not found") from exc
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
 
 
 def _score_aggregate(scores: list[dict], metric: str) -> dict[str, float | None]:
@@ -466,11 +516,20 @@ def benchmark(category: str | None = None) -> dict:
         path_rows = []
         for path in ("baseline", "baseline-enhanced", "agentic"):
             matching = [run for run in runs if run.question == candidate.get("question") and run.path == path]
-            scores = [
-                evaluate_run(run, candidate.get("gold_triples", []))["chosen"]
-                for run in matching if run.status == "answered" and not run.reason
+            if candidate.get("snapshot") is not None:
+                matching = [run for run in matching if run.snapshot and
+                            run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]]
+            evaluations = [
+                evaluate_run(run, candidate.get("gold_triples", []), candidate.get("gold_claims"))
+                for run in matching if run.status == "answered"
             ]
-            scores = [score for score in scores if score is not None]
+            eligible = [result for result in evaluations if result["eligible_for_path_score"]]
+            scores = [result["chosen"] for result in eligible if result["chosen"] is not None]
+            claim_scores = [
+                reading["claim_score"]["claim"]
+                for result in eligible for reading in result["readings"]
+                if reading["index"] == result["chosen_reading"] and reading["claim_score"] is not None
+            ]
             if not matching:
                 continue
             path_rows.append(
@@ -482,6 +541,9 @@ def benchmark(category: str | None = None) -> dict:
                     "precision": _score_aggregate(scores, "precision"),
                     "recall": _score_aggregate(scores, "recall"),
                     "f1": _score_aggregate(scores, "f1"),
+                    "claim_precision": _score_aggregate(claim_scores, "precision"),
+                    "claim_recall": _score_aggregate(claim_scores, "recall"),
+                    "claim_f1": _score_aggregate(claim_scores, "f1"),
                 }
             )
         question_rows.append(
@@ -492,6 +554,7 @@ def benchmark(category: str | None = None) -> dict:
                 "gold_version": candidate.get("gold_version"),
                 "corpus_fingerprint": candidate.get("corpus_fingerprint"),
                 "ontology_hash": candidate.get("ontology_hash"),
+                "snapshot": candidate.get("snapshot"),
                 "paths": path_rows,
             }
         )
@@ -513,11 +576,19 @@ def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
         raise HTTPException(422, "budget must be fast or slow")
     if not 1 <= request.repetitions <= 20:
         raise HTTPException(422, "repetitions must be between 1 and 20")
+    snapshot = request.snapshot or EvaluationSnapshot(
+        corpusSnapshotId=os.getenv("CORPUS_SNAPSHOT_ID", os.getenv("CORPUS_FINGERPRINT", "unknown")),
+        ontologyVersion=os.getenv("ONTOLOGY_VERSION", "unknown"),
+        claimSchemaVersion="v3",
+        retrievalIndexVersion=os.getenv("RETRIEVAL_INDEX_VERSION", "unknown"),
+    )
     ids = [
-        runtime.start(RunRequest(question=request.question, path=request.path, budget=request.budget))
+        runtime.start(RunRequest(question=request.question, path=request.path, budget=request.budget,
+                                 evaluation_mode=True, snapshot=snapshot))
         for _ in range(request.repetitions)
     ]
-    return {"ids": ids, "repetitions": request.repetitions, "evaluation_mode": True}
+    return {"ids": ids, "repetitions": request.repetitions, "evaluation_mode": True,
+            "snapshot": snapshot.model_dump(by_alias=True)}
 
 
 @app.put("/datasets/candidates/{candidate_id}")
