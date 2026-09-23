@@ -65,7 +65,16 @@ class AgenticResearch:
         clarification_needed = self.baseline.enhanced and self.baseline.needs_clarification(question)
         queue_depth = None if clarification_needed else self._heavy_queue_depth()
         queue_limit = int(os.getenv("HARNESS_HEAVY_QUEUE_THRESHOLD", "8"))
-        heavy_busy = queue_depth is not None and queue_depth >= queue_limit
+        # Granite controls MCP research. Qwen queue pressure must not turn an
+        # otherwise healthy Granite-led agentic execution into a fallback.
+        controller_uses_heavy = getattr(self.agent_model, "model", "") == os.getenv(
+            "HARNESS_MODEL_HIGH", "heavy-model"
+        )
+        heavy_busy = (
+            controller_uses_heavy
+            and queue_depth is not None
+            and queue_depth >= queue_limit
+        )
         if heavy_busy:
             self.baseline.refinement_model = None
             mcp_error = f"heavy_model_busy: {queue_depth} requests waiting"
