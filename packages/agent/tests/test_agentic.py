@@ -33,11 +33,69 @@ class HighModel:
     model = "heavy-model"
 
 
+CONCEPT = {"label": "Introducing paper", "gloss": "Find the paper that introduced the method.",
+           "classes": ["Paper"]}
+
+
+class ConceptModel:
+    model = "granite"
+
+    def __init__(self, payloads):
+        self.payloads = list(payloads)
+        self.calls = 0
+
+    def complete_json(self, _system: str, _user: str) -> dict:
+        self.calls += 1
+        return self.payloads.pop(0)
+
+
+class SearchCorpus:
+    def search(self, query: str, limit: int = 10) -> dict:
+        hits = 0 if "quantum" in query else 4
+        return {"total": hits, "items": [{"passage_id": "p4-abstract"}] if hits else []}
+
+
+def concept(label: str, term: str = "video prediction") -> dict:
+    return {"label": label, "gloss": f"Research {label.lower()}.", "classes": ["Paper", "Bogus"],
+            "search_terms": [term]}
+
+
+def test_agent_always_proposes_three_to_four_concepts_before_research() -> None:
+    baseline = StubBaseline()
+    baseline.corpus = SearchCorpus()
+    model = ConceptModel([{"concepts": [
+        concept("Quantum angle", "quantum"), concept("Introducing paper"),
+        concept("Benchmark results"), concept("Citation influence"),
+    ]}])
+    result = AgenticResearch(baseline, agent_model=model).run(
+        "Which paper introduced Video Prediction Policy?", "slow", "r-concepts"
+    )
+    run = result["run"]
+    assert run.status == "awaiting_reading"
+    assert run.path == "agentic"
+    assert run.chosen_reading is None
+    assert [r.label for r in run.readings] == [
+        "Introducing paper", "Benchmark results", "Citation influence", "Quantum angle"
+    ]
+    assert all(r.classes == ["Paper"] for r in run.readings)
+    plans = json.loads(result["artifacts"]["plans.json"])
+    assert plans[0]["evidence_hits"] == 4 and plans[-1]["evidence_hits"] == 0
+    assert set(result["artifacts"]) == set(required_artifacts("agentic")) - {"run.json"}
+
+
+def test_too_few_concepts_retries_then_fails_visibly() -> None:
+    model = ConceptModel([{"concepts": [concept("Only one")]}, {"concepts": []}])
+    run = AgenticResearch(StubBaseline(), agent_model=model).run("Q?", "fast", "r-few")["run"]
+    assert model.calls == 2
+    assert run.status == "incomplete"
+    assert run.reason.startswith("concept_proposal_failed")
+
+
 def test_busy_high_model_preserves_triples_and_marks_agentic_result_degraded(monkeypatch) -> None:
     monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 94))
     baseline = StubBaseline()
     result = AgenticResearch(baseline, agent_model=HighModel()).run(
-        "Which paper introduced Video Prediction Policy?", "slow", "r-test"
+        "Which paper introduced Video Prediction Policy?", "slow", "r-test", concept=CONCEPT
     )
     run = result["run"]
 
@@ -59,7 +117,7 @@ def test_agent_receives_preliminary_grounded_context(monkeypatch) -> None:
 
     monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
     result = AgenticResearch(StubBaseline(), agent_model=HighModel()).run(
-        "Which paper introduced Video Prediction Policy?", "slow", "r-context"
+        "Which paper introduced Video Prediction Policy?", "slow", "r-context", concept=CONCEPT
     )
 
     assert result["run"].status == "answered"

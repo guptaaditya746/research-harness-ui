@@ -5,14 +5,18 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Callable
+from datetime import UTC, datetime
 from time import monotonic
 
 import httpx
 from harness_baseline import Baseline20
 from harness_observability import record_tool_call
-from harness_schema.models import TraceRow, required_artifacts
+from harness_schema.models import Metrics, Reading, Run, TraceRow, required_artifacts
 
+from .concepts import ConceptProposalError, propose_concepts
 from .mcp import MCPToolClient, MCPUnavailable
+
+DEFAULT_CLASSES = {"Paper", "Author", "Venue", "Dataset", "Metric", "Claim"}
 
 
 class AgenticResearch:
@@ -28,7 +32,15 @@ class AgenticResearch:
         self.trace_sink = trace_sink or (lambda _: None)
         self.agent_model = agent_model or baseline.extraction.model
 
-    def run(self, question: str, budget: str, run_id: str):
+    def run(self, question: str, budget: str, run_id: str, concept: dict | None = None):
+        """Run agentic research.
+
+        Without a chosen ``concept`` the agent first proposes 3-4 concept
+        readings and the run stops at ``awaiting_reading``. Research proceeds
+        only once the user has picked one of them.
+        """
+        if concept is None:
+            return self._propose(question, budget, run_id)
         tool_calls: list[dict] = []
         started = monotonic()
         trace: list[TraceRow] = []
@@ -62,7 +74,8 @@ class AgenticResearch:
             trace.append(row)
             self.trace_sink(row)
 
-        clarification_needed = self.baseline.enhanced and self.baseline.needs_clarification(question)
+        # The user already chose an agent-proposed concept for this run.
+        clarification_needed = False
         queue_depth = None if clarification_needed else self._heavy_queue_depth()
         queue_limit = int(os.getenv("HARNESS_HEAVY_QUEUE_THRESHOLD", "8"))
         # Granite controls MCP research. Qwen queue pressure must not turn an
@@ -105,6 +118,7 @@ class AgenticResearch:
                          "source_ids": claim.source_ids}
                         for reading in base_run.readings for claim in reading.claims
                     ],
+                    "selected_concept": concept,
                     "evidence_map": [
                         {
                             "source_id": str(fact["source_id"]),
@@ -289,6 +303,79 @@ class AgenticResearch:
         ) + (b"\n" if tool_calls else b"")
         artifacts["tool_calls.jsonl"] = baseline_calls + agent_calls
         artifacts["agent_draft.md"] = agent_final.encode()
+        return {"run": run, "artifacts": artifacts}
+
+    def _allowed_classes(self) -> set[str]:
+        extraction = getattr(self.baseline, "extraction", None)
+        names = set(getattr(extraction, "class_names", {}) or {})
+        return names or set(DEFAULT_CLASSES)
+
+    def _propose(self, question: str, budget: str, run_id: str) -> dict:
+        """Let the agent model propose 3-4 concept readings before research."""
+        started = monotonic()
+        started_at = datetime.now(UTC)
+        trace: list[TraceRow] = []
+
+        def emit(action: str, returned: str) -> None:
+            row = TraceRow(atS=round(monotonic() - started, 3), action=action, returned=returned)
+            trace.append(row)
+            self.trace_sink(row)
+
+        emit("Agent proposing concepts", "Interpreting the question before research")
+        model_name = getattr(self.agent_model, "model", "recorded")
+        try:
+            concepts = propose_concepts(
+                self.agent_model, question, self._allowed_classes(),
+                corpus=getattr(self.baseline, "corpus", None),
+            )
+        except ConceptProposalError as exc:
+            emit("Concept proposal failed", str(exc))
+            run = Run(
+                id=run_id, startedAt=started_at, durationS=round(monotonic() - started, 3),
+                question=question, path="agentic", budget=budget, status="incomplete",
+                reason=f"concept_proposal_failed: {exc}"[:300], trace=trace,
+                modelAgent=model_name, artifacts=list(required_artifacts("agentic")),
+            )
+            artifacts = {name: b"" for name in required_artifacts("agentic") if name != "run.json"}
+            artifacts["answer.md"] = b"The agent could not propose concept readings for this question."
+            artifacts["trace.json"] = json.dumps(
+                [row.model_dump(by_alias=True) for row in trace], indent=2
+            ).encode()
+            return {"run": run, "artifacts": artifacts}
+
+        for index, item in enumerate(concepts, start=1):
+            emit(
+                "Agent concept",
+                f"{index}. {item.label} · {item.evidence_hits} corpus passages",
+            )
+        readings = [
+            Reading(
+                label=item.label, gloss=item.gloss, classes=item.classes, axioms=[],
+                sparql="", answer="", triples=[], metrics=Metrics(), status="proposed",
+            )
+            for item in concepts
+        ]
+        run = Run(
+            id=run_id, startedAt=started_at, durationS=round(monotonic() - started, 3),
+            question=question, path="agentic", budget=budget, status="awaiting_reading",
+            readings=readings, chosenReading=None, trace=trace,
+            plans=[f"{item.label}: {item.gloss}" for item in concepts],
+            modelAgent=model_name, artifacts=list(required_artifacts("agentic")),
+        )
+        artifacts = {name: b"" for name in required_artifacts("agentic") if name != "run.json"}
+        artifacts["plans.json"] = json.dumps(
+            [item.as_dict() for item in concepts], indent=2
+        ).encode()
+        artifacts["readings.json"] = json.dumps(
+            [reading.model_dump(by_alias=True) for reading in readings], indent=2
+        ).encode()
+        artifacts["disagreement.json"] = json.dumps(
+            {"proposed_concepts": len(concepts), "awaiting_reading": True}, indent=2
+        ).encode()
+        artifacts["answer.md"] = b"Choose one of the agent's concept readings to continue."
+        artifacts["trace.json"] = json.dumps(
+            [row.model_dump(by_alias=True) for row in trace], indent=2
+        ).encode()
         return {"run": run, "artifacts": artifacts}
 
     @staticmethod
