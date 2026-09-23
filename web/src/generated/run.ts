@@ -26,6 +26,15 @@ export interface ClaimSubgraph {
   status: "accepted" | "partial";
 }
 
+export interface ConceptChoice {
+  label: string;
+  gloss: string;
+  classes: Array<string>;
+  searchTerms: Array<string>;
+  evidenceHits: number | null;
+  autoSelected: boolean;
+}
+
 export interface EvaluationSnapshot {
   corpusSnapshotId: string;
   ontologyVersion: string;
@@ -107,6 +116,9 @@ export interface Run {
   searchCoverage: Record<string, string | number | boolean> | null;
   evaluationMode: boolean;
   snapshot: EvaluationSnapshot | null;
+  concept: ConceptChoice | null;
+  concepts: Array<ConceptChoice>;
+  parentRunId: string | null;
   coverage: number | null;
   theta: number;
   modelAgent: string;

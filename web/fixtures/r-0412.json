@@ -54,6 +54,9 @@
           "tripleId": "t-002"
         }
       ],
+      "claims": [],
+      "claimRelations": [],
+      "answerClaimIds": [],
       "metrics": {
         "disagreement": 0.42,
         "precision": [
@@ -114,6 +117,9 @@
           "tripleId": "t-002"
         }
       ],
+      "claims": [],
+      "claimRelations": [],
+      "answerClaimIds": [],
       "metrics": {
         "disagreement": 0.42,
         "precision": [
@@ -179,6 +185,9 @@
           "tripleId": "t-002"
         }
       ],
+      "claims": [],
+      "claimRelations": [],
+      "answerClaimIds": [],
       "metrics": {
         "disagreement": 0.42,
         "precision": [
@@ -239,6 +248,9 @@
           "tripleId": "t-002"
         }
       ],
+      "claims": [],
+      "claimRelations": [],
+      "answerClaimIds": [],
       "metrics": {
         "disagreement": 0.42,
         "precision": [
@@ -270,25 +282,43 @@
       "action": "Read the question",
       "returned": "success criterion unresolved",
       "reading": null,
-      "spanId": null
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
     },
     {
       "atS": 11.0,
       "action": "Searched the corpus",
       "returned": "0 explicit definitions",
       "reading": null,
-      "spanId": null
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
     },
     {
       "atS": 79.0,
       "action": "Stopped: the criterion is yours to choose",
       "returned": "4 readings prepared",
       "reading": null,
-      "spanId": null
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
     }
   ],
   "rating": "partial",
   "reason": null,
+  "producingPath": null,
+  "executionStatus": null,
+  "evidenceSurface": null,
+  "searchCoverage": null,
+  "evaluationMode": false,
+  "snapshot": null,
+  "concept": null,
+  "concepts": [],
+  "parentRunId": null,
   "coverage": 0.74,
   "theta": 0.3,
   "modelAgent": "fixture",
@@ -300,17 +330,22 @@
     "plans.json",
     "disagreement.json",
     "readings.json",
+    "research_ledger.json",
+    "context_checkpoints.json",
     "subschema.ttl",
     "query.rq",
     "coverage_plan.json",
     "ledger.json",
     "graph.trig",
     "triples.ttl",
+    "claims.json",
     "shacl_report.ttl",
     "answer.md",
     "citations.json",
     "verification.json",
     "trace.json",
+    "tool_calls.jsonl",
+    "agent_draft.md",
     "run.json"
   ]
 }

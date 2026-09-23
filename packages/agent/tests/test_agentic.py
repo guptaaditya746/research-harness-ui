@@ -10,11 +10,8 @@ class StubBaseline:
     enhanced = True
     refinement_model = object()
 
-    @staticmethod
-    def needs_clarification(question: str) -> bool:
-        return False
-
-    def run(self, question: str, budget: str, run_id: str) -> dict:
+    def run(self, question: str, budget: str, run_id: str, concept: dict | None = None) -> dict:
+        self.concept = concept
         reading = Reading(
             label="Corpus facts", gloss="Verified facts", classes=["Paper"], axioms=[],
             sparql="", answer="Video Prediction Policy [p4-metadata].",

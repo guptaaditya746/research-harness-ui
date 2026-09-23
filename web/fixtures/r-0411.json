@@ -54,6 +54,9 @@
           "tripleId": "t-002"
         }
       ],
+      "claims": [],
+      "claimRelations": [],
+      "answerClaimIds": [],
       "metrics": {
         "disagreement": null,
         "precision": [
@@ -79,6 +82,15 @@
   "trace": [],
   "rating": null,
   "reason": null,
+  "producingPath": null,
+  "executionStatus": null,
+  "evidenceSurface": null,
+  "searchCoverage": null,
+  "evaluationMode": false,
+  "snapshot": null,
+  "concept": null,
+  "concepts": [],
+  "parentRunId": null,
   "coverage": null,
   "theta": 0.3,
   "modelAgent": "fixture",
@@ -93,10 +105,12 @@
     "ledger.json",
     "graph.trig",
     "triples.ttl",
+    "claims.json",
     "shacl_report.ttl",
     "answer.md",
     "citations.json",
     "trace.json",
+    "tool_calls.jsonl",
     "run.json"
   ]
 }

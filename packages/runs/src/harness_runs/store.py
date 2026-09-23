@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import os
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,10 @@ from tempfile import NamedTemporaryFile
 from threading import RLock
 from uuid import uuid4
 
-from harness_schema.models import Run, required_artifacts
+from harness_schema.models import ClaimSubgraph, Run, required_artifacts
+from pydantic import ValidationError
+
+LOGGER = logging.getLogger(__name__)
 
 
 def invariant_failure(run: Run, number: int) -> Run:
@@ -79,7 +83,13 @@ class ArtifactStore:
     def list_runs(self) -> list[Run]:
         if not self.root.exists():
             return []
-        runs = [Run.model_validate_json(path.read_text()) for path in self.root.glob("*/run.json")]
+        runs = []
+        for path in self.root.glob("*/run.json"):
+            try:
+                runs.append(Run.model_validate_json(path.read_text()))
+            except (OSError, ValueError) as exc:
+                # One unreadable run must not hide every other run.
+                LOGGER.warning("Skipping unreadable run %s: %s", path.parent.name, exc)
         return sorted(runs, key=lambda run: run.started_at, reverse=True)
 
     def update_run(self, run: Run) -> None:
@@ -101,7 +111,15 @@ class GoldCandidateStore:
     def _rows(self) -> list[dict]:
         if not self.path.exists():
             return []
-        return [json.loads(line) for line in self.path.read_text().splitlines() if line]
+        rows = []
+        for number, line in enumerate(self.path.read_text().splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                LOGGER.warning("Skipping corrupt line %d in %s", number, self.path)
+        return rows
 
     def _write(self, rows: list[dict]) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -141,7 +159,7 @@ class GoldCandidateStore:
             raise ValueError("a run must be human-rated before promotion")
         with self.lock:
             rows = self._rows()
-            existing = next((row for row in rows if row["run_id"] == run.id), None)
+            existing = next((row for row in rows if row.get("run_id") == run.id), None)
             if existing:
                 return existing
             reading = run.readings[run.chosen_reading or 0] if run.readings else None
@@ -194,6 +212,7 @@ class GoldCandidateStore:
         }
         if set(changes) - allowed:
             raise ValueError("unknown candidate fields")
+        _validate_gold(changes)
         with self.lock:
             rows = self._rows()
             for index, row in enumerate(rows):
@@ -206,8 +225,8 @@ class GoldCandidateStore:
                         raise ValueError("unknown gold review status")
                     if old_status == "superseded" and new_status != "superseded":
                         raise ValueError("superseded gold cannot be reopened; create a revision")
-                    if changes.get("status") == "approved":
-                        updated.setdefault("reviewed_at", datetime.now(UTC).isoformat())
+                    if changes.get("status") == "approved" and not updated.get("reviewed_at"):
+                        updated["reviewed_at"] = datetime.now(UTC).isoformat()
                     if new_status != old_status:
                         history = list(updated.get("review_history", row.get("review_history", [])))
                         history.append({
@@ -221,3 +240,19 @@ class GoldCandidateStore:
                     self._write(rows)
                     return rows[index]
         raise KeyError(candidate_id)
+
+
+def _validate_gold(changes: dict) -> None:
+    """Reject malformed gold at write time so evaluation never meets it."""
+    for index, triple in enumerate(changes.get("gold_triples") or []):
+        if not isinstance(triple, dict) or not all(
+            isinstance(triple.get(key), str) and triple.get(key).strip() for key in ("s", "p", "o")
+        ):
+            raise ValueError(f"gold_triples[{index}] needs non-empty string s, p and o")
+    for index, claim in enumerate(changes.get("gold_claims") or []):
+        try:
+            ClaimSubgraph.model_validate(claim)
+        except ValidationError as exc:
+            first = exc.errors()[0]
+            where = ".".join(str(part) for part in first.get("loc", ()))
+            raise ValueError(f"gold_claims[{index}] is invalid at {where}: {first.get('msg')}") from exc

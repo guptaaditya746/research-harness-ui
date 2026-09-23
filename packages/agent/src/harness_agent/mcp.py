@@ -190,17 +190,28 @@ class MCPToolClient:
                     )
                     for call in requested:
                         name = call["function"]["name"]
-                        arguments = json.loads(call["function"].get("arguments") or "{}")
                         started = time.monotonic()
                         status = "ok"
                         error: str | None = None
                         try:
-                            raw = await session.call_tool(name, arguments)
-                            result = _tool_payload(_serialise(raw))
-                        except Exception as exc:  # noqa: BLE001
-                            result = {"error": str(exc)}
+                            arguments = json.loads(call["function"].get("arguments") or "{}")
+                            if not isinstance(arguments, dict):
+                                raise TypeError("tool arguments must be a JSON object")
+                        except (json.JSONDecodeError, TypeError) as exc:
+                            # A malformed call is reported back to the model as
+                            # that tool's result so it can correct itself.
+                            arguments = {"_raw": str(call["function"].get("arguments"))[:500]}
+                            result = {"error": f"invalid tool arguments: {exc}"}
                             status = "error"
-                            error = str(exc)
+                            error = result["error"]
+                        else:
+                            try:
+                                raw = await session.call_tool(name, arguments)
+                                result = _tool_payload(_serialise(raw))
+                            except Exception as exc:  # noqa: BLE001
+                                result = {"error": str(exc)}
+                                status = "error"
+                                error = str(exc)
                         self._counter += 1
                         record = {
                             "call_id": f"tool-{self._counter:03d}",
@@ -244,7 +255,10 @@ class MCPToolClient:
     ) -> str:
         """Run an open-ended model/tool conversation over one MCP session."""
         try:
-            timeout_s = float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "60"))
+            # The tool loop must outlast at least two model turns, otherwise a
+            # single slow turn discards everything gathered so far.
+            per_turn = float(getattr(model, "timeout_s", 120) or 120)
+            timeout_s = max(float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "240")), 2 * per_turn)
             return asyncio.run(asyncio.wait_for(
                 self._run_agent_async(model, question, grounded_context), timeout_s
             ))

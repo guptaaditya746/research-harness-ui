@@ -160,6 +160,57 @@
       "title": "ClaimSubgraph",
       "type": "object"
     },
+    "ConceptChoice": {
+      "additionalProperties": false,
+      "description": "The research interpretation a run is bound to (agentic path).",
+      "properties": {
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "gloss": {
+          "title": "Gloss",
+          "type": "string"
+        },
+        "classes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Classes",
+          "type": "array"
+        },
+        "searchTerms": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Searchterms",
+          "type": "array"
+        },
+        "evidenceHits": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidencehits"
+        },
+        "autoSelected": {
+          "default": false,
+          "title": "Autoselected",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "label",
+        "gloss"
+      ],
+      "title": "ConceptChoice",
+      "type": "object"
+    },
     "EvaluationSnapshot": {
       "additionalProperties": false,
       "properties": {
@@ -780,6 +831,36 @@
         }
       ],
       "default": null
+    },
+    "concept": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/ConceptChoice"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "concepts": {
+      "items": {
+        "$ref": "#/$defs/ConceptChoice"
+      },
+      "title": "Concepts",
+      "type": "array"
+    },
+    "parentRunId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Parentrunid"
     },
     "coverage": {
       "anyOf": [

@@ -227,26 +227,8 @@ def test_named_paper_retrieval_ranks_target_evidence_without_unrelated_papers(tm
     assert all(row["paper_id"] == "p4" for row in state["passages"])
 
 
-def test_adaptive_asks_for_best_author_criterion_before_retrieval(tmp_path: Path) -> None:
-    class FailModel:
-        def complete_json(self, system: str, user: str) -> dict:
-            raise AssertionError("clarification must precede model calls")
-
-    runner = Baseline20(
-        corpus(tmp_path), ExtractionEngine(FailModel(), hand_written_subschema()), enhanced=True
-    )
-    result = runner.run("Who is the best author in the corpus?")
-
-    assert result["run"].status == "awaiting_reading"
-    assert result["run"].chosen_reading is None
-    assert len(result["run"].readings) == 4
-    assert result["run"].readings[-1].label == "Combine all applicable interpretations"
-    assert all(not item.triples for item in result["run"].readings)
-    assert result["run"].trace[0].action == "Clarification required"
-    assert b'"queries": []' in result["artifacts"]["retrieval.json"]
-
-
-def test_fast_best_author_asks_for_a_criterion(tmp_path: Path) -> None:
+def test_baseline_never_pauses_for_canned_interpretations(tmp_path: Path) -> None:
+    """Interpretation is the agent's job; baseline answers the question as asked."""
     store = corpus(tmp_path)
     store.fact_rows.append({
         "fact_id": "p4-author", "subject": "p4", "predicate": "author",
@@ -256,8 +238,36 @@ def test_fast_best_author_asks_for_a_criterion(tmp_path: Path) -> None:
 
     run = runner.run("Who is the best author in the corpus?")["run"]
 
-    assert run.status == "awaiting_reading"
-    assert run.readings[-1].label == "Combine all applicable interpretations"
+    assert run.status != "awaiting_reading"
+    assert all(row.action != "Clarification required" for row in run.trace)
+
+
+def test_concept_widens_retrieval_and_reaches_the_model(tmp_path: Path) -> None:
+    class CapturingModel(RecordedModel):
+        def __init__(self) -> None:
+            super().__init__()
+            self.inputs: list[str] = []
+
+        def complete_json(self, system: str, user: str) -> dict:
+            self.inputs.append(user)
+            return super().complete_json(system, user)
+
+    model = CapturingModel()
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(model, hand_written_subschema()),
+                        enhanced=True)
+    concept = {"label": "Introduced method", "gloss": "The method a paper proposes.",
+               "classes": ["Paper"], "search_terms": ["video prediction"]}
+    question = "Which methods support robot learning?"
+
+    result = runner.run(question, concept=concept)
+
+    assert result["run"].question == question
+    retrieval = json.loads(result["artifacts"]["retrieval.json"])
+    assert '"video prediction"' in [item["query"] for item in retrieval["queries"]]
+    assert model.inputs and all(
+        "Research interpretation chosen by the user: Introduced method" in item
+        for item in model.inputs
+    )
 
 
 def test_conflicting_benchmark_percentages_are_both_reported(tmp_path: Path) -> None:

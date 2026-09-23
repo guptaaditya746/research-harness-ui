@@ -2,6 +2,7 @@
 
 import logging
 import os
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from threading import Lock
@@ -84,10 +85,17 @@ def run_observation(run_id: str, question: str, path: str, budget: str) -> Itera
         with observation as active:
             yield active
     finally:
-        try:
+        # Export in the background: an unreachable collector must not delay
+        # persisting the run the user is waiting for.
+        threading.Thread(target=_flush_quietly, name="langfuse-flush", daemon=True).start()
+
+
+def _flush_quietly() -> None:
+    try:
+        if _client is not None:
             _client.flush()
-        except Exception:
-            _logger.debug("Langfuse flush failed", exc_info=True)
+    except Exception:
+        _logger.debug("Langfuse flush failed", exc_info=True)
 
 
 def record_stage(name: str, returned: str, *, run_id: str | None = None) -> None:

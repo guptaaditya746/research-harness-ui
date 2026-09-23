@@ -11,7 +11,14 @@ from time import monotonic
 import httpx
 from harness_baseline import Baseline20
 from harness_observability import record_tool_call
-from harness_schema.models import Metrics, Reading, Run, TraceRow, required_artifacts
+from harness_schema.models import (
+    ConceptChoice,
+    Metrics,
+    Reading,
+    Run,
+    TraceRow,
+    required_artifacts,
+)
 
 from .concepts import ConceptProposalError, propose_concepts
 from .mcp import MCPToolClient, MCPUnavailable
@@ -32,15 +39,23 @@ class AgenticResearch:
         self.trace_sink = trace_sink or (lambda _: None)
         self.agent_model = agent_model or baseline.extraction.model
 
-    def run(self, question: str, budget: str, run_id: str, concept: dict | None = None):
+    def run(
+        self, question: str, budget: str, run_id: str,
+        concept: ConceptChoice | dict | None = None,
+    ):
         """Run agentic research.
 
         Without a chosen ``concept`` the agent first proposes 3-4 concept
         readings and the run stops at ``awaiting_reading``. Research proceeds
-        only once the user has picked one of them.
+        only once a concept has been chosen; the question itself is never
+        rewritten, the concept travels alongside it as structured input.
         """
         if concept is None:
-            return self._propose(question, budget, run_id)
+            return self.propose(question, budget, run_id)
+        concept = (
+            concept if isinstance(concept, ConceptChoice) else ConceptChoice.model_validate(concept)
+        )
+        concept_input = concept.model_dump(by_alias=False)
         tool_calls: list[dict] = []
         started = monotonic()
         trace: list[TraceRow] = []
@@ -97,7 +112,7 @@ class AgenticResearch:
 
         # Run the shared baseline first. MCP enriches the result when the high
         # quality model has capacity; a transport failure preserves its triples.
-        result = self.baseline.run(question, budget, run_id)
+        result = self.baseline.run(question, budget, run_id, concept=concept_input)
         base_run = result["run"]
         if not heavy_busy and not clarification_needed and base_run.status == "answered":
             mcp = MCPToolClient(tool_sink, agent="supervisor")
@@ -118,7 +133,7 @@ class AgenticResearch:
                          "source_ids": claim.source_ids}
                         for reading in base_run.readings for claim in reading.claims
                     ],
-                    "selected_concept": concept,
+                    "selected_concept": concept_input,
                     "evidence_map": [
                         {
                             "source_id": str(fact["source_id"]),
@@ -163,48 +178,52 @@ class AgenticResearch:
                 mcp_error = "invalid_agent_decision_shape"
             elif any(item not in available for item in verified):
                 mcp_error = "agent_claim_id_not_in_preliminary_graph"
-            elif hasattr(self.baseline, "corpus"):
-                unknown_evidence = [
-                    str(item) for item in evidence_ids
-                    if item not in self._known_evidence_ids(self.baseline.corpus)
-                ]
+            else:
+                corpus = getattr(self.baseline, "corpus", None)
+                known = self._known_evidence_ids(corpus) if corpus is not None else None
+                unknown_evidence = (
+                    [str(item) for item in evidence_ids if item not in known]
+                    if known is not None else []
+                )
                 if unknown_evidence:
                     mcp_error = "agent_evidence_id_not_in_corpus:" + ",".join(unknown_evidence[:5])
-            elif not tool_calls:
-                mcp_error = "agent_used_no_corpus_tools"
-            elif evidence_ids and hasattr(self.baseline, "seed_passage_ids"):
-                self.baseline.seed_passage_ids = list(dict.fromkeys(evidence_ids))
-                result = self.baseline.run(question, budget, run_id)
-                base_run = result["run"]
-            elif verified and base_run.chosen_reading is not None:
-                reading = base_run.readings[base_run.chosen_reading]
-                selected = [claim for claim in reading.claims if claim.id in verified]
-                keys = {
-                    (claim.fields["subject"].value, claim.fields["relation"].value,
-                     claim.fields["object"].value)
-                    for claim in selected
-                }
-                triples = [item for item in reading.triples if (item.s, item.p, item.o) in keys]
-                if selected and triples:
-                    answer = "The verified corpus claims report: " + "; ".join(
-                        f"{claim.fields['object'].value} [{', '.join(claim.source_ids)}]"
+                elif not tool_calls:
+                    mcp_error = "agent_used_no_corpus_tools"
+                elif evidence_ids and hasattr(self.baseline, "seed_passage_ids"):
+                    # The agent found further evidence: rerun the shared
+                    # pipeline seeded with it, under the same concept.
+                    self.baseline.seed_passage_ids = list(dict.fromkeys(evidence_ids))
+                    result = self.baseline.run(question, budget, run_id, concept=concept_input)
+                    base_run = result["run"]
+                elif verified and base_run.chosen_reading is not None:
+                    reading = base_run.readings[base_run.chosen_reading]
+                    selected = [claim for claim in reading.claims if claim.id in verified]
+                    keys = {
+                        (claim.fields["subject"].value, claim.fields["relation"].value,
+                         claim.fields["object"].value)
                         for claim in selected
-                    ) + "."
-                    reading = reading.model_copy(update={
-                        "claims": selected, "triples": triples, "answer": answer,
-                        "claim_relations": [link for link in reading.claim_relations
-                                            if link.source_claim in verified and link.target_claim in verified],
-                    })
-                    base_run = base_run.model_copy(update={"readings": [reading]})
-                    result["artifacts"]["answer.md"] = answer.encode()
-                    result["artifacts"]["claims.json"] = json.dumps({
-                        "claims": [claim.model_dump(by_alias=True) for claim in selected],
-                        "relations": [link.model_dump(by_alias=True) for link in reading.claim_relations],
-                    }).encode()
+                    }
+                    triples = [item for item in reading.triples if (item.s, item.p, item.o) in keys]
+                    if selected and triples:
+                        answer = "The verified corpus claims report: " + "; ".join(
+                            f"{claim.fields['object'].value} [{', '.join(claim.source_ids)}]"
+                            for claim in selected
+                        ) + "."
+                        reading = reading.model_copy(update={
+                            "claims": selected, "triples": triples, "answer": answer,
+                            "claim_relations": [link for link in reading.claim_relations
+                                                if link.source_claim in verified and link.target_claim in verified],
+                        })
+                        base_run = base_run.model_copy(update={"readings": [reading]})
+                        result["artifacts"]["answer.md"] = answer.encode()
+                        result["artifacts"]["claims.json"] = json.dumps({
+                            "claims": [claim.model_dump(by_alias=True) for claim in selected],
+                            "relations": [link.model_dump(by_alias=True) for link in reading.claim_relations],
+                        }).encode()
+                    else:
+                        mcp_error = "agent_selected_no_supported_claims"
                 else:
-                    mcp_error = "agent_selected_no_supported_claims"
-            else:
-                mcp_error = "agent_verified_no_claims"
+                    mcp_error = "agent_verified_no_claims"
         if mcp_error:
             tool_sink({
                 "call_id": f"tool-{len(tool_calls) + 1:03d}",
@@ -234,6 +253,7 @@ class AgenticResearch:
         run = base_run.model_copy(
             update={
                 "path": "agentic",
+                "concept": concept,
                 "duration_s": round(monotonic() - started, 3),
                 "plans": plans,
                 "trace": trace,
@@ -310,7 +330,7 @@ class AgenticResearch:
         names = set(getattr(extraction, "class_names", {}) or {})
         return names or set(DEFAULT_CLASSES)
 
-    def _propose(self, question: str, budget: str, run_id: str) -> dict:
+    def propose(self, question: str, budget: str, run_id: str) -> dict:
         """Let the agent model propose 3-4 concept readings before research."""
         started = monotonic()
         started_at = datetime.now(UTC)
@@ -360,6 +380,13 @@ class AgenticResearch:
             question=question, path="agentic", budget=budget, status="awaiting_reading",
             readings=readings, chosenReading=None, trace=trace,
             plans=[f"{item.label}: {item.gloss}" for item in concepts],
+            concepts=[
+                ConceptChoice(
+                    label=item.label, gloss=item.gloss, classes=item.classes,
+                    searchTerms=item.search_terms, evidenceHits=item.evidence_hits,
+                )
+                for item in concepts
+            ],
             modelAgent=model_name, artifacts=list(required_artifacts("agentic")),
         )
         artifacts = {name: b"" for name in required_artifacts("agentic") if name != "run.json"}

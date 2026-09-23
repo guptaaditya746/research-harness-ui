@@ -124,6 +124,17 @@ class EvaluationSnapshot(Contract):
     retrieval_index_version: str = Field(alias="retrievalIndexVersion")
 
 
+class ConceptChoice(Contract):
+    """The research interpretation a run is bound to (agentic path)."""
+
+    label: str
+    gloss: str
+    classes: list[str] = Field(default_factory=list)
+    search_terms: list[str] = Field(default_factory=list, alias="searchTerms")
+    evidence_hits: int | None = Field(default=None, alias="evidenceHits")
+    auto_selected: bool = Field(default=False, alias="autoSelected")
+
+
 class Run(Contract):
     id: str
     started_at: datetime = Field(alias="startedAt")
@@ -144,6 +155,9 @@ class Run(Contract):
     search_coverage: dict[str, str | int | bool] | None = Field(default=None, alias="searchCoverage")
     evaluation_mode: bool = Field(default=False, alias="evaluationMode")
     snapshot: EvaluationSnapshot | None = None
+    concept: ConceptChoice | None = None
+    concepts: list[ConceptChoice] = Field(default_factory=list)
+    parent_run_id: str | None = Field(default=None, alias="parentRunId")
     coverage: float | None = None
     theta: float = 0.30
     model_agent: str = Field(default="", alias="modelAgent")

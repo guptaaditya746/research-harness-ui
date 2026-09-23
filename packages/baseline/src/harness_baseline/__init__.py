@@ -49,6 +49,7 @@ TraceSink = Callable[[TraceRow], None]
 
 class BaselineState(TypedDict, total=False):
     question: str
+    concept: dict[str, Any] | None
     passages: list[dict[str, Any]]
     inferred: SchemaInference
     extracted: list[ExtractedTriple]
@@ -144,7 +145,19 @@ class Baseline20:
         self.started = 0.0
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
+        self.concept: dict[str, Any] | None = None
         self.graph = self._graph()
+
+    @staticmethod
+    def _research_question(state: BaselineState) -> str:
+        """The question as given to models, with the chosen interpretation attached."""
+        concept = state.get("concept")
+        if not concept:
+            return state["question"]
+        return (
+            f"{state['question']}\n\nResearch interpretation chosen by the user: "
+            f"{concept.get('label', '')}: {concept.get('gloss', '')}"
+        )
 
     def _emit(self, action: str, returned: str) -> None:
         row = TraceRow(
@@ -176,6 +189,11 @@ class Baseline20:
             terms = [t for t in re.findall(r"[A-Za-z][A-Za-z0-9_-]+", question) if len(t) >= 4]
             phrases = [f'"{" ".join(terms[i : i + 2])}"' for i in range(max(0, len(terms) - 1))]
             queries.extend(phrases[:4])
+        concept = state.get("concept") or {}
+        for term in concept.get("search_terms") or []:
+            words = re.findall(r"[A-Za-z0-9][A-Za-z0-9_-]*", str(term))
+            if words:
+                queries.append(f'"{" ".join(words)}"' if len(words) > 1 else words[0])
         found: dict[str, dict[str, Any]] = {}
         rounds: list[dict[str, Any]] = []
         for round_no, query in enumerate(queries, start=1):
@@ -211,6 +229,8 @@ class Baseline20:
                 "retrieval_methods": "lexical+semantic-rank", "parser_failures": 0,
             })
         focus = question
+        if concept:
+            focus = f"{question} {concept.get('label', '')} {concept.get('gloss', '')}"
         for paper_id in mentioned_papers:
             title = self.corpus.paper_title(paper_id) or ""
             prefix = " ".join(title.split()[:3])
@@ -267,7 +287,7 @@ class Baseline20:
         }}
 
     def _infer_schema(self, state: BaselineState) -> dict[str, Any]:
-        inferred = self.extraction.infer_schema(state["question"], state["passages"])
+        inferred = self.extraction.infer_schema(self._research_question(state), state["passages"])
         self._emit(
             "Inferring schema",
             f"{len(inferred.classes)} classes · {len(inferred.properties)} properties",
@@ -283,17 +303,17 @@ class Baseline20:
             batch_size = 2
             for start in range(0, len(state["passages"]), max(1, batch_size)):
                 extraction, batch_reports = self.extraction.extract_edc(
-                    state["question"], state["inferred"], state["passages"][start : start + batch_size]
+                    self._research_question(state), state["inferred"], state["passages"][start : start + batch_size]
                 )
                 extracted.extend(extraction.triples)
                 reports.append({"batch": start // max(1, batch_size) + 1, "passages": len(state["passages"][start : start + batch_size]), "edc": batch_reports})
         elif self.enhanced:
             extracted, reports = self.extraction.extract_batches(
-                state["question"], state["inferred"], state["passages"]
+                self._research_question(state), state["inferred"], state["passages"]
             )
         else:
             extracted = self.extraction.extract(
-                state["question"], state["inferred"], state["passages"]
+                self._research_question(state), state["inferred"], state["passages"]
             ).triples
             reports = []
         if not extracted:
@@ -355,7 +375,7 @@ class Baseline20:
             raise NoResults("extraction contained no valid supported propositions")
         if self.refine:
             extracted, review = self.extraction.refine_triples(
-                state["question"], extracted, state["passages"], reviewer=self.refinement_model
+                self._research_question(state), extracted, state["passages"], reviewer=self.refinement_model
             )
             reports.append({"stage": "evidence_review", **review})
             if not extracted:
@@ -427,7 +447,7 @@ class Baseline20:
                 )
                 return {"answer": answer, "extracted": selected}
         answer = self.extraction.answer(
-            state["question"], state["inferred"], state["extracted"],
+            self._research_question(state), state["inferred"], state["extracted"],
             verify=self.refine, verifier=self.refinement_model,
         )
         try:
@@ -771,59 +791,26 @@ class Baseline20:
             cited_source_ids=sources,
         )
 
-    @staticmethod
-    def needs_clarification(question: str) -> bool:
-        text = question.casefold()
-        return bool(re.search(r"\bbest (?:author|paper)\b|\bhardest subset\b", text))
+    def run(
+        self,
+        question: str,
+        budget: str = "fast",
+        run_id: str | None = None,
+        concept: dict[str, Any] | None = None,
+    ) -> BaselineResult:
+        """Answer ``question``; an optional ``concept`` scopes retrieval and extraction.
 
-    def _clarification(self, run_id: str, started_at: datetime, question: str, budget: str) -> BaselineResult:
-        if "author" in question.casefold():
-            options = (
-                ("Most distinct papers", "Count distinct works authored in the indexed corpus."),
-                ("Most in-corpus citations", "Count citations from other indexed papers."),
-                ("Most reported benchmark results", "Compare supported benchmark claims in indexed papers."),
-            )
-        else:
-            options = (
-                ("Reported benchmark performance", "Compare results on a named benchmark and metric."),
-                ("Methodological difficulty", "Compare the stated task and evaluation constraints."),
-                ("In-corpus evidence coverage", "Compare how much direct evidence the corpus contains."),
-            )
-        options += (("Combine all applicable interpretations", "Report each applicable criterion separately with its evidence."),)
-        readings = [
-            Reading(
-                label=label, gloss=gloss, classes=[], axioms=[], sparql="", answer="",
-                triples=[], metrics=Metrics(), status="proposed",
-            )
-            for label, gloss in options
-        ]
-        self._emit("Clarification required", f"{len(readings)} criteria offered before retrieval")
-        path = "baseline-enhanced" if self.enhanced else "baseline"
-        run = Run(
-            id=run_id, startedAt=started_at,
-            durationS=round(time.monotonic() - self.started, 3),
-            question=question, path=path, budget=budget,
-            status="awaiting_reading", readings=readings, chosenReading=None,
-            trace=self.trace, modelSmall=getattr(self.extraction.model, "model", "recorded"),
-            artifacts=list(required_artifacts(path)),
-        )
-        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
-        artifacts["trace.json"] = json.dumps(
-            [row.model_dump(by_alias=True) for row in self.trace], indent=2
-        ).encode()
-        artifacts["answer.md"] = b"Choose a criterion to continue the research."
-        if self.enhanced:
-            artifacts["retrieval.json"] = b'{"queries": [], "stop_reason": "awaiting_reading"}'
-        return {"run": run, "artifacts": artifacts}
-
-    def run(self, question: str, budget: str = "fast", run_id: str | None = None) -> BaselineResult:
+        The question text is never rewritten. A concept (label, gloss, classes,
+        search_terms) chosen by the user on the agentic path is structured input:
+        its search terms widen retrieval, its description ranks evidence, and it
+        is given to the extraction model as the research interpretation.
+        """
         run_id = run_id or f"r-{uuid.uuid4().hex[:8]}"
         started_at = datetime.now(UTC)
         self.started = time.monotonic()
         self.current_run_id = run_id
         self.trace = []
-        if self.needs_clarification(question):
-            return self._clarification(run_id, started_at, question, budget)
+        self.concept = concept or None
         try:
             lookup_started = time.monotonic()
             direct, triples = self._direct_metadata_answer({"question": question, "extracted": []})
@@ -848,7 +835,7 @@ class Baseline20:
             elif direct is not None:
                 raise NoResults("No in-corpus evidence found for a supported answer.")
             else:
-                state = self.graph.invoke({"question": question})
+                state = self.graph.invoke({"question": question, "concept": self.concept})
             run, artifacts = self._success(run_id, started_at, question, budget, state)
         except CorpusAbsent as exc:
             run, artifacts = self._absence(run_id, started_at, question, budget, exc)

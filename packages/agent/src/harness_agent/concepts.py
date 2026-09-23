@@ -123,9 +123,14 @@ def propose_concepts(
     maximum = int(os.getenv("READINGS_MAX", MAX_CONCEPTS))
     minimum, maximum = max(MIN_CONCEPTS, minimum), min(MAX_CONCEPTS, max(maximum, MIN_CONCEPTS))
     system = SYSTEM_PROMPT.format(min=minimum, max=maximum)
-    user = json.dumps({"question": question, "allowed_classes": sorted(allowed_classes)})
     last_error = "no concepts returned"
-    for _ in range(attempts):
+    request: dict[str, Any] = {"question": question, "allowed_classes": sorted(allowed_classes)}
+    for attempt in range(attempts):
+        if attempt:
+            # Tell the model what was wrong instead of repeating an identical
+            # deterministic request.
+            request["previous_attempt_problem"] = last_error
+        user = json.dumps(request)
         try:
             concepts = _parse(complete(system, user), allowed_classes)
         except Exception as exc:  # noqa: BLE001 - provider errors are reported below

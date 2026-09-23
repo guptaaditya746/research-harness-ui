@@ -6,7 +6,6 @@ import asyncio
 import json
 import logging
 import os
-import re
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -14,6 +13,7 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
+from time import monotonic
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
@@ -26,7 +26,13 @@ from harness_extraction import ExtractionEngine, OpenAICompatibleModel
 from harness_observability import hello_span, run_observation
 from harness_observability import init as init_observability
 from harness_runs import ArtifactStore, ClaimStore, GoldCandidateStore, RelationRegistry
-from harness_schema.models import EvaluationSnapshot, Run, TraceRow, required_artifacts
+from harness_schema.models import (
+    ConceptChoice,
+    EvaluationSnapshot,
+    Run,
+    TraceRow,
+    required_artifacts,
+)
 from harness_semantic import hand_written_subschema
 from pydantic import BaseModel, ConfigDict
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -43,6 +49,24 @@ MODEL_SLOT = threading.BoundedSemaphore(
 LOGGER = logging.getLogger(__name__)
 
 
+class RunCancelled(BaseException):
+    """Cooperative cancellation raised from a run's trace sink.
+
+    It derives from BaseException so the research pipeline's broad
+    ``except Exception`` handlers cannot swallow it and keep working.
+    """
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def run_deadline_seconds(path: str, budget: str) -> float:
+    """Hard wall-clock limit for one run, independent of per-call timeouts."""
+    default = {"fast": 300.0, "slow": 900.0}[budget]
+    return float(os.getenv(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default))
+
+
 class RunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str
@@ -51,7 +75,8 @@ class RunRequest(BaseModel):
     evaluation_mode: bool = False
     snapshot: EvaluationSnapshot | None = None
     # Agent-proposed concept chosen by the user; required before agentic research.
-    concept: dict | None = None
+    concept: ConceptChoice | None = None
+    parent_run_id: str | None = None
 
 
 class RatingRequest(BaseModel):
@@ -102,6 +127,9 @@ class BenchmarkExecuteRequest(BaseModel):
     budget: str = "slow"
     repetitions: int = 3
     snapshot: EvaluationSnapshot | None = None
+    # Agentic only: the concept to research. When omitted, each repetition lets
+    # the agent propose concepts and researches its top-ranked grounded one.
+    concept: ConceptChoice | None = None
 
 
 class SettingsUpdate(BaseModel):
@@ -137,6 +165,7 @@ class RunRuntime:
         self.stop_requested: set[str] = set()
         self.settings = {"baseline": "fast", "agentic": "slow"}
         self.fixture_overrides: dict[str, Run] = {}
+        self.picks: dict[str, tuple[str, int, ConceptChoice]] = {}
         self.lock = threading.RLock()
 
     def _runner(
@@ -179,50 +208,50 @@ class RunRuntime:
         with self.lock:
             self.events[run_id] = []
             self.running.add(run_id)
+        deadline = monotonic() + run_deadline_seconds(request.path, request.budget)
+        question = request.question.strip()
+
+        def check_cancelled() -> None:
+            with self.lock:
+                stopped = run_id in self.stop_requested
+            if stopped:
+                raise RunCancelled("stopped")
+            if monotonic() > deadline:
+                raise RunCancelled("deadline_exceeded")
 
         def sink(row: TraceRow) -> None:
             with self.lock:
                 self.events[run_id].append(row)
+            # Every pipeline stage reports through the sink, so this is where a
+            # stop request or the run deadline takes effect.
+            check_cancelled()
+
+        def acquire(*slots: threading.BoundedSemaphore) -> list[threading.BoundedSemaphore]:
+            held: list[threading.BoundedSemaphore] = []
+            announced = False
+            try:
+                for slot in slots:
+                    while not slot.acquire(timeout=0.5):
+                        if not announced:
+                            announced = True
+                            with self.lock:
+                                self.events[run_id].append(TraceRow(
+                                    atS=0.0, action="Queued for model capacity",
+                                    returned="waiting for an earlier run to finish",
+                                ))
+                        check_cancelled()
+                    held.append(slot)
+            except BaseException:
+                for slot in held:
+                    slot.release()
+                raise
+            return held
 
         def execute() -> None:
+            result: dict | None = None
             try:
-                with run_observation(run_id, request.question.strip(), request.path, request.budget) as observation:
-                    if request.path == "agentic" and not self.custom_runner:
-                        # Granite is configured with a native tool-call parser
-                        # and controls the MCP research loop. Qwen remains the
-                        # shared claim-construction model used by the baseline.
-                        high_model = os.getenv("HARNESS_MODEL_AGENT", "lite-model")
-                        agent_timeout = float(
-                            os.getenv(
-                                "BUDGET_AGENTIC_SLOW_SECONDS"
-                                if request.budget == "slow"
-                                else "BUDGET_AGENTIC_FAST_SECONDS",
-                                "120" if request.budget == "slow" else "45",
-                            )
-                        )
-                        agent_model = OpenAICompatibleModel(
-                            model=high_model,
-                            timeout_s=agent_timeout,
-                        )
-                        baseline = self._runner(
-                            sink, True, refinement_model=agent_model
-                        )
-                        runner = AgenticResearch(baseline, sink, agent_model=agent_model)
-                    else:
-                        runner = self.runner_factory(sink) if self.custom_runner else self._runner(
-                            sink, request.path == "baseline-enhanced"
-                        )
-                    run_kwargs = {"concept": request.concept} if request.concept else {}
-                    if request.path == "agentic" and not self.custom_runner:
-                        with HEAVY_MODEL_SLOT, MODEL_SLOT:
-                            result = runner.run(
-                                request.question.strip(), request.budget, run_id, **run_kwargs
-                            )
-                    else:
-                        with MODEL_SLOT:
-                            result = runner.run(
-                                request.question.strip(), request.budget, run_id, **run_kwargs
-                            )
+                with run_observation(run_id, question, request.path, request.budget) as observation:
+                    result = self._execute(request, question, run_id, sink, acquire)
                     if observation is not None:
                         observation.update(
                             output={
@@ -234,6 +263,7 @@ class RunRuntime:
                 run = result["run"].model_copy(update={
                     "evaluation_mode": request.evaluation_mode,
                     "snapshot": request.snapshot,
+                    "parent_run_id": request.parent_run_id,
                 })
                 result["run"] = run
                 with self.lock:
@@ -244,41 +274,115 @@ class RunRuntime:
                 self.artifacts.finalize(run, result["artifacts"])
                 if run.status == "answered" and run.chosen_reading is not None:
                     self.claims.upsert(run.readings[run.chosen_reading].claims)
+            except RunCancelled as cancelled:
+                stopped = cancelled.reason == "stopped"
+                with self.lock:
+                    self.events[run_id].append(TraceRow(
+                        atS=0.0,
+                        action="Run stopped" if stopped else "Run deadline exceeded",
+                        returned="stopped by user" if stopped
+                        else f"exceeded {run_deadline_seconds(request.path, request.budget):.0f}s",
+                    ))
+                self._finalize_terminal(
+                    request, question, run_id,
+                    status="stopped" if stopped else "incomplete",
+                    reason=None if stopped else "deadline_exceeded",
+                    message="Run stopped." if stopped else "Run exceeded its time limit.",
+                )
             except Exception as exc:
                 LOGGER.exception("Run %s failed unexpectedly", run_id)
-                row = TraceRow(atS=0.0, action="Run incomplete", returned="internal_error")
-                sink(row)
-                failed = Run(
-                    id=run_id,
-                    startedAt=datetime.now(UTC),
-                    durationS=0.0,
-                    question=request.question.strip(),
-                    path=request.path,
-                    budget=request.budget,
-                    status="incomplete",
-                    reason="internal_error",
-                    trace=self.events[run_id],
-                    artifacts=list(required_artifacts(request.path)),
-                )
-                self.artifacts.finalize(
-                    failed,
-                    {
-                        "answer.md": f"Run failed unexpectedly: {type(exc).__name__}".encode(),
-                        "trace.json": json.dumps(
-                            [item.model_dump(by_alias=True) for item in self.events[run_id]]
-                        ).encode(),
-                    },
+                with self.lock:
+                    self.events[run_id].append(
+                        TraceRow(atS=0.0, action="Run incomplete", returned="internal_error")
+                    )
+                self._finalize_terminal(
+                    request, question, run_id, status="incomplete", reason="internal_error",
+                    message=f"Run failed unexpectedly: {type(exc).__name__}",
                 )
             finally:
                 with self.lock:
                     self.running.discard(run_id)
                     self.stop_requested.discard(run_id)
 
-        threading.Thread(target=execute, name=f"baseline-{run_id}", daemon=True).start()
+        threading.Thread(target=execute, name=f"run-{run_id}", daemon=True).start()
         return run_id
+
+    def _execute(self, request: RunRequest, question: str, run_id: str, sink, acquire) -> dict:
+        """Run one request, holding model slots only while research runs."""
+        if request.path != "agentic" or self.custom_runner:
+            runner = self.runner_factory(sink) if self.custom_runner else self._runner(
+                sink, request.path == "baseline-enhanced"
+            )
+            kwargs = {"concept": request.concept} if request.concept else {}
+            held = acquire(MODEL_SLOT)
+            try:
+                return runner.run(question, request.budget, run_id, **kwargs)
+            finally:
+                for slot in held:
+                    slot.release()
+
+        # Granite is configured with a native tool-call parser and controls
+        # proposal and the MCP research loop. Qwen remains the shared
+        # claim-construction model used by the baseline pipeline.
+        agent_timeout = float(os.getenv(
+            "BUDGET_AGENTIC_SLOW_SECONDS" if request.budget == "slow" else "BUDGET_AGENTIC_FAST_SECONDS",
+            "120" if request.budget == "slow" else "45",
+        ))
+        agent_model = OpenAICompatibleModel(
+            model=os.getenv("HARNESS_MODEL_AGENT", "lite-model"), timeout_s=agent_timeout,
+        )
+        baseline = self._runner(sink, True, refinement_model=agent_model)
+        runner = AgenticResearch(baseline, sink, agent_model=agent_model)
+        concept = request.concept
+        proposal: dict | None = None
+        if concept is None:
+            # One short planning call: it needs no research slot, so it never
+            # waits behind another user's long-running research.
+            proposal = runner.propose(question, request.budget, run_id)
+            if not request.evaluation_mode or proposal["run"].status != "awaiting_reading":
+                return proposal
+            # Evaluation runs are unattended: research the agent's top-ranked
+            # grounded concept and record that it was selected automatically.
+            concept = proposal["run"].concepts[0].model_copy(update={"auto_selected": True})
+            sink(TraceRow(atS=0.0, action="Concept auto-selected for evaluation",
+                          returned=concept.label))
+        held = acquire(HEAVY_MODEL_SLOT, MODEL_SLOT)
+        try:
+            result = runner.run(question, request.budget, run_id, concept=concept)
+        finally:
+            for slot in held:
+                slot.release()
+        if proposal is not None:
+            result["run"] = result["run"].model_copy(update={"concepts": proposal["run"].concepts})
+            result["artifacts"]["plans.json"] = proposal["artifacts"]["plans.json"]
+        return result
+
+    def _finalize_terminal(
+        self, request: RunRequest, question: str, run_id: str, *,
+        status: str, reason: str | None, message: str,
+    ) -> None:
+        with self.lock:
+            trace = list(self.events.get(run_id, []))
+        run = Run(
+            id=run_id, startedAt=datetime.now(UTC), durationS=0.0, question=question,
+            path=request.path, budget=request.budget, status=status, reason=reason,
+            trace=trace, concept=request.concept, parentRunId=request.parent_run_id,
+            evaluationMode=request.evaluation_mode, snapshot=request.snapshot,
+            artifacts=list(required_artifacts(request.path)),
+        )
+        try:
+            self.artifacts.finalize(run, {
+                "answer.md": message.encode(),
+                "trace.json": json.dumps([item.model_dump(by_alias=True) for item in trace]).encode(),
+            })
+        except Exception:
+            LOGGER.exception("Could not persist terminal state for run %s", run_id)
 
     def list(self) -> list[Run]:
         live = self.artifacts.list_runs()
+        if os.getenv("HARNESS_INCLUDE_FIXTURES", "true").casefold() in {"0", "false", "no"}:
+            # Live deployments list only real runs; fixture ids stay readable.
+            return live
         live_ids = {run.id for run in live}
         fixtures = [self.fixture_overrides.get(run.id, run) for run in fixture_runs()]
         return live + [run for run in fixtures if run.id not in live_ids]
@@ -314,26 +418,28 @@ class RunRuntime:
             raise ValueError("run is not waiting for a reading")
         if index < 0 or index >= len(run.readings):
             raise ValueError("reading index is out of range")
-        reading = run.readings[index]
-        if "best author" in run.question.casefold() and reading.label == "Most distinct papers":
-            clarified = "Which author appears on the most distinct papers in the corpus?"
-        else:
-            topic = re.sub(
-                r"\bbest (?:author|paper)\b|\bhardest subset\b",
-                "ranked subject", run.question, flags=re.IGNORECASE,
-            )
-            clarified = f"{topic} Use this criterion: {reading.label}. {reading.gloss}"
-        concept = (
-            {"label": reading.label, "gloss": reading.gloss, "classes": reading.classes}
-            if run.path == "agentic" else None
-        )
-        selected_id = self.start(RunRequest(
-            question=clarified, path=run.path, budget=run.budget, concept=concept
-        ))
+        with self.lock:
+            existing = self.picks.get(run_id)
+            if existing is None:
+                reading = run.readings[index]
+                concept = (
+                    run.concepts[index] if index < len(run.concepts)
+                    else ConceptChoice(label=reading.label, gloss=reading.gloss,
+                                       classes=reading.classes)
+                )
+                # The question is kept verbatim; the concept is passed as
+                # structured input so routing, matching and gold lookup all
+                # see the user's actual question.
+                child_id = self.start(RunRequest(
+                    question=run.question, path=run.path, budget=run.budget,
+                    concept=concept, parent_run_id=run.id,
+                    evaluation_mode=run.evaluation_mode, snapshot=run.snapshot,
+                ))
+                existing = self.picks[run_id] = (child_id, index, concept)
+        child_id, picked, concept = existing
         return run.model_copy(update={
-            "id": selected_id, "question": clarified,
-            "started_at": datetime.now(UTC), "duration_s": 0.0,
-            "chosen_reading": index,
+            "id": child_id, "started_at": datetime.now(UTC), "duration_s": 0.0,
+            "chosen_reading": picked, "concept": concept, "parent_run_id": run.id,
         })
 
     def stop(self, run_id: str) -> Run | None:
@@ -536,10 +642,16 @@ def benchmark(category: str | None = None) -> dict:
             if candidate.get("snapshot") is not None:
                 matching = [run for run in matching if run.snapshot and
                             run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]]
-            evaluations = [
-                evaluate_run(run, candidate.get("gold_triples", []), candidate.get("gold_claims"))
-                for run in matching if run.status == "answered"
-            ]
+            evaluations = []
+            for run in matching:
+                if run.status != "answered":
+                    continue
+                try:
+                    evaluations.append(evaluate_run(
+                        run, candidate.get("gold_triples", []), candidate.get("gold_claims")
+                    ))
+                except (ValueError, TypeError, KeyError) as exc:
+                    LOGGER.warning("Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc)
             eligible = [result for result in evaluations if result["eligible_for_path_score"]]
             scores = [result["chosen"] for result in eligible if result["chosen"] is not None]
             claim_scores = [
@@ -601,7 +713,8 @@ def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
     )
     ids = [
         runtime.start(RunRequest(question=request.question, path=request.path, budget=request.budget,
-                                 evaluation_mode=True, snapshot=snapshot))
+                                 evaluation_mode=True, snapshot=snapshot,
+                                 concept=request.concept if request.path == "agentic" else None))
         for _ in range(request.repetitions)
     ]
     return {"ids": ids, "repetitions": request.repetitions, "evaluation_mode": True,

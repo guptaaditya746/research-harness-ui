@@ -47,7 +47,14 @@ def test_reading_selection_starts_a_new_criterion_run(tmp_path: Path, monkeypatc
     assert selected.id == "r-selected"
     assert selected.status == "awaiting_reading"
     assert selected.chosen_reading == 0
-    assert submitted[0].question == "Which author appears on the most distinct papers in the corpus?"
+    # The question is never rewritten; the chosen concept travels alongside it.
+    assert submitted[0].question == "Who is the best author in the corpus?"
+    assert submitted[0].concept.label == "Most distinct papers"
+    assert submitted[0].parent_run_id == "r-ambiguous"
+    assert selected.parent_run_id == "r-ambiguous"
+    # A second pick (double click) does not start another run.
+    assert test_runtime.pick_reading("r-ambiguous", 0).id == "r-selected"
+    assert len(submitted) == 1
     assert test_runtime.get("r-ambiguous").status == "awaiting_reading"
 
 
@@ -191,3 +198,72 @@ def test_benchmark_execute_validates_and_launches_repetitions(tmp_path: Path, mo
     assert response.status_code == 202
     assert response.json()["evaluation_mode"] is True
     assert len(response.json()["ids"]) == 3
+
+
+class SlowRunner:
+    """Emits a trace row every 20 ms for ~10 s, like a long research run."""
+
+    def __init__(self, sink) -> None:
+        self.sink = sink
+
+    def run(self, question: str, budget: str, run_id: str):
+        for step in range(500):
+            self.sink(TraceRow(atS=step * 0.02, action="Working", returned=str(step)))
+            time.sleep(0.02)
+        raise AssertionError("run should have been cancelled")
+
+
+def _wait_terminal(runtime: RunRuntime, run_id: str, limit: float = 5.0) -> Run:
+    deadline = time.monotonic() + limit
+    while time.monotonic() < deadline:
+        if run_id not in runtime.running:
+            return runtime.get(run_id)
+        time.sleep(0.02)
+    raise AssertionError("run did not reach a terminal state")
+
+
+def test_stop_cancels_a_running_run_and_frees_its_slot(tmp_path: Path) -> None:
+    runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets", runner_factory=SlowRunner)
+    run_id = runtime.start(main.RunRequest(question="Q?", path="baseline", budget="fast"))
+    time.sleep(0.1)
+    started = time.monotonic()
+    runtime.stop(run_id)
+    run = _wait_terminal(runtime, run_id)
+    assert time.monotonic() - started < 1.0
+    assert run.status == "stopped"
+    assert run.trace[-1].action == "Run stopped"
+    # Both model slots are free again.
+    assert main.MODEL_SLOT.acquire(timeout=0.1)
+    main.MODEL_SLOT.release()
+
+
+def test_run_deadline_ends_run_as_incomplete(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_RUN_DEADLINE_FAST_S", "0.2")
+    runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets", runner_factory=SlowRunner)
+    run_id = runtime.start(main.RunRequest(question="Q?", path="baseline", budget="fast"))
+    run = _wait_terminal(runtime, run_id)
+    assert run.status == "incomplete"
+    assert run.reason == "deadline_exceeded"
+
+
+def test_corrupt_run_file_does_not_hide_other_runs(tmp_path: Path) -> None:
+    runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
+    good = Run(id="r-good", startedAt=datetime.now(UTC), durationS=0.0, question="Q?",
+               path="baseline", budget="fast", status="stopped",
+               artifacts=list(required_artifacts("baseline")))
+    runtime.artifacts.finalize(good, {})
+    bad = tmp_path / "artifacts" / "r-bad"
+    bad.mkdir(parents=True)
+    (bad / "run.json").write_text("{not json")
+    assert [run.id for run in runtime.artifacts.list_runs()] == ["r-good"]
+
+
+def test_malformed_gold_claims_are_rejected_at_write_time(tmp_path: Path) -> None:
+    runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
+    runtime.gold._write([{"id": "gold-1", "question": "Q?", "status": "draft"}])
+    try:
+        runtime.gold.update("gold-1", {"gold_claims": [{"id": "c1"}]})
+    except ValueError as exc:
+        assert "gold_claims[0]" in str(exc)
+    else:
+        raise AssertionError("malformed gold claim was accepted")
