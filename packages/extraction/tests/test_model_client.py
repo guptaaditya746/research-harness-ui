@@ -57,9 +57,11 @@ def test_timeouts_are_not_retried(monkeypatch) -> None:
         raise httpx.ReadTimeout("slow")
     seen = use_transport(monkeypatch, slow)
     events: list[tuple[str, str]] = []
-    with model_events(lambda action, detail: events.append((action, detail))):
-        with pytest.raises(ModelFailure, match="timed out"):
-            OpenAICompatibleModel(model="heavy-model").complete_json("s", "u")
+    with (
+        model_events(lambda action, detail: events.append((action, detail))),
+        pytest.raises(ModelFailure, match="timed out"),
+    ):
+        OpenAICompatibleModel(model="heavy-model").complete_json("s", "u")
     assert len(seen) == 1
     assert events[-1][0] == "Model call failed"
 
