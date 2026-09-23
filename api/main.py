@@ -335,9 +335,9 @@ class RunRuntime:
                 for slot in held:
                     slot.release()
 
-        # Granite is configured with a native tool-call parser and controls
-        # proposal and the MCP research loop. Qwen remains the shared
-        # claim-construction model used by the baseline pipeline.
+        # The lite model controls MCP tool use. The high-quality model handles
+        # concept interpretation and evidence review; the small model remains
+        # responsible for claim construction in the shared baseline pipeline.
         agent_timeout = float(os.getenv(
             "BUDGET_AGENTIC_SLOW_SECONDS" if request.budget == "slow" else "BUDGET_AGENTIC_FAST_SECONDS",
             "120" if request.budget == "slow" else "45",
@@ -345,8 +345,13 @@ class RunRuntime:
         agent_model = OpenAICompatibleModel(
             model=os.getenv("HARNESS_MODEL_AGENT", "lite-model"), timeout_s=agent_timeout,
         )
-        baseline = self._runner(sink, True, refinement_model=agent_model)
-        runner = AgenticResearch(baseline, sink, agent_model=agent_model)
+        high_model = OpenAICompatibleModel(
+            model=os.getenv("HARNESS_MODEL_HIGH", "heavy-model"), timeout_s=agent_timeout,
+        )
+        baseline = self._runner(sink, True, refinement_model=high_model)
+        runner = AgenticResearch(
+            baseline, sink, agent_model=agent_model, high_model=high_model,
+        )
         concept = request.concept
         proposal: dict | None = None
         if concept is None:

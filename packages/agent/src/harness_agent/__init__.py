@@ -34,10 +34,12 @@ class AgenticResearch:
         baseline: Baseline20,
         trace_sink: Callable[[TraceRow], None] | None = None,
         agent_model: object | None = None,
+        high_model: object | None = None,
     ):
         self.baseline = baseline
         self.trace_sink = trace_sink or (lambda _: None)
         self.agent_model = agent_model or baseline.extraction.model
+        self.high_model = high_model or self.agent_model
 
     def run(
         self, question: str, budget: str, run_id: str,
@@ -365,7 +367,7 @@ class AgenticResearch:
         model_name = getattr(self.agent_model, "model", "recorded")
         try:
             concepts = propose_concepts(
-                self.agent_model, question, self._allowed_classes(),
+                self.high_model, question, self._allowed_classes(),
                 corpus=getattr(self.baseline, "corpus", None),
             )
         except ConceptProposalError as exc:
