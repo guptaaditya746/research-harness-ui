@@ -1,5 +1,11 @@
-from harness_extraction.claims import build_claims, classify_claim_relations, derive_query_claim, enrich_result_claims, valid_edge
 from harness_extraction import ExtractionEngine
+from harness_extraction.claims import (
+    build_claims,
+    classify_claim_relations,
+    derive_query_claim,
+    enrich_result_claims,
+    valid_edge,
+)
 from harness_schema.models import Triple
 from harness_semantic import hand_written_subschema
 from rdflib import URIRef
@@ -63,7 +69,7 @@ def test_dynamic_relation_is_added_to_the_run_subschema() -> None:
 
 
 def test_matching_material_context_confirms_a_numeric_conflict() -> None:
-    claims, relations = build_claims([
+    claims, _relations = build_claims([
         triple("41.5% success rate on CALVIN in Standard setting", "p4-results"),
         triple("18.6% success rate on CALVIN in Standard setting", "p4-abstract"),
     ], lambda _source, _subject: "paper-p4")

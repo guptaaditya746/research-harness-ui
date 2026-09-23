@@ -36,7 +36,7 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def claim_terms(claim: dict[str, Any]) -> tuple[str, dict[str, list[str]]]:
         fields = claim.get("fields", claim)
         if not isinstance(fields, dict):
-            raise ValueError("claim must be an object or contain a fields object")
+            raise ValueError("claim must be an object or contain a fields object")  # noqa: TRY004
         terms_by_field: dict[str, list[str]] = {}
         for name, value in fields.items():
             if isinstance(value, dict):

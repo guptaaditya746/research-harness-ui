@@ -43,7 +43,7 @@ harness-evaluation = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["api"]
-testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "api/tests"]
+testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "packages/agent/tests", "packages/evaluation/tests", "api/tests"]
 
 [tool.ruff]
 line-length = 100
