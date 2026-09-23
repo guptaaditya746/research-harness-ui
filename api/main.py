@@ -351,8 +351,8 @@ class RunRuntime:
                 for slot in held:
                     slot.release()
 
-        # Temporary diagnostic routing: use the lite alias for every Agentic
-        # model role so a single run can isolate model latency from MCP issues.
+        # Granite handles the MCP tool loop; the configured heavy model handles
+        # concept interpretation, structured extraction, and refinement.
         agent_timeout = float(os.getenv(
             "BUDGET_AGENTIC_SLOW_SECONDS" if request.budget == "slow" else "BUDGET_AGENTIC_FAST_SECONDS",
             "120" if request.budget == "slow" else "45",
@@ -360,10 +360,16 @@ class RunRuntime:
         agent_model = OpenAICompatibleModel(
             model=os.getenv("HARNESS_MODEL_AGENT", "lite-model"), timeout_s=agent_timeout,
         )
-        high_model = agent_model
+        high_model = OpenAICompatibleModel(
+            model=os.getenv("HARNESS_MODEL_HIGH", "heavy-model"), timeout_s=agent_timeout,
+        )
+        baseline_model = os.getenv("HARNESS_MODEL_SMALL", "heavy-model")
+        refinement_model = OpenAICompatibleModel(
+            model=os.getenv("HARNESS_MODEL_JUDGE", "heavy-model"), timeout_s=agent_timeout,
+        )
         baseline = self._runner(
-            sink, True, model_name=agent_model.model, timeout_s=agent_timeout,
-            refinement_model=agent_model, schema_model=agent_model,
+            sink, True, model_name=baseline_model, timeout_s=agent_timeout,
+            refinement_model=refinement_model, schema_model=high_model,
         )
         runner = AgenticResearch(
             baseline, sink, agent_model=agent_model, high_model=high_model,

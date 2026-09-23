@@ -1,6 +1,7 @@
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import main
 from fastapi.testclient import TestClient
@@ -56,6 +57,53 @@ def test_reading_selection_starts_a_new_criterion_run(tmp_path: Path, monkeypatc
     assert test_runtime.pick_reading("r-ambiguous", 0).id == "r-selected"
     assert len(submitted) == 1
     assert test_runtime.get("r-ambiguous").status == "awaiting_reading"
+
+
+def test_agentic_routes_mcp_to_lite_and_quality_roles_to_heavy(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    monkeypatch.setenv("HARNESS_MODEL_AGENT", "lite-model")
+    monkeypatch.setenv("HARNESS_MODEL_SMALL", "heavy-model")
+    monkeypatch.setenv("HARNESS_MODEL_HIGH", "heavy-model")
+    monkeypatch.setenv("HARNESS_MODEL_JUDGE", "heavy-model")
+    test_runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
+    models = []
+    captured = {}
+
+    class FakeModel:
+        def __init__(self, model: str, timeout_s: float) -> None:
+            self.model = model
+            self.timeout_s = timeout_s
+            models.append(self)
+
+    class FakeAgenticResearch:
+        def __init__(self, baseline, sink, agent_model, high_model) -> None:
+            captured["agent_model"] = agent_model
+            captured["high_model"] = high_model
+
+        def propose(self, question: str, budget: str, run_id: str) -> dict:
+            return {"run": SimpleNamespace(status="incomplete"), "marker": "proposal"}
+
+    def fake_runner(sink, enhanced: bool = False, **kwargs):
+        captured["runner_args"] = {"enhanced": enhanced, **kwargs}
+        return object()
+
+    monkeypatch.setattr(main, "OpenAICompatibleModel", FakeModel)
+    monkeypatch.setattr(main, "AgenticResearch", FakeAgenticResearch)
+    monkeypatch.setattr(test_runtime, "_runner", fake_runner)
+
+    result = test_runtime._execute(
+        main.RunRequest(question="Q?", path="agentic", budget="fast"),
+        "Q?", "r-routing", lambda _: None, lambda _: [],
+    )
+
+    assert result["marker"] == "proposal"
+    assert captured["agent_model"].model == "lite-model"
+    assert captured["high_model"].model == "heavy-model"
+    runner_args = captured["runner_args"]
+    assert runner_args["model_name"] == "heavy-model"
+    assert runner_args["schema_model"].model == "heavy-model"
+    assert runner_args["refinement_model"].model == "heavy-model"
 
 
 class FakeRunner:
