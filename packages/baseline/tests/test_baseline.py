@@ -161,3 +161,39 @@ def test_malformed_model_query_uses_verified_triple_predicate(tmp_path: Path) ->
     assert "<https://harness.local/schema#reportsMetric>" in answer.sparql
     assert "41.5%" in answer.answer
     assert any(row.action == "Repairing graph query" for row in runner.trace)
+
+
+def test_year_and_venue_use_verified_corpus_facts(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    store.fact_rows.extend([
+        {"fact_id": "p4-year", "subject": "p4", "predicate": "year", "object": "2025", "source_id": "p4-metadata"},
+        {"fact_id": "p4-venue", "subject": "p4", "predicate": "venue", "object": "Advanced Robotics", "source_id": "p4-metadata"},
+    ])
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+
+    year = runner.run("In what year was Video Prediction Policy published?")["run"]
+    venue = runner.run("In which venue was Video Prediction Policy published?")["run"]
+
+    assert year.status == venue.status == "answered"
+    assert [(item.p, item.o) for item in year.readings[0].triples] == [("year", "2025")]
+    assert [(item.p, item.o) for item in venue.readings[0].triples] == [("venue", "Advanced Robotics")]
+
+
+def test_resolved_citation_count_and_year_aggregation(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    store.by_paper["p5"] = {"paper_id": "p5", "title": "Another Robot Paper", "year": 2025}
+    store.fact_rows.extend([
+        {"fact_id": "p4-year", "subject": "p4", "predicate": "year", "object": "2025", "source_id": "p4-metadata"},
+        {"fact_id": "p5-year", "subject": "p5", "predicate": "year", "object": "2025", "source_id": "p5-metadata"},
+    ])
+    store.references.append({"reference_id": "p5-ref-1", "paper_id": "p5", "title": "Video Prediction Policy", "resolved_paper_id": "p4"})
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+
+    count = runner.run("How many indexed papers cite Video Prediction Policy?")["run"]
+    years = runner.run("How many papers in the corpus were published in 2025?")["run"]
+
+    assert count.status == years.status == "answered"
+    assert "1 indexed papers cite" in count.readings[0].answer
+    assert [(item.p, item.o) for item in count.readings[0].triples] == [("cites", "p4")]
+    assert "2 corpus papers" in years.readings[0].answer
+    assert len(years.readings[0].triples) == 2

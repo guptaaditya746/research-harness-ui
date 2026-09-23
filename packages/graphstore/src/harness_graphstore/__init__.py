@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -14,6 +15,8 @@ from rdflib import OWL, PROV, RDF, RDFS, Dataset, Graph, Literal, URIRef
 from rdflib.plugins.sparql import prepareQuery
 from rdflib.plugins.sparql.parserutils import CompValue
 from rdflib.term import Node
+
+_SPARQL_PARSE_LOCK = threading.Lock()
 
 
 class InvariantViolation(ValueError):
@@ -140,7 +143,10 @@ def _walk(value: Any) -> Iterable[Any]:
 
 
 def _query_patterns(query: str) -> list[tuple[Any, Any, Any]]:
-    prepared = prepareQuery(query)
+    # rdflib/pyparsing shares parser state across calls. Concurrent run threads
+    # otherwise corrupt its parse actions and reject valid queries.
+    with _SPARQL_PARSE_LOCK:
+        prepared = prepareQuery(query)
     patterns: list[tuple[Any, Any, Any]] = []
     for value in _walk(prepared.algebra):
         if isinstance(value, CompValue) and value.name == "BGP":

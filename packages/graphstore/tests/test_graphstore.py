@@ -69,6 +69,17 @@ def test_invariant_3_rejects_unknown_predicate_and_class() -> None:
         sparql_check("SELECT ?s WHERE { ?s a <https://example.test/UnknownClass> }", schema)
 
 
+def test_concurrent_sparql_validation_is_stable() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    schema = hand_written_subschema()
+    query = "SELECT ?s ?o WHERE { ?s <https://harness.local/schema#year> ?o . }"
+    with ThreadPoolExecutor(max_workers=8) as workers:
+        checked = list(workers.map(lambda _: sparql_check(query, schema), range(32)))
+
+    assert all("SELECT ?s ?o" in item for item in checked)
+
+
 def test_query_analysis_builds_structural_ledger_from_domain_facts() -> None:
     query = """PREFIX hrn: <https://harness.local/schema#>
     SELECT ?paper WHERE { ?paper hrn:cites <https://harness.local/resource/p17> }"""

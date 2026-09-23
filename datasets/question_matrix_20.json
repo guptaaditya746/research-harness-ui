@@ -1,0 +1,22 @@
+[
+  {"id":"q01","type":"paper_identification","category":"metadata","question":"Which paper introduced Video Prediction Policy?","anchor":"p4","expected":"answer"},
+  {"id":"q02","type":"paper_authorship","category":"metadata","question":"Who authored FOCUS: object-centric world models for robotic manipulation?","anchor":"p6","expected":"answer"},
+  {"id":"q03","type":"publication_year","category":"metadata","question":"In what year was Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations published?","anchor":"p4","expected":"answer"},
+  {"id":"q04","type":"publication_venue","category":"metadata","question":"In which venue was Real-world robot applications of foundation models: a review published?","anchor":"p49","expected":"answer"},
+  {"id":"q05","type":"repeated_author","category":"metadata","question":"Which authors appear on more than one paper in the corpus?","anchor":"facts:author","expected":"answer"},
+  {"id":"q06","type":"incoming_citations_present","category":"citation","question":"Which papers cite DayDreamer: World Models for Physical Robot Learning?","anchor":"p28","expected":"answer"},
+  {"id":"q07","type":"incoming_citations_absent","category":"citation","question":"Which papers cite the Video Prediction Policy paper?","anchor":"p4","expected":"no_in_corpus_evidence"},
+  {"id":"q08","type":"outgoing_citations","category":"citation","question":"Which indexed papers does Dream to Manipulate: Compositional World Models Empowering Robot Imitation Learning with Imagination cite?","anchor":"p47","expected":"answer"},
+  {"id":"q09","type":"citation_count","category":"citation","question":"How many indexed papers cite DayDreamer: World Models for Physical Robot Learning?","anchor":"p28","expected":"answer"},
+  {"id":"q10","type":"citation_verification","category":"citation","question":"Does RISE: Self-Improving Robot Policy with Compositional World Model cite Dream to Manipulate?","anchor":"p50-ref","expected":"answer"},
+  {"id":"q11","type":"year_count","category":"aggregation","question":"How many papers in the corpus were published in 2025?","anchor":"facts:year","expected":"answer"},
+  {"id":"q12","type":"earliest_publication","category":"aggregation","question":"What is the earliest publication year represented in the corpus, and which paper has it?","anchor":"facts:year","expected":"answer"},
+  {"id":"q13","type":"latest_publication","category":"aggregation","question":"Which papers in the corpus were published in the latest publication year?","anchor":"facts:year","expected":"answer"},
+  {"id":"q14","type":"author_ranking","category":"aggregation","question":"Which author appears on the most distinct papers in the corpus?","anchor":"facts:author","expected":"answer"},
+  {"id":"q15","type":"single_numeric_result","category":"synthesis","question":"What improvement did Video Prediction Policy report on CALVIN ABC→D?","anchor":"p4-s2-p6","expected":"answer"},
+  {"id":"q16","type":"numeric_comparison","category":"synthesis","question":"How do Video Prediction Policy's reported 41.5% CALVIN improvement and 31.6% real-world success-rate improvement differ?","anchor":"p4-s2-p6","expected":"answer"},
+  {"id":"q17","type":"method_mechanism","category":"synthesis","question":"How does FOCUS use objects and their interactions in its world model for robotic manipulation?","anchor":"p6-abstract","expected":"answer"},
+  {"id":"q18","type":"reported_limitation","category":"synthesis","question":"What limitation of learning on physical robots does the DayDreamer paper report?","anchor":"p28-s8-p2","expected":"answer"},
+  {"id":"q19","type":"cross_paper_disagreement","category":"synthesis","question":"Do ACROSSVAM1.0 and Video Prediction Policy establish one shared best metric for robotic video prediction?","anchor":"p3,p4","expected":"evidence_bounded_answer"},
+  {"id":"q20","type":"ambiguous_superlative","category":"ambiguity","question":"Who is the best author in the corpus?","anchor":"facts:author","expected":"clarification"}
+]
