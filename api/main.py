@@ -146,7 +146,10 @@ class RunRuntime:
         refinement_model: OpenAICompatibleModel | None = None,
     ) -> Baseline20:
         schema = hand_written_subschema()
-        budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15"))
+        # Qwen is shared by every path for claim construction. Its structured
+        # responses routinely exceed the old 15-second transport deadline;
+        # that limit turned successful research into provider failures.
+        budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "90"))
         model = OpenAICompatibleModel(model=model_name, timeout_s=timeout_s or budget_timeout)
         return Baseline20(
             CorpusStore(Path(os.getenv("CORPUS_ROOT", ROOT / "corpus_data"))),
@@ -378,8 +381,11 @@ runtime = RunRuntime(
 
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
-    if init_observability():
-        hello_span()
+    # Telemetry must not delay API availability when the remote collector is
+    # slow or temporarily unavailable, including during client initialization.
+    asyncio.create_task(
+        asyncio.to_thread(lambda: init_observability() and hello_span())
+    )
     yield
 
 
