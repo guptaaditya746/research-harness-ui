@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from statistics import mean
 
@@ -23,7 +25,7 @@ from harness_extraction import ExtractionEngine, OpenAICompatibleModel
 from harness_observability import hello_span, run_observation
 from harness_observability import init as init_observability
 from harness_runs import ArtifactStore, GoldCandidateStore
-from harness_schema.models import Run, TraceRow
+from harness_schema.models import Run, TraceRow, required_artifacts
 from harness_semantic import hand_written_subschema
 from pydantic import BaseModel, ConfigDict
 from sse_starlette import EventSourceResponse, JSONServerSentEvent
@@ -31,6 +33,13 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 FIXTURES = Path(os.getenv("FIXTURES_DIR", ROOT / "web" / "fixtures"))
+HEAVY_MODEL_SLOT = threading.BoundedSemaphore(
+    int(os.getenv("HARNESS_MAX_CONCURRENT_HEAVY", "1"))
+)
+MODEL_SLOT = threading.BoundedSemaphore(
+    int(os.getenv("HARNESS_MAX_CONCURRENT_RUNS", "2"))
+)
+LOGGER = logging.getLogger(__name__)
 
 
 class RunRequest(BaseModel):
@@ -121,6 +130,7 @@ class RunRuntime:
         enhanced: bool = False,
         model_name: str | None = None,
         timeout_s: float | None = None,
+        refinement_model: OpenAICompatibleModel | None = None,
     ) -> Baseline20:
         schema = hand_written_subschema()
         budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "15"))
@@ -132,6 +142,8 @@ class RunRuntime:
             enhanced=enhanced,
             edc=True,
             trace_sink=sink,
+            refine=enhanced,
+            refinement_model=refinement_model,
         )
 
     def start(self, request: RunRequest) -> str:
@@ -166,19 +178,24 @@ class RunRuntime:
                                 "120" if request.budget == "slow" else "45",
                             )
                         )
-                        baseline = self._runner(
-                            sink, True, model_name=high_model, timeout_s=agent_timeout
-                        )
                         agent_model = OpenAICompatibleModel(
                             model=high_model,
                             timeout_s=agent_timeout,
+                        )
+                        baseline = self._runner(
+                            sink, True, refinement_model=agent_model
                         )
                         runner = AgenticResearch(baseline, sink, agent_model=agent_model)
                     else:
                         runner = self.runner_factory(sink) if self.custom_runner else self._runner(
                             sink, request.path == "baseline-enhanced"
                         )
-                    result = runner.run(request.question.strip(), request.budget, run_id)
+                    if request.path == "agentic" and not self.custom_runner:
+                        with HEAVY_MODEL_SLOT, MODEL_SLOT:
+                            result = runner.run(request.question.strip(), request.budget, run_id)
+                    else:
+                        with MODEL_SLOT:
+                            result = runner.run(request.question.strip(), request.budget, run_id)
                     if observation is not None:
                         observation.update(
                             output={
@@ -193,6 +210,31 @@ class RunRuntime:
                     run = run.model_copy(update={"status": "stopped", "chosen_reading": None})
                     result["run"] = run
                 self.artifacts.finalize(run, result["artifacts"])
+            except Exception as exc:
+                LOGGER.exception("Run %s failed unexpectedly", run_id)
+                row = TraceRow(atS=0.0, action="Run incomplete", returned="internal_error")
+                sink(row)
+                failed = Run(
+                    id=run_id,
+                    startedAt=datetime.now(UTC),
+                    durationS=0.0,
+                    question=request.question.strip(),
+                    path=request.path,
+                    budget=request.budget,
+                    status="incomplete",
+                    reason="internal_error",
+                    trace=self.events[run_id],
+                    artifacts=list(required_artifacts(request.path)),
+                )
+                self.artifacts.finalize(
+                    failed,
+                    {
+                        "answer.md": f"Run failed unexpectedly: {type(exc).__name__}".encode(),
+                        "trace.json": json.dumps(
+                            [item.model_dump(by_alias=True) for item in self.events[run_id]]
+                        ).encode(),
+                    },
+                )
             finally:
                 with self.lock:
                     self.running.discard(run_id)
@@ -403,6 +445,15 @@ def list_candidates() -> list[dict]:
     return runtime.gold.list()
 
 
+def _score_aggregate(scores: list[dict], metric: str) -> dict[str, float | None]:
+    values = [score[metric] for score in scores]
+    return {
+        "mean": mean(values) if values else None,
+        "min": min(values) if values else None,
+        "max": max(values) if values else None,
+    }
+
+
 @app.get("/benchmark")
 def benchmark(category: str | None = None) -> dict:
     """Return approved benchmark questions with aggregated path scores."""
@@ -415,9 +466,12 @@ def benchmark(category: str | None = None) -> dict:
         path_rows = []
         for path in ("baseline", "baseline-enhanced", "agentic"):
             matching = [run for run in runs if run.question == candidate.get("question") and run.path == path]
-            scores = [evaluate_run(run, candidate.get("gold_triples", []))["chosen"] for run in matching]
+            scores = [
+                evaluate_run(run, candidate.get("gold_triples", []))["chosen"]
+                for run in matching if run.status == "answered" and not run.reason
+            ]
             scores = [score for score in scores if score is not None]
-            if not scores:
+            if not matching:
                 continue
             path_rows.append(
                 {
@@ -425,9 +479,9 @@ def benchmark(category: str | None = None) -> dict:
                     "repetitions": [run.id for run in matching],
                     "completed": len(scores),
                     "failed": len(matching) - len(scores),
-                    "precision": {"mean": mean(s["precision"] for s in scores), "min": min(s["precision"] for s in scores), "max": max(s["precision"] for s in scores)},
-                    "recall": {"mean": mean(s["recall"] for s in scores), "min": min(s["recall"] for s in scores), "max": max(s["recall"] for s in scores)},
-                    "f1": {"mean": mean(s["f1"] for s in scores), "min": min(s["f1"] for s in scores), "max": max(s["f1"] for s in scores)},
+                    "precision": _score_aggregate(scores, "precision"),
+                    "recall": _score_aggregate(scores, "recall"),
+                    "f1": _score_aggregate(scores, "f1"),
                 }
             )
         question_rows.append(

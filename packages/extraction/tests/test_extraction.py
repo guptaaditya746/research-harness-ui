@@ -1,6 +1,5 @@
 import json
 
-import pytest
 from harness_extraction import ExtractionEngine
 from harness_semantic import hand_written_subschema
 
@@ -14,7 +13,7 @@ class RecordedModel:
         return next(self.replies)
 
 
-def test_extraction_rejects_terms_and_sources_outside_inputs() -> None:
+def test_extraction_discards_sources_outside_inputs() -> None:
     passage = {"passage_id": "p4-abstract", "paper_id": "p4", "text": "VPP is proposed."}
     engine = ExtractionEngine(
         RecordedModel(
@@ -41,5 +40,4 @@ def test_extraction_rejects_terms_and_sources_outside_inputs() -> None:
         hand_written_subschema(),
     )
     inferred = engine.infer_schema("Which paper introduced VPP?", [passage])
-    with pytest.raises(ValueError, match="unknown source"):
-        engine.extract("Which paper introduced VPP?", inferred, [passage])
+    assert engine.extract("Which paper introduced VPP?", inferred, [passage]).triples == []

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from harness_baseline import Baseline20
 from harness_corpus.store import CorpusStore
-from harness_extraction import ExtractionEngine
+from harness_extraction import ExtractedTriple, ExtractionEngine, SchemaInference
 from harness_schema.models import required_artifacts
 from harness_semantic import hand_written_subschema
 
@@ -80,13 +80,16 @@ def test_baseline_runs_four_nodes_and_writes_complete_artifact_set(tmp_path: Pat
 
     assert result["run"].status == "answered"
     assert [row.action for row in result["run"].trace] == [
-        "Retrieving top passages",
-        "Inferring schema",
-        "Extracting triples",
-        "Querying graph and composing answer",
+        "Retrieving verified corpus facts",
+        "Selecting atomic triples",
     ]
     assert set(result["artifacts"]) | {"run.json"} == set(required_artifacts("baseline"))
-    assert "p4-abstract" in result["run"].readings[0].answer
+    assert "p4-metadata" in result["run"].readings[0].answer
+    assert [(item.s, item.p, item.o) for item in result["run"].readings[0].triples] == [
+        ("p4", "title", "Video Prediction Policy")
+    ]
+    calls = [json.loads(line) for line in result["artifacts"]["tool_calls.jsonl"].splitlines()]
+    assert [(call["tool"], call["result_count"]) for call in calls] == [("facts", 1)]
 
 
 def test_baseline_no_hits_is_a_terminal_failed_run(tmp_path: Path) -> None:
@@ -111,3 +114,50 @@ def test_enhanced_baseline_seeds_structural_facts_and_batches_extraction(tmp_pat
     assert "extraction_batches.json" in result["artifacts"]
     assert "corpus-seed" in result["artifacts"]["graph.trig"].decode()
     assert set(result["artifacts"]) | {"run.json"} == set(required_artifacts("baseline-enhanced"))
+
+
+def test_missing_incoming_citations_do_not_return_unrelated_triples(tmp_path: Path) -> None:
+    runner = Baseline20(
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema())
+    )
+    result = runner.run("Which papers cite Video Prediction Policy?", run_id="r-citations")
+
+    assert result["run"].status == "incomplete"
+    assert result["run"].reason == "no_results"
+    assert not result["run"].readings
+    assert "No in-corpus evidence found" in result["artifacts"]["answer.md"].decode()
+
+
+def test_preprint_and_journal_version_count_as_one_work(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    store.by_paper["p5"] = {"paper_id": "p5", "title": "Video Prediction Policy", "year": 2025}
+    store.by_paper["p6"] = {"paper_id": "p6", "title": "A Different Robot Policy", "year": 2026}
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    rows = [{"subject": paper_id} for paper_id in ("p4", "p5", "p6")]
+
+    assert [row["subject"] for row in runner._distinct_works(rows)] == ["p4", "p6"]
+
+
+def test_malformed_model_query_uses_verified_triple_predicate(tmp_path: Path) -> None:
+    class MalformedQueryModel:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {
+                "sparql": "SELECT ?x WHERE { p4 reportsMetric ?x }",
+                "answer": "VPP reports 41.5% improvement [p4-abstract].",
+                "cited_source_ids": ["p4-abstract"],
+            }
+
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(MalformedQueryModel(), hand_written_subschema()))
+    runner.started = __import__("time").monotonic()
+    state = {
+        "question": "What improvement did VPP report?",
+        "inferred": SchemaInference(label="Metric", gloss="Result", classes=["Metric"], properties=["reportsMetric"]),
+        "extracted": [ExtractedTriple(subject="p4", predicate="reportsMetric", object="41.5%", source_id="p4-abstract", evidence="41.5% improvement")],
+        "passages": [],
+    }
+
+    answer = runner._query_answer(state)["answer"]
+
+    assert "<https://harness.local/schema#reportsMetric>" in answer.sparql
+    assert "41.5%" in answer.answer
+    assert any(row.action == "Repairing graph query" for row in runner.trace)

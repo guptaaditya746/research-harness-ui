@@ -162,9 +162,14 @@ class MCPToolClient:
     def run_agent(self, model: Any, question: str) -> str:
         """Run an open-ended model/tool conversation over one MCP session."""
         try:
-            return asyncio.run(self._run_agent_async(model, question))
+            timeout_s = float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "60"))
+            return asyncio.run(asyncio.wait_for(self._run_agent_async(model, question), timeout_s))
         except Exception as exc:
-            raise MCPUnavailable(f"MCP agent workflow failed: {exc}") from exc
+            def detail(error: BaseException) -> str:
+                children = getattr(error, "exceptions", ())
+                return "; ".join(detail(child) for child in children) if children else f"{type(error).__name__}: {error}"
+
+            raise MCPUnavailable(f"MCP agent workflow failed: {detail(exc)}") from exc
 
     def call(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         args = arguments or {}

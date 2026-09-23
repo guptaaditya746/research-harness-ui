@@ -163,8 +163,14 @@ def _known_predicate(schema: Subschema, predicate: URIRef) -> bool:
     """Accept immutable seed predicates linked to local compatibility terms."""
     if predicate in schema.properties:
         return True
-    return any(schema.graph.triples((local, OWL.equivalentProperty, predicate)) for local in schema.properties) or any(
-        schema.graph.triples((predicate, OWL.equivalentProperty, local)) for local in schema.properties
+    return any(
+        True
+        for local in schema.properties
+        for _ in schema.graph.triples((local, OWL.equivalentProperty, predicate))
+    ) or any(
+        True
+        for local in schema.properties
+        for _ in schema.graph.triples((predicate, OWL.equivalentProperty, local))
     )
 
 

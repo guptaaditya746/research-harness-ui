@@ -11,8 +11,10 @@ from main import RunRuntime, app
 def test_fixture_runs_are_contract_valid() -> None:
     client = TestClient(app)
     runs = client.get("/runs").json()
-    assert len(runs) == 4
-    assert {run["status"] for run in runs} == {"answered", "awaiting_reading", "incomplete"}
+    fixtures = {run.id for run in main.fixture_runs()}
+    fixture_rows = [run for run in runs if run["id"] in fixtures]
+    assert len(fixture_rows) == len(fixtures) == 4
+    assert {run.status for run in main.fixture_runs()} == {"answered", "awaiting_reading", "incomplete"}
     assert client.get("/runs/r-0412").json()["chosenReading"] == 0
     assert client.get("/runs/missing").status_code == 404
 
@@ -137,6 +139,16 @@ def test_benchmark_endpoint_aggregates_approved_question(tmp_path: Path, monkeyp
     response = client.get("/benchmark")
     assert response.status_code == 200
     assert response.json()["questions"][0]["paths"][0]["f1"]["mean"] == 1.0
+
+    degraded = test_runtime.get(run_id).model_copy(
+        update={"reason": "agentic_degraded: heavy_model_busy: 93 requests waiting"}
+    )
+    test_runtime.artifacts.update_run(degraded)
+    response = client.get("/benchmark")
+    path_row = response.json()["questions"][0]["paths"][0]
+    assert path_row["completed"] == 0
+    assert path_row["failed"] == 1
+    assert path_row["f1"]["mean"] is None
 
 
 def test_benchmark_execute_validates_and_launches_repetitions(tmp_path: Path, monkeypatch) -> None:

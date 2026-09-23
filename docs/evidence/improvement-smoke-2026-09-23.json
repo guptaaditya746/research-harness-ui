@@ -1,0 +1,110 @@
+[
+  {
+    "id": "r-44935a3b",
+    "question": "Who authored “FOCUS: object-centric world models for robotic manipulation”?",
+    "path": "baseline",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 0.016,
+    "triple_count": 6,
+    "answer": "FOCUS: object-centric world models for robotic manipulation was authored by Xianmin Wang, Shuai Dong, Stefano Ferraro, Pietro Mazzaglia, Tim Verbelen, Bart Dhoedt [p6-metadata].",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-89b832be",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 0.017,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-77dcbd75",
+    "question": "Which papers cite the Video Prediction Policy paper?",
+    "path": "baseline",
+    "status": "incomplete",
+    "reason": "no_results",
+    "duration_s": 0.001,
+    "triple_count": 0,
+    "answer": "",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-56544571",
+    "question": "Which authors appear on more than one paper in the corpus?",
+    "path": "baseline",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 0.018,
+    "triple_count": 7,
+    "answer": "Authors appearing on more than one paper:\nHerman Bruyninckx (2 papers): Towards a Domain Specific Language for a Scene Graph based Robotic World Model, Invariant-Based World Models for Robust Robotic Systems Demonstrated on an Autonomous Football Table\nKento Kawaharazuka (3 papers): Vision-Language-Action Models for Robotics: A Review Towards Real-World Applications, Real-World Cooking Robot System from Recipes Based on Food State Recognition Using Foundation Models and PDDL, Real-world robot applications of foundation models: a review\nPieter Abbeel (2 papers): DayDreamer: World Models for Physical Robot Learning, Multi-View Masked World Models for Visual Robotic Manipulation",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-ebdbeeb5",
+    "question": "Who authored “FOCUS: object-centric world models for robotic manipulation”?",
+    "path": "baseline-enhanced",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 0.015,
+    "triple_count": 6,
+    "answer": "FOCUS: object-centric world models for robotic manipulation was authored by Xianmin Wang, Shuai Dong, Stefano Ferraro, Pietro Mazzaglia, Tim Verbelen, Bart Dhoedt [p6-metadata].",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-9e159d25",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline-enhanced",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 0.015,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-5d6502fe",
+    "question": "Which papers cite the Video Prediction Policy paper?",
+    "path": "baseline-enhanced",
+    "status": "incomplete",
+    "reason": "no_results",
+    "duration_s": 0.001,
+    "triple_count": 0,
+    "answer": "",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-496061ad",
+    "question": "Which authors appear on more than one paper in the corpus?",
+    "path": "baseline-enhanced",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 0.019,
+    "triple_count": 7,
+    "answer": "Authors appearing on more than one paper:\nHerman Bruyninckx (2 papers): Towards a Domain Specific Language for a Scene Graph based Robotic World Model, Invariant-Based World Models for Robust Robotic Systems Demonstrated on an Autonomous Football Table\nKento Kawaharazuka (3 papers): Vision-Language-Action Models for Robotics: A Review Towards Real-World Applications, Real-World Cooking Robot System from Recipes Based on Food State Recognition Using Foundation Models and PDDL, Real-world robot applications of foundation models: a review\nPieter Abbeel (2 papers): DayDreamer: World Models for Physical Robot Learning, Multi-View Masked World Models for Visual Robotic Manipulation",
+    "model_small": "qwen-chat",
+    "model_agent": ""
+  },
+  {
+    "id": "r-7bfcfe15",
+    "question": "Which authors appear on more than one paper in the corpus?",
+    "path": "agentic",
+    "status": "answered",
+    "reason": "agentic_degraded: heavy_model_busy: 93 requests waiting",
+    "duration_s": 0.208,
+    "triple_count": 7,
+    "answer": "Authors appearing on more than one paper:\nHerman Bruyninckx (2 papers): Towards a Domain Specific Language for a Scene Graph based Robotic World Model, Invariant-Based World Models for Robust Robotic Systems Demonstrated on an Autonomous Football Table\nKento Kawaharazuka (3 papers): Vision-Language-Action Models for Robotics: A Review Towards Real-World Applications, Real-World Cooking Robot System from Recipes Based on Food State Recognition Using Foundation Models and PDDL, Real-world robot applications of foundation models: a review\nPieter Abbeel (2 papers): DayDreamer: World Models for Physical Robot Learning, Multi-View Masked World Models for Visual Robotic Manipulation",
+    "model_small": "qwen-chat",
+    "model_agent": "heavy-model"
+  }
+]

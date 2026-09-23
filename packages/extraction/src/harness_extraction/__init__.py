@@ -10,7 +10,7 @@ from difflib import SequenceMatcher
 from typing import Any, Protocol
 
 import httpx
-from harness_semantic import Subschema
+from harness_semantic import HRN, Subschema
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 from rdflib import RDFS, URIRef
 
@@ -221,12 +221,13 @@ class ExtractionEngine:
         being forced into a schema property.
         """
         allowed_ids = {row["passage_id"] for row in passages}
+        paper_by_source = {str(row["passage_id"]): str(row["paper_id"]) for row in passages}
         payload = self.model.complete_json(
-            "Extract evidence-backed atomic propositions relevant to the question. Keep predicates open natural-language relations. "
+            "Extract evidence-backed atomic propositions relevant to the question. Use the supplied paper_id as subject for paper-level claims. Keep predicates open natural-language relations. "
             "Return strict JSON with triples; each triple must include source_id (a supplied passage_id), subject, predicate, object, and evidence.",
             json.dumps({
                 "question": question,
-                "passages": [{"source_id": row["passage_id"], "text": row["text"][:1800]} for row in passages],
+                "passages": [{"source_id": row["passage_id"], "paper_id": row["paper_id"], "text": row["text"][:1800]} for row in passages],
             }),
         )
         raw = payload.get("triples", []) if isinstance(payload, dict) else []
@@ -263,17 +264,67 @@ class ExtractionEngine:
             except (TypeError, ValueError):
                 definitions = []
         definition_map = {self._norm(item.relation): item.definition for item in definitions}
-        canonical: list[ExtractedTriple] = []
-        decisions: list[dict[str, Any]] = []
-        for item in open_triples:
-            selected, score = self._canonical_property(
+        selected_relations = [
+            self._canonical_property(
                 item.predicate, definition_map.get(self._norm(item.predicate), ""), relations
             )
-            decisions.append({"open": item.predicate, "selected": selected, "score": round(score, 3)})
+            for item in open_triples
+        ]
+        unresolved = [
+            {"id": index, "subject": item.subject, "predicate": item.predicate,
+             "object": item.object, "evidence": item.evidence}
+            for index, (item, selection) in enumerate(zip(open_triples, selected_relations, strict=True))
+            if selection[0] is None
+        ]
+        llm_mapping: dict[int, tuple[str, float]] = {}
+        if unresolved and relations:
+            property_catalog = []
+            for relation in relations:
+                iri = self.property_names.get(relation)
+                domain = self.schema.graph.value(iri, RDFS.domain) if iri else None
+                range_ = self.schema.graph.value(iri, RDFS.range) if iri else None
+                property_catalog.append({
+                    "property": relation,
+                    "domain": local_name(domain) if isinstance(domain, URIRef) else None,
+                    "range": local_name(range_) if isinstance(range_, URIRef) else None,
+                })
+            mapped = self.model.complete_json(
+                "Map each open relation to one allowed ontology property only when the evidence supports the same subject-to-object claim. Return strict JSON with mappings: [{id, property, confidence}]. Use null property when none fits. Confidence must be between 0 and 1. Never add a fact or source.",
+                json.dumps({"question": question, "unresolved": unresolved,
+                            "allowed_properties": property_catalog}, ensure_ascii=False),
+            )
+            for row in mapped.get("mappings", []) if isinstance(mapped, dict) else []:
+                if not isinstance(row, dict):
+                    continue
+                index = row.get("id")
+                property_name = row.get("property")
+                try:
+                    confidence = float(row.get("confidence", 0))
+                except (TypeError, ValueError):
+                    continue
+                if type(index) is int and 0 <= index < len(open_triples) and property_name in relations and confidence >= 0.7:
+                    llm_mapping[index] = (property_name, confidence)
+
+        canonical: list[ExtractedTriple] = []
+        decisions: list[dict[str, Any]] = []
+        for index, item in enumerate(open_triples):
+            selected, score = selected_relations[index]
+            method = "lexical"
+            if selected is None and index in llm_mapping:
+                selected, score = llm_mapping[index]
+                method = "ontology_review"
+            decisions.append({"open": item.predicate, "selected": selected, "score": round(score, 3), "method": method})
             if selected is None:
                 continue
+            property_iri = self.property_names.get(selected)
+            domain = self.schema.graph.value(property_iri, RDFS.domain) if property_iri else None
+            subject = (
+                paper_by_source.get(item.evidence_ids[0], item.subject)
+                if domain == HRN.Paper
+                else item.subject
+            )
             canonical.append(ExtractedTriple(
-                subject=item.subject,
+                subject=subject,
                 predicate=selected,
                 object=item.object,
                 source_id=item.evidence_ids[0],
@@ -282,6 +333,7 @@ class ExtractionEngine:
         return ExtractionResult(triples=canonical), [
             {"stage": "extract", "open_triples": len(open_triples)},
             {"stage": "define", "definitions": len(definitions)},
+            {"stage": "ontology_review", "unresolved": len(unresolved), "mapped": len(llm_mapping)},
             {"stage": "canonicalize", "decisions": decisions},
         ]
 
@@ -335,8 +387,62 @@ class ExtractionEngine:
                     merged[key] = previous.model_copy(update={"evidence": f"{previous.evidence} | {triple.evidence}"})
         return list(merged.values()), reports
 
+    def refine_triples(
+        self,
+        question: str,
+        triples: list[ExtractedTriple],
+        passages: list[dict[str, Any]],
+        batch_size: int = 24,
+        reviewer: ModelClient | None = None,
+    ) -> tuple[list[ExtractedTriple], dict[str, int]]:
+        """Second model pass: retain only atomic claims relevant to the question.
+
+        The reviewer receives numbered existing candidates and may only return
+        their IDs. It cannot add a fact or change provenance. Batches cover the
+        entire candidate set, so adaptive retrieval has no output cap here.
+        """
+        passage_text = {str(row["passage_id"]): str(row["text"]) for row in passages}
+        deduped: dict[tuple[str, str, str], ExtractedTriple] = {}
+        for item in triples:
+            if not all((item.subject.strip(), item.predicate.strip(), item.object.strip(), item.source_id.strip())):
+                continue
+            key = (item.subject.casefold().strip(), item.predicate, item.object.casefold().strip())
+            deduped.setdefault(key, item)
+        candidates = list(deduped.values())
+        kept: list[ExtractedTriple] = []
+        calls = 0
+        for start in range(0, len(candidates), batch_size):
+            batch = candidates[start : start + batch_size]
+            payload = {
+                "question": question,
+                "candidates": [
+                    {
+                        "id": i,
+                        **item.model_dump(),
+                        "source_text": passage_text.get(item.source_id, "")[:1500],
+                    }
+                    for i, item in enumerate(batch)
+                ],
+            }
+            decision = (reviewer or self.model).complete_json(
+                "You review candidate atomic knowledge-graph triples. Select only IDs whose exact subject-predicate-object claim answers or directly supports the question AND whose source text supports the claim. Never add triples. Return strict JSON {\"keep_ids\": [integer IDs]}. If none qualify, return an empty list.",
+                json.dumps(payload, ensure_ascii=False),
+            )
+            calls += 1
+            selected = decision.get("keep_ids", []) if isinstance(decision, dict) else []
+            if not isinstance(selected, list):
+                raise TypeError("triple reviewer must return keep_ids as a list")
+            indices = {value for value in selected if type(value) is int and 0 <= value < len(batch)}
+            kept.extend(item for i, item in enumerate(batch) if i in indices)
+        return kept, {"candidates": len(triples), "unique": len(candidates), "kept": len(kept), "model_calls": calls}
+
     def answer(
-        self, question: str, inferred: SchemaInference, triples: list[ExtractedTriple]
+        self,
+        question: str,
+        inferred: SchemaInference,
+        triples: list[ExtractedTriple],
+        verify: bool = False,
+        verifier: ModelClient | None = None,
     ) -> AnswerResult:
         result = AnswerResult.model_validate(
             self.model.complete_json(
@@ -354,6 +460,24 @@ class ExtractionEngine:
         sources = {triple.source_id for triple in triples}
         if not set(result.cited_source_ids) <= sources:
             raise ValueError("answer cites a source outside the extracted evidence")
+        if verify:
+            reviewed = (verifier or self.model).complete_json(
+                "Verify every factual claim in the draft answer against the supplied atomic triples and their evidence. Revise the answer to remove unsupported claims. Return strict JSON with supported (boolean), answer (string), and cited_source_ids (list). Set supported=false if no factual answer remains. Never add a source or fact.",
+                json.dumps({
+                    "question": question,
+                    "draft_answer": result.answer,
+                    "triples": [triple.model_dump() for triple in triples],
+                }, ensure_ascii=False),
+            )
+            if reviewed.get("supported") is not True or not str(reviewed.get("answer", "")).strip():
+                raise ValueError("answer has no fully supported factual claim")
+            verified_sources = reviewed.get("cited_source_ids", [])
+            if not isinstance(verified_sources, list) or not verified_sources or not set(verified_sources) <= sources:
+                raise ValueError("verified answer lacks valid triple provenance")
+            result = result.model_copy(update={
+                "answer": str(reviewed["answer"]),
+                "cited_source_ids": [str(source) for source in verified_sources],
+            })
         return result
 
     def axioms(self, inferred: SchemaInference) -> list[tuple[str, str, str]]:

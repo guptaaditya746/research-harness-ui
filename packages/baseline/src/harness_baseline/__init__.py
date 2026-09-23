@@ -8,6 +8,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from difflib import SequenceMatcher
 from typing import Any, TypedDict
 from urllib.parse import quote
 
@@ -92,6 +93,8 @@ class Baseline20:
         enhanced: bool = False,
         edc: bool = False,
         trace_sink: TraceSink | None = None,
+        refine: bool = False,
+        refinement_model: Any | None = None,
     ) -> None:
         self.corpus = corpus
         self.extraction = extraction
@@ -99,6 +102,8 @@ class Baseline20:
         self.enhanced = enhanced
         self.edc = edc
         self.trace_sink = trace_sink or (lambda _: None)
+        self.refine = refine
+        self.refinement_model = refinement_model
         self.started = 0.0
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
@@ -139,10 +144,16 @@ class Baseline20:
             # final cap; otherwise the broad first query fills the cap and
             # phrase expansion never runs.
             per_query_limit = 50 if self.enhanced else self.retrieve_k
+            query_started = time.monotonic()
             hits = self.corpus.search(query, limit=per_query_limit)["items"]
             before = len(found)
             found.update({row["passage_id"]: row for row in hits})
-            rounds.append({"round": round_no, "query": query, "returned": len(hits), "new": len(found) - before})
+            rounds.append({
+                "round": round_no, "query": query, "limit": per_query_limit,
+                "returned": len(hits), "new": len(found) - before,
+                "passage_ids": [str(row["passage_id"]) for row in hits],
+                "duration_ms": round((time.monotonic() - query_started) * 1000, 1),
+            })
             if not self.enhanced and len(found) >= self.retrieve_k:
                 break
         rows = list(found.values()) if self.enhanced else list(found.values())[: self.retrieve_k]
@@ -204,41 +215,47 @@ class Baseline20:
             reports.append({"fallback": "corpus-seed", "triples": len(extracted)})
         if not extracted:
             raise NoResults("extractor and corpus seed produced no supported triples")
+        if self.refine:
+            extracted, review = self.extraction.refine_triples(
+                state["question"], extracted, state["passages"], reviewer=self.refinement_model
+            )
+            reports.append({"stage": "evidence_review", **review})
+            if not extracted:
+                raise NoResults("No in-corpus evidence found for a question-relevant triple")
         self._emit("Extracting triples", f"{len(extracted)} supported triples")
         return {"extracted": extracted, "extraction_batches": reports}
 
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
-        try:
-            answer = self.extraction.answer(state["question"], state["inferred"], state["extracted"])
-            answer = answer.model_copy(
-                update={"sparql": sparql_check(answer.sparql, self.extraction.schema)}
-            )
-        except ValueError:
-            predicate = state["inferred"].properties[0]
-            answer = AnswerResult(
-                sparql=(
-                    "PREFIX hrn: <https://harness.local/schema#>\n"
-                    f"SELECT ?subject ?object WHERE {{ ?subject hrn:{predicate} ?object . }} LIMIT 20"
-                ),
-                answer=(
-                    "The corpus contains evidence about benchmark methods, but it does not define "
-                    "a shared hardest subset or a comparable winner. The result is therefore "
-                    "undetermined from the indexed papers."
-                ),
-                cited_source_ids=sorted({triple.source_id for triple in state["extracted"]}),
-            )
         direct, direct_triples = self._direct_metadata_answer(state)
         if direct is not None:
-            answer = direct
-            if direct_triples:
-                state = {**state, "extracted": direct_triples}
+            self._emit("Querying graph and composing answer", f"{len(direct.cited_source_ids)} cited passages")
+            return {"answer": direct, "extracted": direct_triples}
+        answer = self.extraction.answer(
+            state["question"], state["inferred"], state["extracted"],
+            verify=self.refine, verifier=self.refinement_model,
+        )
+        try:
+            checked_query = sparql_check(answer.sparql, self.extraction.schema)
+        except ValueError:
+            # The answer and its citations have already passed evidence review.
+            # A malformed model query must not discard those verified results.
+            predicates = [
+                self.extraction.property_names[item.predicate]
+                for item in state["extracted"]
+                if item.predicate in self.extraction.property_names
+            ]
+            if not predicates:
+                raise
+            checked_query = sparql_check(
+                f"SELECT ?subject ?object WHERE {{ ?subject <{predicates[0]}> ?object . }}",
+                self.extraction.schema,
+            )
+            self._emit("Repairing graph query", f"Using verified predicate {state['extracted'][0].predicate}")
+        answer = answer.model_copy(update={"sparql": checked_query})
         self._emit(
             "Querying graph and composing answer", f"{len(answer.cited_source_ids)} cited passages"
         )
-        result: dict[str, Any] = {"answer": answer}
-        if direct_triples:
-            result["extracted"] = direct_triples
-        return result
+        return {"answer": answer}
 
     def _direct_metadata_answer(
         self, state: BaselineState
@@ -274,7 +291,7 @@ class Baseline20:
                         subject=str(row["paper_id"]),
                         predicate="cites",
                         object=str(target["subject"]),
-                        source_id=str(row["fact_id"]),
+                        source_id=str(row["reference_id"]),
                         evidence=str(row.get("title") or row.get("raw") or row["fact_id"]),
                     )
                     for row in rows
@@ -283,7 +300,10 @@ class Baseline20:
                     names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
                     answer = f"{', '.join(names)} cite {target['object']} [{', '.join(item.source_id for item in triples)}]."
                 else:
-                    answer = f"No in-corpus paper cites {target['object']} according to the indexed citation graph."
+                    raise NoResults(
+                        f"No in-corpus evidence found that a paper cites {target['object']}. "
+                        "This does not establish that no external citation exists."
+                    )
                 return (
                     AnswerResult(
                         sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?paper WHERE { ?paper dblp:cites ?target . }",
@@ -298,7 +318,11 @@ class Baseline20:
             for row in self.corpus.seed_facts():
                 if row.get("predicate") == "author":
                     grouped.setdefault(str(row["object"]), []).append(row)
-            repeated = {name: rows for name, rows in grouped.items() if len({r["subject"] for r in rows}) > 1}
+            repeated = {
+                name: works
+                for name, rows in grouped.items()
+                if len(works := self._distinct_works(rows)) > 1
+            }
             triples = [
                 ExtractedTriple(
                     subject=str(row["subject"]), predicate="authoredBy", object=name,
@@ -308,7 +332,7 @@ class Baseline20:
                 for row in rows
             ]
             lines = [
-                f"{name} ({len({r['subject'] for r in rows})} papers): "
+                f"{name} ({len(rows)} papers): "
                 + ", ".join(self.corpus.paper_title(r["subject"]) or r["subject"] for r in rows)
                 for name, rows in sorted(repeated.items())
             ]
@@ -321,8 +345,35 @@ class Baseline20:
                 triples,
             )
 
-        direct = self._direct_title_answer(state)
-        return (direct, [])
+        if "which paper" in question or "what paper" in question:
+            target = self._find_title_fact(question)
+            if target is not None:
+                triple = ExtractedTriple(
+                    subject=str(target["subject"]), predicate="title", object=str(target["object"]),
+                    source_id=str(target["source_id"]),
+                    evidence=f"Corpus fact {target.get('fact_id', target['source_id'])}.",
+                )
+                canonical = self.corpus.canonical_paper_iri(str(target["subject"]))
+                return (
+                    AnswerResult(
+                        sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?paper ?title WHERE { ?paper dblp:title ?title . }",
+                        answer=f"{target['object']} ({canonical or target['subject']}) [{target['source_id']}].",
+                        cited_source_ids=[str(target["source_id"])],
+                    ),
+                    [triple],
+                )
+        return (None, [])
+
+    def _distinct_works(self, author_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Treat indexed preprints and their near-identical journal versions as one work."""
+        works: list[tuple[str, dict[str, Any]]] = []
+        for row in sorted(author_rows, key=lambda item: str(item["subject"])):
+            title = self.corpus.paper_title(str(row["subject"])) or str(row["subject"])
+            normalized = " ".join(re.findall(r"[a-z0-9]+", title.casefold()))
+            if any(SequenceMatcher(None, normalized, prior).ratio() >= 0.98 for prior, _ in works):
+                continue
+            works.append((normalized, row))
+        return [row for _, row in works]
 
     def _find_title_fact(self, question: str) -> dict[str, Any] | None:
         terms = {word for word in re.findall(r"[a-z0-9]+", question) if len(word) > 2}
@@ -403,7 +454,30 @@ class Baseline20:
         self.current_run_id = run_id
         self.trace = []
         try:
-            state = self.graph.invoke({"question": question})
+            lookup_started = time.monotonic()
+            direct, triples = self._direct_metadata_answer({"question": question, "extracted": []})
+            if direct is not None and triples:
+                properties = list(dict.fromkeys(item.predicate for item in triples))
+                inferred = SchemaInference(
+                    label="Corpus facts", gloss="Verified facts relevant to the question.",
+                    classes=["Paper", "Author"] if "authoredBy" in properties else ["Paper"],
+                    properties=properties,
+                )
+                self._emit("Retrieving verified corpus facts", f"{len(triples)} facts")
+                self._emit("Selecting atomic triples", f"{len(triples)} question-relevant triples")
+                state: BaselineState = {
+                    "question": question, "passages": [], "inferred": inferred,
+                    "extracted": triples, "answer": direct,
+                    "retrieval": {
+                        "queries": [], "stop_reason": "verified_facts",
+                        "fact_lookup_ms": round((time.monotonic() - lookup_started) * 1000, 1),
+                    },
+                    "extraction_batches": [{"stage": "verified_facts", "triples": len(triples)}],
+                }
+            elif direct is not None:
+                raise NoResults("No in-corpus evidence found for a supported answer.")
+            else:
+                state = self.graph.invoke({"question": question})
             run, artifacts = self._success(run_id, started_at, question, budget, state)
         except NoResults as exc:
             run, artifacts = self._failure(
@@ -471,6 +545,7 @@ class Baseline20:
         source_ids |= {
             str(row.get("source_id")) for row in self.corpus.fact_rows if row.get("source_id")
         }
+        source_ids |= {str(row["reference_id"]) for row in self.corpus.references}
         dataset = ProvenanceDataset(schema, source_ids)
         ui_triples: list[Triple] = []
         seed_rows = self.corpus.seed_facts()
@@ -626,35 +701,34 @@ class Baseline20:
         return run, artifacts
 
     def _workflow_tool_calls(self, state: BaselineState, run_id: str) -> list[dict[str, Any]]:
-        """Record the fixed workflow through the same MCP tool vocabulary.
-
-        Fast and adaptive paths remain deterministic local workflows, but their
-        retrieval and graph operations use the same named tool contract as the
-        agentic supervisor. This makes traces comparable without requiring a
-        second network round trip for every baseline run.
-        """
+        """Record only corpus operations that the local workflow actually ran."""
         records: list[dict[str, Any]] = []
-        queries = state.get("retrieval", {}).get("queries", [])
+        retrieval = state.get("retrieval", {})
+        queries = retrieval.get("queries", [])
         for index, query in enumerate(queries, start=1):
             record = {
                 "call_id": f"tool-baseline-{index:03d}",
                 "agent": "baseline",
                 "tool": "search",
-                "arguments": {"query": query.get("query", ""), "limit": self.retrieve_k},
+                "transport": "local",
+                "arguments": {"dsl": query.get("query", ""), "limit": query.get("limit")},
+                "result": {"passage_ids": query.get("passage_ids", [])},
                 "result_count": query.get("returned", 0),
-                "duration_ms": 0.0,
+                "duration_ms": query.get("duration_ms", 0.0),
                 "status": "ok",
             }
             records.append(record)
             record_tool_call(record, run_id=run_id)
-        for offset, name in enumerate(("facts", "prior_triples", "rank"), start=len(records) + 1):
+        if retrieval.get("stop_reason") == "verified_facts":
             record = {
-                "call_id": f"tool-baseline-{offset:03d}",
+                "call_id": f"tool-baseline-{len(records) + 1:03d}",
                 "agent": "baseline",
-                "tool": name,
+                "tool": "facts",
+                "transport": "local",
                 "arguments": {"question": state["question"]},
+                "result": [item.model_dump() for item in state.get("extracted", [])],
                 "result_count": len(state.get("extracted", [])),
-                "duration_ms": 0.0,
+                "duration_ms": retrieval.get("fact_lookup_ms", 0.0),
                 "status": "ok",
             }
             records.append(record)

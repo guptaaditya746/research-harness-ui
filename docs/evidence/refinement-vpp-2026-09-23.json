@@ -1,0 +1,54 @@
+{
+  "status": "answered",
+  "reason": null,
+  "duration_s": 7.427,
+  "triples": [
+    {
+      "s": "https://dblp.org/rec/journals/corr/abs-2412-14803",
+      "p": "reportsMetric",
+      "o": "41.5% on the Calvin ABC→D benchmark",
+      "support": "1 passage",
+      "evidence": "the VPP achieves a 41.5% improvement in the Calvin ABC→D benchmark (Mees et al., 2022) compared to the previous SOTA method (Wu et al., 2023a)",
+      "source": "p4-s2-p6",
+      "triple_id": "t-001"
+    }
+  ],
+  "answer": "The Video Prediction Policy (VPP) reported a 41.5% improvement on the CALVIN ABC→D benchmark.",
+  "trace": [
+    {
+      "at_s": 0.039,
+      "action": "Retrieving top passages",
+      "returned": "1 passages across 5 rounds",
+      "reading": null,
+      "span_id": null
+    },
+    {
+      "at_s": 1.839,
+      "action": "Inferring schema",
+      "returned": "1 classes · 1 properties",
+      "reading": null,
+      "span_id": null
+    },
+    {
+      "at_s": 5.318,
+      "action": "Extracting triples",
+      "returned": "1 supported triples",
+      "reading": null,
+      "span_id": null
+    },
+    {
+      "at_s": 7.409,
+      "action": "Repairing graph query",
+      "returned": "Using verified predicate reportsMetric",
+      "reading": null,
+      "span_id": null
+    },
+    {
+      "at_s": 7.409,
+      "action": "Querying graph and composing answer",
+      "returned": "1 cited passages",
+      "reading": null,
+      "span_id": null
+    }
+  ]
+}

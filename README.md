@@ -161,7 +161,13 @@ uv run --python 3.12 python -m harness_mcp_corpus.probe "Which papers cite p17? 
 
 The shared `.env` points `LITELLM_BASE_URL` and `HARNESS_MODEL_AGENT_URL` at the
 LiteLLM proxy on the same compute node. `qwen-chat` is the default extraction model;
-`HARNESS_MODEL_HIGH=heavy-model` selects the higher-quality supervisor model for agentic runs.
+`HARNESS_MODEL_HIGH=heavy-model` selects the higher-quality supervisor and
+evidence reviewer for agentic runs. The small model extracts candidate triples;
+the reviewer selects question-relevant IDs from those candidates and verifies
+the drafted answer against their evidence. Verified metadata questions use
+corpus facts directly. `HARNESS_MAX_CONCURRENT_RUNS` and
+`HARNESS_MAX_CONCURRENT_HEAVY` queue model calls when evaluation starts many
+repetitions at once.
 Set `HARNESS_MODEL_SMALL` to another alias only when its vLLM endpoint is running. `heavy-model`
 is also available as the independent judge, and `qwen-embed` is the embedding
 model. The loopback URL remains valid when the allocated compute node changes.

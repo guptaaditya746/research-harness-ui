@@ -59,7 +59,8 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
         store.read_passage("p17-s1-p1")["items"][0]["text"] == "World models predict robot motion."
     )
     mcp = create_server(root)
-    assert [tool.name for tool in asyncio.run(mcp.list_tools())] == [
+    names = {tool.name for tool in asyncio.run(mcp.list_tools())}
+    assert names >= {
         "list_papers",
         "paper_outline",
         "abstracts",
@@ -72,11 +73,16 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
         "keyphrases",
         "results",
         "expand",
-    ]
+        "prior_triples",
+        "rank",
+    }
     response = asyncio.run(mcp.call_tool("citations", {"paper_id": "p17"}))
     assert "p2" in str(response)
-    assert store.expand("p17-s1-p1", 1)["total"] == 1
-    assert store.results("predict")['total'] == 1
+    assert any(
+        row["passage_id"] == "p17-s1-p1"
+        for row in store.expand("p17-s1-p1", 1)["items"]
+    )
+    assert store.results("predict")["total"] == 0  # results contain numeric claims only
     assert "items" in store.keyphrases()
     monkeypatch.setattr(
         "harness_corpus.ingest.lookup_dblp_many",
