@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from harness_agent import AgenticResearch
 from harness_baseline import Baseline20
+from harness_baseline.planner import QueryPlanner
 from harness_corpus.store import CorpusStore
 from harness_evaluation import evaluate_run
 from harness_extraction import ExtractionEngine, OpenAICompatibleModel
@@ -185,6 +186,7 @@ class RunRuntime:
         return Baseline20(
             CorpusStore(Path(os.getenv("CORPUS_ROOT", ROOT / "corpus_data"))),
             ExtractionEngine(model, schema),
+            planner=QueryPlanner(model),
             retrieve_k=int(os.getenv("BASELINE_RETRIEVE_K", "20")),
             enhanced=enhanced,
             edc=True,

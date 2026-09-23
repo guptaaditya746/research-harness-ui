@@ -44,12 +44,16 @@ from harness_semantic import DBLP, HRN, validate_subschema
 from langgraph.graph import END, START, StateGraph
 from rdflib import RDFS, XSD, Literal, URIRef
 
+from .planner import PaperResolver, QueryPlan, QueryPlanner
+
 TraceSink = Callable[[TraceRow], None]
 
 
 class BaselineState(TypedDict, total=False):
     question: str
     concept: dict[str, Any] | None
+    plan: QueryPlan
+    paper_ids: list[str]
     passages: list[dict[str, Any]]
     inferred: SchemaInference
     extracted: list[ExtractedTriple]
@@ -130,8 +134,10 @@ class Baseline20:
         claim_lookup: Callable[[str], list[ClaimSubgraph]] | None = None,
         relation_proposer: Callable[[str, str, str | None], dict] | None = None,
         seed_passage_ids: list[str] | None = None,
+        planner: QueryPlanner | None = None,
     ) -> None:
         self.corpus = corpus
+        self.planner = planner
         self.extraction = extraction
         self.retrieve_k = retrieve_k
         self.enhanced = enhanced
@@ -182,7 +188,12 @@ class Baseline20:
 
     def _retrieve(self, state: BaselineState) -> dict[str, Any]:
         question = state["question"]
-        mentioned_papers = self.corpus.mentioned_paper_ids(question)
+        plan = state.get("plan") or QueryPlan.fallback("no plan")
+        # Papers named in the plan scope retrieval. Without a model plan, fall
+        # back to title detection over the question text.
+        mentioned_papers = list(state.get("paper_ids") or []) or (
+            self.corpus.mentioned_paper_ids(question) if plan.source == "fallback" else []
+        )
         dsl = retrieval_dsl(question)
         queries = [dsl]
         if self.enhanced:
@@ -245,13 +256,20 @@ class Baseline20:
         ranked = self.corpus.rank_evidence(
             focus, passage_ids=list(found), limit=max(1, len(found))
         )["items"]
+        if focus != question and not any(float(row["score"]) > 0 for row in ranked):
+            # Removing the paper's own name left nothing that scores (e.g. the
+            # question was mostly the title): rank by the full question instead.
+            focus = question
+            ranked = self.corpus.rank_evidence(
+                focus, passage_ids=list(found), limit=max(1, len(found))
+            )["items"]
         rank_duration_ms = round((time.monotonic() - rank_started) * 1000, 1)
         best_by_paper: dict[str, float] = {}
         for row in ranked:
             key = str(row["paper_id"]) if mentioned_papers else "all"
             best_by_paper[key] = max(best_by_paper.get(key, 0.0), float(row["score"]))
         relative_threshold = 0.70
-        limitation_question = "limitation" in question.casefold()
+        limitation_question = plan.evidence_focus == "limitations"
         rows = [
             {key: value for key, value in row.items() if key != "score"}
             for row in ranked
@@ -275,6 +293,7 @@ class Baseline20:
         return {"passages": rows, "retrieval": {
             "queries": rounds, "stop_reason": "relative_bm25_relevance",
             "mentioned_paper_ids": mentioned_papers,
+            "plan": plan.model_dump(),
             "reused_claim_ids": [claim.id for claim in reused_claims],
             "agent_seed_passage_ids": self.seed_passage_ids,
             "candidates": len(found), "selected": len(rows),
@@ -380,8 +399,9 @@ class Baseline20:
             reports.append({"stage": "evidence_review", **review})
             if not extracted:
                 raise NoResults("No in-corpus evidence found for a question-relevant triple")
-        mentioned = self.corpus.mentioned_paper_ids(state["question"])
-        if self.enhanced and len(mentioned) > 1 and re.search(r"\bmetrics?\b", state["question"], re.IGNORECASE):
+        plan = state.get("plan") or QueryPlan.fallback("no plan")
+        mentioned = list(state.get("paper_ids") or [])
+        if self.enhanced and len(mentioned) > 1 and plan.evidence_focus == "metrics":
             covered = {
                 self.corpus.by_passage[item.source_id]["paper_id"]
                 for item in extracted if item.source_id in self.corpus.by_passage
@@ -420,15 +440,11 @@ class Baseline20:
         return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports}
 
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
-        direct, direct_triples = self._direct_metadata_answer(state)
-        if direct is not None:
-            self._emit("Querying graph and composing answer", f"{len(direct.cited_source_ids)} cited passages")
-            return {"answer": direct, "extracted": direct_triples}
-        if re.search(r"\b(improv\w*|increase|decrease|reduction|gain|comparison)\b", state["question"], re.IGNORECASE):
-            target_context = re.search(r"\bon\s+(.+?)\??$", state["question"], re.IGNORECASE)
+        plan = state.get("plan") or QueryPlan.fallback("no plan")
+        if plan.evidence_focus == "results":
             context_terms = (
-                {term.casefold() for term in re.findall(r"[A-Za-z]{4,}", target_context.group(1))}
-                if target_context else set()
+                {term.casefold() for term in re.findall(r"[A-Za-z]{4,}", plan.benchmark)}
+                if plan.benchmark else set()
             )
             numeric = [
                 item for item in state["extracted"]
@@ -473,118 +489,169 @@ class Baseline20:
         )
         return {"answer": answer}
 
-    def _direct_metadata_answer(
-        self, state: BaselineState
-    ) -> tuple[AnswerResult | None, list[ExtractedTriple]]:
-        """Answer metadata questions from verified corpus facts.
+    # ─── Fact operations (typed; selected by the query plan, not by wording) ───
 
-        The model often infers a broad comparison schema for simple metadata
-        questions. Routing these questions through verified facts keeps the
-        answer and emitted triples aligned with the user's actual question.
+    def _titles(self) -> dict[str, str]:
+        titles = {
+            str(row["subject"]): str(row["object"])
+            for row in self.corpus.seed_facts() if row.get("predicate") == "title"
+        }
+        for paper_id, paper in self.corpus.by_paper.items():
+            titles.setdefault(str(paper_id), str(paper.get("title") or ""))
+        return titles
+
+    def _title_row(self, paper_id: str) -> dict[str, Any]:
+        for row in self.corpus.seed_facts():
+            if row.get("predicate") == "title" and str(row["subject"]) == paper_id:
+                return row
+        title = self.corpus.paper_title(paper_id) or paper_id
+        return {"subject": paper_id, "object": title, "source_id": f"{paper_id}-metadata"}
+
+    def _resolve_papers(self, plan: QueryPlan) -> tuple[list[str], list[str]]:
+        """Resolve plan paper mentions; returns (paper ids, unresolved mentions)."""
+        resolver = PaperResolver(self._titles())
+        resolved, missing = [], []
+        for mention in plan.papers:
+            paper_id = resolver.resolve(mention)
+            (resolved if paper_id else missing).append(paper_id or mention)
+        return resolved, missing
+
+    def _fact_query(
+        self, plan: QueryPlan, papers: list[str]
+    ) -> tuple[AnswerResult, list[ExtractedTriple]] | None:
+        """Execute a metadata/citation/aggregation plan over verified facts.
+
+        Returns None when the facts needed for the operation are not indexed,
+        so the caller can fall back to full-text research. Raises CorpusAbsent
+        when the operation completed and established absence on its surface.
         """
+        facts = self.corpus.seed_facts()
+        op = plan.operation
+        target = self._title_row(papers[0]) if papers else None
 
-        structural = self._direct_structural_answer(state["question"])
-        if structural is not None:
-            return structural
-
-        question = state["question"].casefold()
-        if "who authored" in question or "authors of" in question or "who wrote" in question:
-            target = self._find_title_fact(question)
-            if target is not None:
-                triples = self._author_triples(target["subject"])
-                names = [item.object for item in triples]
-                return (
-                    AnswerResult(
-                        sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?author WHERE { ?paper dblp:authoredBy ?author . }",
-                        answer=f"{target['object']} was authored by {', '.join(names)} [{target['source_id']}].",
-                        cited_source_ids=sorted({item.source_id for item in triples}),
-                    ),
-                    triples,
-                )
-
-        citation_lookup = bool(re.search(r"\b(?:which|what) papers\b.*\bcite\b|\bwho cites\b", question))
-        if citation_lookup:
-            target = self._find_title_fact(question)
-            if target is not None:
-                rows = self.corpus.citations(target["subject"], "in", 0, 50)["items"]
-                triples = [
-                    ExtractedTriple(
-                        subject=str(row["paper_id"]),
-                        predicate="cites",
-                        object=str(target["subject"]),
-                        source_id=str(row["reference_id"]),
-                        evidence=str(row.get("title") or row.get("raw") or row["fact_id"]),
-                    )
-                    for row in rows
-                ]
-                if triples:
-                    names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
-                    answer = f"{', '.join(names)} cite {target['object']} [{', '.join(item.source_id for item in triples)}]."
-                else:
-                    raise CorpusAbsent(
-                        f"No in-corpus evidence found that a paper cites {target['object']}. "
-                        "This does not establish that no external citation exists.",
-                        "citation_index", len(self.corpus.references),
-                    )
-                return (
-                    AnswerResult(
-                        sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?paper WHERE { ?paper dblp:cites ?target . }",
-                        answer=answer,
-                        cited_source_ids=sorted({item.source_id for item in triples}),
-                    ),
-                    triples,
-                )
-
-        if "more than one paper" in question and "author" in question:
-            grouped: dict[str, list[dict[str, Any]]] = {}
-            for row in self.corpus.seed_facts():
-                if row.get("predicate") == "author":
-                    grouped.setdefault(str(row["object"]), []).append(row)
-            repeated = {
-                name: works
-                for name, rows in grouped.items()
-                if len(works := self._distinct_works(rows)) > 1
-            }
-            triples = [
-                ExtractedTriple(
-                    subject=str(row["subject"]), predicate="authoredBy", object=name,
-                    source_id=str(row["source_id"]), evidence=f"Corpus fact {row.get('fact_id', row['source_id'])}.",
-                )
-                for name, rows in sorted(repeated.items())
-                for row in rows
-            ]
-            lines = [
-                f"{name} ({len(rows)} papers): "
-                + ", ".join(self.corpus.paper_title(r["subject"]) or r["subject"] for r in rows)
-                for name, rows in sorted(repeated.items())
-            ]
+        if op == "find_paper" and target:
+            triple = ExtractedTriple(
+                subject=str(target["subject"]), predicate="title", object=str(target["object"]),
+                source_id=str(target["source_id"]),
+                evidence=f"Corpus fact {target.get('fact_id', target['source_id'])}.",
+            )
+            canonical = self.corpus.canonical_paper_iri(str(target["subject"]))
             return (
                 AnswerResult(
-                    sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?paper ?author WHERE { ?paper dblp:authoredBy ?author . }",
-                    answer="Authors appearing on more than one paper:\n" + ("\n".join(lines) or "None."),
+                    sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?paper ?title WHERE { ?paper dblp:title ?title . }",
+                    answer=f"{target['object']} ({canonical or target['subject']}) [{target['source_id']}].",
+                    cited_source_ids=[str(target["source_id"])],
+                ),
+                [triple],
+            )
+
+        if op == "paper_authors" and target:
+            triples = self._author_triples(papers[0])
+            if not triples:
+                return None
+            names = [item.object for item in triples]
+            return (
+                AnswerResult(
+                    sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?author WHERE { ?paper dblp:authoredBy ?author . }",
+                    answer=f"{target['object']} was authored by {', '.join(names)} [{target['source_id']}].",
                     cited_source_ids=sorted({item.source_id for item in triples}),
                 ),
                 triples,
             )
 
-        if ("which paper" in question or "what paper" in question) and not citation_lookup:
-            target = self._find_title_fact(question)
-            if target is not None:
-                triple = ExtractedTriple(
-                    subject=str(target["subject"]), predicate="title", object=str(target["object"]),
-                    source_id=str(target["source_id"]),
-                    evidence=f"Corpus fact {target.get('fact_id', target['source_id'])}.",
+        if op in {"paper_year", "paper_venue"} and target:
+            predicate = "year" if op == "paper_year" else "venue"
+            rows = [row for row in facts if row["subject"] == papers[0] and row["predicate"] == predicate]
+            if not rows:
+                return None
+            triples = [self._fact_triple(row) for row in rows]
+            return self._fact_answer(
+                triples, f"{target['object']} was published in {rows[0]['object']} [{rows[0]['source_id']}]."
+            )
+
+        if op in {"citing_papers", "citing_count"} and target:
+            rows = [row for row in self.corpus.references if row.get("resolved_paper_id") == papers[0]]
+            if not rows:
+                raise CorpusAbsent(
+                    f"No in-corpus evidence found that a paper cites {target['object']}. "
+                    "This does not establish that no external citation exists.",
+                    "citation_index", len(self.corpus.references),
                 )
-                canonical = self.corpus.canonical_paper_iri(str(target["subject"]))
-                return (
-                    AnswerResult(
-                        sparql="PREFIX dblp: <https://dblp.org/rdf/schema#>\nSELECT ?paper ?title WHERE { ?paper dblp:title ?title . }",
-                        answer=f"{target['object']} ({canonical or target['subject']}) [{target['source_id']}].",
-                        cited_source_ids=[str(target["source_id"])],
-                    ),
-                    [triple],
-                )
-        return (None, [])
+            triples = [self._citation_triple(row) for row in rows]
+            sources = ", ".join(item.source_id for item in triples)
+            if op == "citing_count":
+                count = len({item.subject for item in triples})
+                return self._fact_answer(triples, f"{count} indexed papers cite {target['object']} [{sources}].")
+            names = sorted({self.corpus.paper_title(item.subject) or item.subject for item in triples})
+            return self._fact_answer(triples, f"{', '.join(names)} cite {target['object']} [{sources}].")
+
+        if op == "cited_papers" and target:
+            rows = [row for row in self.corpus.references
+                    if row["paper_id"] == papers[0] and row.get("resolved_paper_id")]
+            if not rows:
+                raise CorpusAbsent(f"No resolved in-corpus citations found for {target['object']}.",
+                                   "citation_index", len(self.corpus.references))
+            triples = [self._citation_triple(row) for row in rows]
+            names = [self.corpus.paper_title(item.object) or item.object for item in triples]
+            return self._fact_answer(triples, f"{target['object']} cites these indexed papers: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
+
+        if op == "cites" and len(papers) >= 2 and target:
+            cited = self._title_row(papers[1])
+            rows = [row for row in self.corpus.references
+                    if row["paper_id"] == papers[0] and row.get("resolved_paper_id") == papers[1]]
+            if not rows:
+                raise CorpusAbsent(f"No resolved in-corpus citation from {target['object']} to {cited['object']}.",
+                                   "citation_index", len(self.corpus.references))
+            triples = [self._citation_triple(row) for row in rows]
+            return self._fact_answer(triples, f"Yes. {target['object']} cites {cited['object']} [{', '.join(item.source_id for item in triples)}].")
+
+        years = [row for row in facts if row["predicate"] == "year" and str(row["object"]).isdigit()]
+        if op == "papers_in_year" and plan.year is not None:
+            rows = [row for row in years if int(row["object"]) == plan.year]
+            if not rows:
+                raise CorpusAbsent(f"No indexed paper has publication year {plan.year}.",
+                                   "metadata_facts", len(years))
+            triples = [self._fact_triple(row) for row in rows]
+            names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
+            return self._fact_answer(triples, f"{len({item.subject for item in triples})} corpus papers were published in {plan.year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
+
+        if op == "publication_year_extreme" and plan.extreme and years:
+            pick = min if plan.extreme == "earliest" else max
+            year = pick(int(row["object"]) for row in years)
+            rows = [row for row in years if int(row["object"]) == year]
+            triples = [self._fact_triple(row) for row in rows]
+            names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
+            return self._fact_answer(triples, f"The {plan.extreme} publication year is {year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
+
+        if op == "author_paper_counts":
+            grouped: dict[str, list[dict[str, Any]]] = {}
+            for row in facts:
+                if row["predicate"] == "author":
+                    grouped.setdefault(str(row["object"]), []).append(row)
+            distinct = {name: self._distinct_works(rows) for name, rows in grouped.items()}
+            if not distinct:
+                return None
+            if plan.rank == "top":
+                maximum = max(len(rows) for rows in distinct.values())
+                selected = {name: rows for name, rows in distinct.items() if len(rows) == maximum}
+                header = (f"{', '.join(sorted(selected))} "
+                          f"{'appears' if len(selected) == 1 else 'appear'} on the most distinct corpus papers ({maximum})")
+            else:
+                threshold = plan.min_papers or 1
+                selected = {name: rows for name, rows in distinct.items() if len(rows) >= threshold}
+                header = f"Authors on at least {threshold} distinct corpus papers"
+            triples = [self._fact_triple(row) for rows in selected.values() for row in rows]
+            if not triples:
+                raise CorpusAbsent(f"No author appears on at least {plan.min_papers} distinct corpus papers.",
+                                   "metadata_facts", len(facts))
+            lines = [
+                f"{name} ({len(rows)}): " + ", ".join(self.corpus.paper_title(r["subject"]) or r["subject"] for r in rows)
+                for name, rows in sorted(selected.items())
+            ]
+            return self._fact_answer(
+                triples, f"{header} [{', '.join(sorted({item.source_id for item in triples}))}]:\n" + "\n".join(lines)
+            )
+        return None
 
     @staticmethod
     def _fact_triple(row: dict[str, Any]) -> ExtractedTriple:
@@ -622,92 +689,6 @@ class Baseline20:
             triples,
         )
 
-    def _direct_structural_answer(
-        self, raw_question: str
-    ) -> tuple[AnswerResult, list[ExtractedTriple]] | None:
-        """Answer structural corpus questions from indexed facts and resolved references."""
-        question = raw_question.casefold()
-        facts = self.corpus.seed_facts()
-
-        if "in what year" in question or "publication year" in question and "earliest" not in question and "latest" not in question:
-            target = self._find_title_fact(question)
-            if target:
-                rows = [row for row in facts if row["subject"] == target["subject"] and row["predicate"] == "year"]
-                if rows:
-                    triples = [self._fact_triple(row) for row in rows]
-                    return self._fact_answer(triples, f"{target['object']} was published in {rows[0]['object']} [{rows[0]['source_id']}].")
-
-        if "in which venue" in question or "where was" in question and "published" in question:
-            target = self._find_title_fact(question)
-            if target:
-                rows = [row for row in facts if row["subject"] == target["subject"] and row["predicate"] == "venue"]
-                if rows:
-                    triples = [self._fact_triple(row) for row in rows]
-                    return self._fact_answer(triples, f"{target['object']} was published in {rows[0]['object']} [{rows[0]['source_id']}].")
-
-        if "which indexed papers does" in question and " cite" in question:
-            subject_text = question.split("does", 1)[1].rsplit(" cite", 1)[0]
-            source = self._find_title_fact(subject_text)
-            if source:
-                rows = [row for row in self.corpus.references if row["paper_id"] == source["subject"] and row.get("resolved_paper_id")]
-                if not rows:
-                    raise CorpusAbsent(f"No resolved in-corpus citations found for {source['object']}.", "citation_index", len(self.corpus.references))
-                triples = [self._citation_triple(row) for row in rows]
-                names = [self.corpus.paper_title(item.object) or item.object for item in triples]
-                return self._fact_answer(triples, f"{source['object']} cites these indexed papers: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
-
-        if "how many indexed papers cite" in question:
-            target = self._find_title_fact(question)
-            if target:
-                rows = [row for row in self.corpus.references if row.get("resolved_paper_id") == target["subject"]]
-                if not rows:
-                    raise CorpusAbsent(f"No resolved in-corpus citations found for {target['object']}.", "citation_index", len(self.corpus.references))
-                triples = [self._citation_triple(row) for row in rows]
-                count = len({item.subject for item in triples})
-                return self._fact_answer(triples, f"{count} indexed papers cite {target['object']} [{', '.join(item.source_id for item in triples)}].")
-
-        citation_pair = re.match(r"does (.+?) cite (.+?)\??$", question)
-        if citation_pair:
-            source = self._find_title_fact(citation_pair.group(1))
-            target = self._find_title_fact(citation_pair.group(2))
-            if source and target:
-                rows = [row for row in self.corpus.references if row["paper_id"] == source["subject"] and row.get("resolved_paper_id") == target["subject"]]
-                if not rows:
-                    raise CorpusAbsent(f"No resolved in-corpus citation from {source['object']} to {target['object']}.", "citation_index", len(self.corpus.references))
-                triples = [self._citation_triple(row) for row in rows]
-                return self._fact_answer(triples, f"Yes. {source['object']} cites {target['object']} [{', '.join(item.source_id for item in triples)}].")
-
-        years = [row for row in facts if row["predicate"] == "year" and str(row["object"]).isdigit()]
-        if "how many papers" in question and "published" in question:
-            match = re.search(r"\b(?:19|20)\d{2}\b", question)
-            if match:
-                rows = [row for row in years if str(row["object"]) == match.group()]
-                if rows:
-                    triples = [self._fact_triple(row) for row in rows]
-                    return self._fact_answer(triples, f"{len({item.subject for item in triples})} corpus papers were published in {match.group()} [{', '.join(item.source_id for item in triples)}].")
-
-        if years and ("earliest publication year" in question or "latest publication year" in question):
-            year = min(int(row["object"]) for row in years) if "earliest" in question else max(int(row["object"]) for row in years)
-            rows = [row for row in years if int(row["object"]) == year]
-            triples = [self._fact_triple(row) for row in rows]
-            names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
-            return self._fact_answer(triples, f"The {'earliest' if 'earliest' in question else 'latest'} publication year is {year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
-
-        if "which author" in question and "most distinct papers" in question:
-            grouped: dict[str, list[dict[str, Any]]] = {}
-            for row in facts:
-                if row["predicate"] == "author":
-                    grouped.setdefault(str(row["object"]), []).append(row)
-            distinct = {name: self._distinct_works(rows) for name, rows in grouped.items()}
-            if distinct:
-                maximum = max(len(rows) for rows in distinct.values())
-                winners = {name: rows for name, rows in distinct.items() if len(rows) == maximum}
-                triples = [self._fact_triple(row) for rows in winners.values() for row in rows]
-                names = ", ".join(sorted(winners))
-                return self._fact_answer(triples, f"{names} {'appears' if len(winners) == 1 else 'appear'} on the most distinct corpus papers ({maximum}) [{', '.join(item.source_id for item in triples)}].")
-
-        return None
-
     def _distinct_works(self, author_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Treat indexed preprints and their near-identical journal versions as one work."""
         works: list[tuple[str, dict[str, Any]]] = []
@@ -719,18 +700,6 @@ class Baseline20:
             works.append((normalized, row))
         return [row for _, row in works]
 
-    def _find_title_fact(self, question: str) -> dict[str, Any] | None:
-        terms = {word for word in re.findall(r"[a-z0-9]+", question) if len(word) > 2}
-        candidates = [row for row in self.corpus.seed_facts() if row.get("predicate") == "title"]
-        if not candidates:
-            return None
-        scored = [
-            (len(terms & set(re.findall(r"[a-z0-9]+", str(row["object"]).casefold()))), row)
-            for row in candidates
-        ]
-        score, row = max(scored, key=lambda item: item[0])
-        return row if score >= 2 else None
-
     def _author_triples(self, paper_id: str) -> list[ExtractedTriple]:
         return [
             ExtractedTriple(
@@ -741,55 +710,10 @@ class Baseline20:
             if row.get("subject") == paper_id and row.get("predicate") == "author"
         ]
 
-    def _direct_title_answer(self, state: BaselineState) -> AnswerResult | None:
-        """Answer title lookup questions from verified metadata facts.
-
-        The model can infer a broad ``Paper`` schema for a title question and then
-        return an unhelpful comparison answer. Metadata facts are already verified
-        during ingest, so using them here keeps the answer tied to a concrete row
-        and preserves the normal provenance path.
-        """
-
-        question = state["question"].casefold()
-        if "which paper" not in question and "what paper" not in question:
-            return None
-        terms = {word for word in re.findall(r"[a-z0-9]+", question) if len(word) > 2}
-        candidates = [item for item in state["extracted"] if item.predicate == "title"]
-        candidates.extend(
-            ExtractedTriple(
-                subject=str(row["subject"]),
-                predicate="title",
-                object=str(row["object"]),
-                source_id=str(row["source_id"]),
-                evidence=f"Corpus fact {row.get('fact_id', row['source_id'])}.",
-            )
-            for row in self.corpus.seed_facts()
-            if row.get("predicate") == "title"
-        )
-        candidates = [
-            item
-            for item in candidates
-            if len(terms & set(re.findall(r"[a-z0-9]+", item.object.casefold()))) >= 2
-        ]
-        if not candidates:
-            return None
-        selected = max(
-            candidates,
-            key=lambda item: len(terms & set(re.findall(r"[a-z0-9]+", item.object.casefold()))),
-        )
-        sources = sorted(
-            {selected.source_id}
-            | {item.source_id for item in state["extracted"] if item.subject == selected.subject}
-        )
-        canonical = self.corpus.canonical_paper_iri(selected.subject)
-        return AnswerResult(
-            sparql=(
-                "PREFIX hrn: <https://harness.local/schema#>\n"
-                "SELECT ?paper ?title WHERE { ?paper hrn:title ?title . }"
-            ),
-            answer=f"{selected.object} ({canonical or 'corpus paper'}) [{'; '.join(sources)}].",
-            cited_source_ids=sources,
-        )
+    def _plan(self, question: str) -> QueryPlan:
+        if self.planner is None:
+            return QueryPlan.fallback("no query planner configured")
+        return self.planner.plan(question, self.concept)
 
     def run(
         self,
@@ -812,9 +736,22 @@ class Baseline20:
         self.trace = []
         self.concept = concept or None
         try:
+            plan = self._plan(question)
+            self._emit(
+                "Understanding question",
+                f"{plan.operation}" + (f" · {plan.rationale}" if plan.rationale else ""),
+            )
+            papers, unresolved = self._resolve_papers(plan)
+            if unresolved:
+                self._emit("Paper not found in corpus titles", "; ".join(unresolved))
+            direct: tuple[AnswerResult, list[ExtractedTriple]] | None = None
             lookup_started = time.monotonic()
-            direct, triples = self._direct_metadata_answer({"question": question, "extracted": []})
-            if direct is not None and triples:
+            if plan.operation != "research" and not unresolved:
+                direct = self._fact_query(plan, papers)
+                if direct is None:
+                    self._emit("Verified facts do not cover this", "continuing with full-text research")
+            if direct is not None:
+                answer, triples = direct
                 properties = list(dict.fromkeys(item.predicate for item in triples))
                 inferred = SchemaInference(
                     label="Corpus facts", gloss="Verified facts relevant to the question.",
@@ -825,17 +762,19 @@ class Baseline20:
                 self._emit("Selecting atomic triples", f"{len(triples)} question-relevant triples")
                 state: BaselineState = {
                     "question": question, "passages": [], "inferred": inferred,
-                    "extracted": triples, "answer": direct,
+                    "extracted": triples, "answer": answer, "plan": plan, "paper_ids": papers,
                     "retrieval": {
                         "queries": [], "stop_reason": "verified_facts",
+                        "plan": plan.model_dump(),
                         "fact_lookup_ms": round((time.monotonic() - lookup_started) * 1000, 1),
                     },
                     "extraction_batches": [{"stage": "verified_facts", "triples": len(triples)}],
                 }
-            elif direct is not None:
-                raise NoResults("No in-corpus evidence found for a supported answer.")
             else:
-                state = self.graph.invoke({"question": question, "concept": self.concept})
+                state = self.graph.invoke({
+                    "question": question, "concept": self.concept, "plan": plan,
+                    "paper_ids": papers,
+                })
             run, artifacts = self._success(run_id, started_at, question, budget, state)
         except CorpusAbsent as exc:
             run, artifacts = self._absence(run_id, started_at, question, budget, exc)

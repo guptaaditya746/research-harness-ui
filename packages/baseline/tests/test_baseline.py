@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from harness_baseline import Baseline20
+from harness_baseline.planner import PaperResolver, QueryPlan, QueryPlanner
 from harness_corpus.store import CorpusStore
 from harness_extraction import ExtractedTriple, ExtractionEngine, SchemaInference
 from harness_schema.models import required_artifacts
@@ -44,6 +45,20 @@ class RecordedModel:
         return next(self.replies)
 
 
+class StubPlanner:
+    """Stands in for the model planner: maps a question to a fixed typed plan."""
+
+    def __init__(self, plans: dict[str, QueryPlan]) -> None:
+        self.plans = plans
+
+    def plan(self, question: str, concept: dict | None = None) -> QueryPlan:
+        return self.plans.get(question, QueryPlan(operation="research"))
+
+
+def plan(operation: str, *papers: str, **fields) -> QueryPlan:
+    return QueryPlan(operation=operation, papers=list(papers), **fields)
+
+
 def corpus(tmp_path: Path) -> CorpusStore:
     rows = {
         "papers.jsonl": [{"paper_id": "p4", "title": "Video Prediction Policy", "year": 2025}],
@@ -73,13 +88,16 @@ def corpus(tmp_path: Path) -> CorpusStore:
 
 
 def test_baseline_runs_four_nodes_and_writes_complete_artifact_set(tmp_path: Path) -> None:
+    question = "Which paper introduced Video Prediction Policy?"
     runner = Baseline20(
-        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema())
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()),
+        planner=StubPlanner({question: plan("find_paper", "Video Prediction Policy")}),
     )
-    result = runner.run("Which paper introduced Video Prediction Policy?", run_id="r-live")
+    result = runner.run(question, run_id="r-live")
 
     assert result["run"].status == "answered"
     assert [row.action for row in result["run"].trace] == [
+        "Understanding question",
         "Retrieving verified corpus facts",
         "Selecting atomic triples",
     ]
@@ -105,10 +123,12 @@ def test_baseline_no_hits_is_a_completed_semantic_no_evidence_run(tmp_path: Path
 
 
 def test_enhanced_baseline_seeds_structural_facts_and_batches_extraction(tmp_path: Path) -> None:
+    question = "Which paper introduced Video Prediction Policy?"
     runner = Baseline20(
-        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()), enhanced=True
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()), enhanced=True,
+        planner=StubPlanner({question: plan("find_paper", "Video Prediction Policy")}),
     )
-    result = runner.run("Which paper introduced Video Prediction Policy?", run_id="r-enhanced")
+    result = runner.run(question, run_id="r-enhanced")
 
     assert result["run"].path == "baseline-enhanced"
     assert "retrieval.json" in result["artifacts"]
@@ -118,10 +138,12 @@ def test_enhanced_baseline_seeds_structural_facts_and_batches_extraction(tmp_pat
 
 
 def test_missing_incoming_citations_do_not_return_unrelated_triples(tmp_path: Path) -> None:
+    question = "Which papers cite Video Prediction Policy?"
     runner = Baseline20(
-        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema())
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()),
+        planner=StubPlanner({question: plan("citing_papers", "Video Prediction Policy")}),
     )
-    result = runner.run("Which papers cite Video Prediction Policy?", run_id="r-citations")
+    result = runner.run(question, run_id="r-citations")
 
     assert result["run"].status == "corpus_absent"
     assert result["run"].evidence_surface == "citation_index"
@@ -131,8 +153,13 @@ def test_missing_incoming_citations_do_not_return_unrelated_triples(tmp_path: Pa
 
 
 def test_citation_absence_survives_question_paraphrase(tmp_path: Path) -> None:
-    runner = Baseline20(corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()))
-    run = runner.run("Which papers in this corpus cite Video Prediction Policy?")["run"]
+    # Different wording, same meaning: the plan, not the phrasing, selects the operation.
+    question = "Is Video Prediction Policy referenced by anything else in this collection?"
+    runner = Baseline20(
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()),
+        planner=StubPlanner({question: plan("citing_papers", "the Video Prediction Policy paper")}),
+    )
+    run = runner.run(question)["run"]
     assert run.status == "corpus_absent"
     assert run.search_coverage["matches"] == 0
 
@@ -178,10 +205,13 @@ def test_year_and_venue_use_verified_corpus_facts(tmp_path: Path) -> None:
         {"fact_id": "p4-year", "subject": "p4", "predicate": "year", "object": "2025", "source_id": "p4-metadata"},
         {"fact_id": "p4-venue", "subject": "p4", "predicate": "venue", "object": "Advanced Robotics", "source_id": "p4-metadata"},
     ])
-    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()), planner=StubPlanner({
+        "When did Video Prediction Policy come out?": plan("paper_year", "Video Prediction Policy"),
+        "Where did Video Prediction Policy appear?": plan("paper_venue", "Video Prediction Policy"),
+    }))
 
-    year = runner.run("In what year was Video Prediction Policy published?")["run"]
-    venue = runner.run("In which venue was Video Prediction Policy published?")["run"]
+    year = runner.run("When did Video Prediction Policy come out?")["run"]
+    venue = runner.run("Where did Video Prediction Policy appear?")["run"]
 
     assert year.status == venue.status == "answered"
     assert [(item.p, item.o) for item in year.readings[0].triples] == [("year", "2025")]
@@ -196,7 +226,10 @@ def test_resolved_citation_count_and_year_aggregation(tmp_path: Path) -> None:
         {"fact_id": "p5-year", "subject": "p5", "predicate": "year", "object": "2025", "source_id": "p5-metadata"},
     ])
     store.references.append({"reference_id": "p5-ref-1", "paper_id": "p5", "title": "Video Prediction Policy", "resolved_paper_id": "p4"})
-    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()), planner=StubPlanner({
+        "How many indexed papers cite Video Prediction Policy?": plan("citing_count", "Video Prediction Policy"),
+        "How many papers in the corpus were published in 2025?": plan("papers_in_year", year=2025),
+    }))
 
     count = runner.run("How many indexed papers cite Video Prediction Policy?")["run"]
     years = runner.run("How many papers in the corpus were published in 2025?")["run"]
@@ -279,6 +312,8 @@ def test_conflicting_benchmark_percentages_are_both_reported(tmp_path: Path) -> 
     runner.started = __import__("time").monotonic()
     state = {
         "question": "What improvement did Video Prediction Policy report on CALVIN ABC→D?",
+        "plan": plan("research", "Video Prediction Policy", evidence_focus="results",
+                     benchmark="CALVIN ABC→D"),
         "extracted": [
             ExtractedTriple(subject="p4", predicate="reportsMetric", object="18.6% relative improvement on CALVIN ABC-D generalization benchmark", source_id="p4-abstract", evidence="18.6% relative improvement"),
             ExtractedTriple(subject="p4", predicate="reportsMetric", object="41.5% improvement on CALVIN ABC→D benchmark", source_id="p4-results", evidence="41.5% improvement"),
@@ -295,3 +330,85 @@ def test_conflicting_benchmark_percentages_are_both_reported(tmp_path: Path) -> 
     assert "31.6%" not in result["answer"].answer
     assert result["answer"].cited_source_ids == ["p4-abstract", "p4-results"]
     assert len(result["extracted"]) == 2
+
+
+# ─── Question understanding ──────────────────────────────────────────────────
+
+class JsonModel:
+    def __init__(self, payload) -> None:
+        self.payload = payload
+        self.inputs: list[str] = []
+
+    def complete_json(self, system: str, user: str) -> dict:
+        self.inputs.append(user)
+        if isinstance(self.payload, Exception):
+            raise self.payload
+        return self.payload
+
+
+def test_planner_accepts_a_valid_typed_plan_and_passes_the_concept() -> None:
+    model = JsonModel({"operation": "cites", "papers": ["RISE", "Dream to Manipulate"],
+                       "evidence_focus": "nonsense", "rationale": "citation check"})
+    result = QueryPlanner(model).plan("Is Dream to Manipulate in RISE's references?",
+                                      {"label": "Citation", "gloss": "Direct reference."})
+    assert result.operation == "cites"
+    assert result.papers == ["RISE", "Dream to Manipulate"]
+    assert result.evidence_focus == "general"
+    assert result.source == "model"
+    assert "Direct reference." in model.inputs[0]
+
+
+def test_planner_degrades_to_research_instead_of_guessing() -> None:
+    assert QueryPlanner(JsonModel({"operation": "delete_everything"})).plan("q").operation == "research"
+    missing = QueryPlanner(JsonModel({"operation": "cites", "papers": ["Only one"]})).plan("q")
+    assert missing.operation == "research" and missing.source == "fallback"
+    no_year = QueryPlanner(JsonModel({"operation": "papers_in_year"})).plan("q")
+    assert no_year.operation == "research"
+    down = QueryPlanner(JsonModel(RuntimeError("proxy down"))).plan("q")
+    assert down.operation == "research" and "unavailable" in down.rationale
+
+
+def test_paper_resolver_links_mentions_and_refuses_ambiguity() -> None:
+    resolver = PaperResolver({
+        "p6": "FOCUS: object-centric world models for robotic manipulation",
+        "p47": "Dream to Manipulate: Compositional World Models Empowering Robot Imitation Learning with Imagination",
+        "p28": "DayDreamer: World Models for Physical Robot Learning",
+        "p4": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations",
+    })
+    assert resolver.resolve("FOCUS") == "p6"
+    assert resolver.resolve("Dream to Manipulate") == "p47"
+    assert resolver.resolve("the DayDreamer paper") == "p28"
+    assert resolver.resolve("video prediction policy") == "p4"
+    assert resolver.resolve("world models") is None
+    assert resolver.resolve("Attention Is All You Need") is None
+
+
+def test_unresolved_paper_falls_back_to_full_text_research(tmp_path: Path) -> None:
+    question = "Who wrote the Nonexistent Robot Paper?"
+    runner = Baseline20(
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()),
+        planner=StubPlanner({question: plan("paper_authors", "Nonexistent Robot Paper")}),
+    )
+    run = runner.run(question)["run"]
+    actions = [row.action for row in run.trace]
+    assert "Paper not found in corpus titles" in actions
+    assert "Retrieving verified corpus facts" not in actions
+
+
+def test_author_ranking_and_threshold_come_from_the_plan(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    store.by_paper["p5"] = {"paper_id": "p5", "title": "A Second Robot Paper", "year": 2025}
+    store.fact_rows.extend([
+        {"fact_id": "a1", "subject": "p4", "predicate": "author", "object": "Ada", "source_id": "p4-metadata"},
+        {"fact_id": "a2", "subject": "p5", "predicate": "author", "object": "Ada", "source_id": "p5-metadata"},
+        {"fact_id": "a3", "subject": "p5", "predicate": "author", "object": "Bo", "source_id": "p5-metadata"},
+    ])
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()), planner=StubPlanner({
+        "Who has the most papers here?": plan("author_paper_counts", rank="top"),
+        "Which authors show up more than once?": plan("author_paper_counts", min_papers=2),
+    }))
+    top = runner.run("Who has the most papers here?")["run"]
+    repeated = runner.run("Which authors show up more than once?")["run"]
+    assert top.status == repeated.status == "answered"
+    assert top.readings[0].answer.startswith("Ada appears on the most distinct corpus papers (2)")
+    assert {item.o for item in repeated.readings[0].triples} == {"Ada"}
