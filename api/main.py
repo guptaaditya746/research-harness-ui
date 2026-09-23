@@ -186,10 +186,10 @@ class RunRuntime:
             try:
                 with run_observation(run_id, request.question.strip(), request.path, request.budget) as observation:
                     if request.path == "agentic" and not self.custom_runner:
-                        high_model = os.getenv(
-                            "HARNESS_MODEL_HIGH",
-                            os.getenv("HARNESS_MODEL_AGENT", "heavy-model"),
-                        )
+                        # Granite is configured with a native tool-call parser
+                        # and controls the MCP research loop. Qwen remains the
+                        # shared claim-construction model used by the baseline.
+                        high_model = os.getenv("HARNESS_MODEL_AGENT", "lite-model")
                         agent_timeout = float(
                             os.getenv(
                                 "BUDGET_AGENTIC_SLOW_SECONDS"

@@ -96,6 +96,14 @@ class AgenticResearch:
                          "source_ids": claim.source_ids}
                         for reading in base_run.readings for claim in reading.claims
                     ],
+                    "evidence_map": [
+                        {
+                            "source_id": str(fact["source_id"]),
+                            "paper_id": str(fact["subject"]),
+                            "kind": "dblp_fact",
+                        }
+                        for fact in getattr(self.baseline.corpus, "fact_rows", [])
+                    ],
                 }
                 agent_final = mcp.run_agent(self.agent_model, question, grounded_context)
                 if agent_final:
@@ -133,7 +141,7 @@ class AgenticResearch:
             elif any(item not in available for item in verified):
                 mcp_error = "agent_claim_id_not_in_preliminary_graph"
             elif hasattr(self.baseline, "corpus") and any(
-                item not in self.baseline.corpus.by_passage for item in evidence_ids
+                item not in self._known_evidence_ids(self.baseline.corpus) for item in evidence_ids
             ):
                 mcp_error = "agent_evidence_id_not_in_corpus"
             elif not tool_calls:
@@ -305,6 +313,20 @@ class AgenticResearch:
         if isinstance(value, list):
             return set().union(*(AgenticResearch._evidence_ids(item) for item in value)) if value else set()
         return set()
+
+    @staticmethod
+    def _known_evidence_ids(corpus: object) -> set[str]:
+        """Accept scientific evidence IDs, not only full-text passage IDs."""
+        ids = set(getattr(corpus, "by_passage", {}))
+        for row in getattr(corpus, "fact_rows", []):
+            if row.get("source_id"):
+                ids.add(str(row["source_id"]))
+            if row.get("fact_id"):
+                ids.add(str(row["fact_id"]))
+        for row in getattr(corpus, "references", []):
+            if row.get("reference_id"):
+                ids.add(str(row["reference_id"]))
+        return ids
 
 
 __all__ = ["AgenticResearch"]

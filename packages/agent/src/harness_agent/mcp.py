@@ -154,8 +154,13 @@ class MCPToolClient:
             if grounded_context:
                 messages.append({
                     "role": "user",
-                    "content": "Preliminary corpus result (verify or challenge with MCP): "
-                    + json.dumps(grounded_context, ensure_ascii=False),
+                    "content": (
+                        "Preliminary corpus result (verify or challenge with MCP). "
+                        "Source IDs are provenance handles, not paper IDs. When a tool needs paper_id, "
+                        "use the corresponding local paper_id from evidence_map. For corpus aggregation, "
+                        "retrieve every indexed paper rather than one default page: "
+                        + json.dumps(grounded_context, ensure_ascii=False)
+                    ),
                 })
             async with httpx.AsyncClient(timeout=model.timeout_s) as client:
                 while True:
