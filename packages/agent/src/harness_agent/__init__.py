@@ -111,7 +111,7 @@ class AgenticResearch:
                             "paper_id": str(fact["subject"]),
                             "kind": "dblp_fact",
                         }
-                        for fact in getattr(self.baseline.corpus, "fact_rows", [])
+                        for fact in getattr(getattr(self.baseline, "corpus", None), "fact_rows", [])
                     ],
                 }
                 agent_final = mcp.run_agent(self.agent_model, question, grounded_context)

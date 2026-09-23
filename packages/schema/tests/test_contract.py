@@ -63,4 +63,4 @@ def test_artifact_contract_per_path() -> None:
     assert "run.json" in required_artifacts("agentic")
     assert "verification.json" not in required_artifacts("baseline")
     assert "claims.json" in required_artifacts("agentic")
-    assert len(required_artifacts("agentic")) == 18
+    assert len(required_artifacts("agentic")) == 20

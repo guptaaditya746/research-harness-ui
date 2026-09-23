@@ -6,13 +6,14 @@ import json
 import os
 import re
 import time
+from dataclasses import replace
 from difflib import SequenceMatcher
 from typing import Any, Protocol
 
 import httpx
 from harness_semantic import HRN, Subschema
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
-from rdflib import RDFS, URIRef
+from rdflib import RDF, RDFS, XSD, Literal, URIRef
 
 
 class ModelFailure(RuntimeError):
@@ -150,6 +151,25 @@ class ExtractionEngine:
         self.schema = schema
         self.class_names = {local_name(iri): iri for iri in schema.classes}
         self.property_names = {local_name(iri): iri for iri in schema.properties}
+
+    def register_local_relation(self, name: str, definition: str) -> URIRef:
+        """Add a run-local hrn: relation so later schema checks accept it.
+
+        The relation links a paper to a literal value; the subschema is created
+        per run, so the addition never leaks into other runs.
+        """
+        iri = URIRef(HRN[name])
+        if iri in self.schema.properties:
+            return iri
+        graph = self.schema.graph
+        graph.add((iri, RDF.type, RDF.Property))
+        graph.add((iri, RDFS.label, Literal(name)))
+        graph.add((iri, RDFS.comment, Literal(definition)))
+        graph.add((iri, RDFS.domain, HRN.Paper))
+        graph.add((iri, RDFS.range, XSD.string))
+        self.schema = replace(self.schema, properties=self.schema.properties | {iri})
+        self.property_names[name] = iri
+        return iri
 
     def infer_schema(self, question: str, passages: list[dict[str, Any]]) -> SchemaInference:
         result = SchemaInference.model_validate(
