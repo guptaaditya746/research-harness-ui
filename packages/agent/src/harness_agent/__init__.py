@@ -39,9 +39,19 @@ class AgenticResearch:
         def tool_sink(record: dict) -> None:
             tool_calls.append(record)
             record_tool_call(record, run_id=run_id)
+            action = {
+                "search_evidence": "Searching corpus evidence",
+                "read_evidence": "Inspecting supporting evidence",
+                "structured_facts": "Checking canonical metadata",
+                "citations": "Checking citation evidence",
+                "tables": "Inspecting table evidence",
+                "evidence_for_claim": "Verifying claim context",
+                "load_skill": "Loading research skill",
+                "context_checkpoint": "Context checkpoint",
+            }.get(record["tool"], "Researching corpus evidence")
             row = TraceRow(
                 atS=round(monotonic() - started, 3),
-                action=f"MCP {record['agent']} · {record['tool']}",
+                action=action,
                 returned=(
                     f"{record.get('status')} · {record.get('result_count', 0)} items · "
                     f"{record.get('duration_ms', 0)} ms"
@@ -213,6 +223,34 @@ class AgenticResearch:
             if name != "run.json"
         }
         artifacts["plans.json"] = json.dumps(plans, indent=2).encode()
+        artifacts["research_ledger.json"] = json.dumps({
+            "question": question,
+            "tool_calls": [
+                {"tool": item["tool"], "purpose": item.get("purpose"),
+                 "expected_evidence_type": item.get("expected_evidence_type"),
+                 "result_count": item.get("result_count")}
+                for item in tool_calls if item["tool"] not in {"context_checkpoint"}
+            ],
+            "evidence_ids": sorted({
+                str(value) for item in tool_calls for value in self._evidence_ids(item.get("result"))
+            }),
+        }, indent=2).encode()
+        artifacts["context_checkpoints.json"] = json.dumps([
+            item.get("result") for item in tool_calls if item["tool"] == "context_checkpoint"
+        ], indent=2).encode()
+        shared_ledger = json.loads(result["artifacts"].get("ledger.json", b"{}").decode() or "{}")
+        shared_ledger.setdefault("evidence_bundle", {}).update({
+            "agent_evidence_ids": sorted({
+                str(value) for item in tool_calls for value in self._evidence_ids(item.get("result"))
+            }),
+        })
+        shared_ledger["execution_metadata"] = {
+            "controller": "agentic",
+            "producing_path": "baseline_fallback" if mcp_error else "agentic",
+            "execution_status": "degraded" if mcp_error else "completed",
+            "skills_loaded": [item["result"] for item in tool_calls if item["tool"] == "load_skill"],
+        }
+        artifacts["ledger.json"] = json.dumps(shared_ledger, indent=2).encode()
         artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": 0.42 if ambiguous else None, "awaiting_reading": ambiguous}, indent=2).encode()
         artifacts["readings.json"] = json.dumps([r.model_dump(by_alias=True) for r in run.readings], indent=2).encode()
         supported = bool(run.readings) and all(
@@ -253,6 +291,20 @@ class AgenticResearch:
         except (httpx.HTTPError, ValueError):
             return None
         return None
+
+    @staticmethod
+    def _evidence_ids(value: object) -> set[str]:
+        if isinstance(value, dict):
+            found = {
+                str(item) for key, item in value.items()
+                if key.endswith("_id") and isinstance(item, (str, int))
+            }
+            for item in value.values():
+                found.update(AgenticResearch._evidence_ids(item))
+            return found
+        if isinstance(value, list):
+            return set().union(*(AgenticResearch._evidence_ids(item) for item in value)) if value else set()
+        return set()
 
 
 __all__ = ["AgenticResearch"]

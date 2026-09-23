@@ -17,8 +17,8 @@ def read_jsonl(path: Path) -> list[dict]:
 
 
 def paged(rows: list[dict], offset: int = 0, limit: int = 10) -> dict:
-    if offset < 0 or limit < 1 or limit > 50:
-        raise ValueError("offset must be nonnegative and limit must be 1..50")
+    if offset < 0 or limit < 1:
+        raise ValueError("offset must be nonnegative and limit must be positive")
     return {
         "total": len(rows),
         "offset": offset,
@@ -160,6 +160,62 @@ class CorpusStore:
         pid = self.by_dblp.get(raw)
         return str(self.by_paper[pid].get("title") or "") if pid else None
 
+    def mentioned_paper_ids(self, question: str) -> list[str]:
+        """Resolve explicit title prefixes and distinctive method names in a question."""
+        words = re.findall(r"[a-z0-9]+", question.casefold())
+        normalized_question = " ".join(words)
+        matched = []
+        for paper_id, paper in self.by_paper.items():
+            title = str(paper.get("title") or "")
+            title_words = re.findall(r"[a-z0-9]+", title.casefold())
+            prefix = " ".join(title_words[:3])
+            brand = re.split(r"[^A-Za-z0-9]+", title, maxsplit=1)[0]
+            distinctive = (
+                len(brand) >= 4
+                and (brand.isupper() or any(char.isdigit() for char in brand) or any(char.isupper() for char in brand[1:]))
+            )
+            if (
+                len(title_words) >= 3 and prefix in normalized_question
+                or distinctive and re.search(rf"(?i)\b{re.escape(brand)}\b", question)
+            ):
+                matched.append(paper_id)
+        return matched
+
+    def rank_evidence(
+        self,
+        query: str,
+        passage_ids: list[str] | None = None,
+        paper_ids: list[str] | None = None,
+        offset: int = 0,
+        limit: int = 50,
+    ) -> dict:
+        """Rank existing passages with the corpus BM25S index, retaining scores."""
+        allowed = set(passage_ids) if passage_ids is not None else set(self.by_passage)
+        papers = set(paper_ids) if paper_ids is not None else None
+        allowed = {
+            passage_id for passage_id in allowed
+            if passage_id in self.by_passage
+            and (papers is None or self.by_passage[passage_id]["paper_id"] in papers)
+        }
+        if self.bm25 is not None and allowed:
+            tokens = bm25s.tokenize([query], stopwords="en", show_progress=False)
+            ranked = self.bm25.retrieve(
+                tokens, k=len(self.passages), show_progress=False, sorted=True
+            )
+            rows = [
+                {**self.by_passage[doc["passage_id"]], "score": float(score)}
+                for doc, score in zip(ranked.documents[0], ranked.scores[0], strict=True)
+                if doc["passage_id"] in allowed
+            ]
+        else:
+            terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 2]
+            rows = [
+                {**self.by_passage[passage_id], "score": float(sum(self.by_passage[passage_id]["text"].casefold().count(term) for term in terms))}
+                for passage_id in allowed
+            ]
+            rows.sort(key=lambda row: (-row["score"], row["passage_id"]))
+        return paged(rows, offset, limit)
+
     def reference_title(self, reference_id: str) -> str | None:
         row = self.by_reference.get(str(reference_id))
         if not row:
@@ -275,11 +331,22 @@ class CorpusStore:
         items = siblings[max(0, idx - window) : idx + window + 1]
         return {"total": len(items), "offset": 0, "limit": len(items), "items": items}
 
-    def facts(self, paper_id: str, offset: int = 0, limit: int = 10) -> dict:
-        return paged([f for f in self.fact_rows if f["subject"] == paper_id], offset, limit)
+    def facts(
+        self, paper_id: str, offset: int = 0, limit: int = 10,
+        predicate: str | None = None,
+    ) -> dict:
+        return paged(
+            [
+                fact for fact in self.fact_rows
+                if fact["subject"] == paper_id
+                and (predicate is None or fact["predicate"] == predicate)
+            ],
+            offset, limit,
+        )
 
     def citations(
-        self, paper_id: str, direction: str = "out", offset: int = 0, limit: int = 10
+        self, paper_id: str, direction: str = "out", offset: int = 0, limit: int = 10,
+        in_corpus_only: bool = False,
     ) -> dict:
         if direction not in {"in", "out"}:
             raise ValueError("direction must be in or out")
@@ -287,6 +354,7 @@ class CorpusStore:
             r
             for r in self.references
             if (r["paper_id"] if direction == "out" else r["resolved_paper_id"]) == paper_id
+            and (not in_corpus_only or bool(r.get("resolved_paper_id")))
         ]
         rows = [
             {**reference, "fact_id": f"{reference['reference_id']}-cites"}

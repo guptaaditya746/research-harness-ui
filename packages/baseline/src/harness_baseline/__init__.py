@@ -1129,7 +1129,21 @@ class Baseline20:
             "coverage_plan.json": json.dumps(
                 {"coverage": None, "reason": "baseline has no ledger"}, indent=2
             ).encode(),
-            "ledger.json": json.dumps({"available": False}, indent=2).encode(),
+            # Shared downstream contract: controllers supply evidence; claim
+            # construction, validation, provenance, and prose consume this
+            # same package for Fast, Adaptive, and Agentic paths.
+            "ledger.json": json.dumps({
+                "evidence_bundle": {
+                    "passage_ids": [str(item["passage_id"]) for item in state.get("passages", [])],
+                    "source_ids": sorted({source for claim in claims for source in claim.source_ids}),
+                    "coverage": state.get("retrieval", {}),
+                },
+                "claim_subgraph_ids": [claim.id for claim in claims],
+                "execution_metadata": {
+                    "controller": "adaptive" if self.enhanced else "fast",
+                    "run_id": run_id,
+                },
+            }, ensure_ascii=False, indent=2).encode(),
             "graph.trig": dataset.export_trig().encode(),
             "triples.ttl": dataset.export_turtle().encode(),
             "claims.json": json.dumps({

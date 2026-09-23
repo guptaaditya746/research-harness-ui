@@ -50,6 +50,10 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
     fact = [f for f in store.facts("p17")["items"] if f["predicate"] == "cites"]
     assert fact[0]["object"] == "p2"
     assert fact[0]["source_id"] == cited["items"][0]["reference_id"]
+    assert all(
+        row["predicate"] == "author"
+        for row in store.facts("p17", predicate="author")["items"]
+    )
     assert store.citations("p2", "in")["total"] == 1
     hits = store.search('"world models" AND robot')
     assert hits["total"] == 1
@@ -75,6 +79,7 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
         "expand",
         "prior_triples",
         "rank",
+        "rank_evidence",
     }
     response = asyncio.run(mcp.call_tool("citations", {"paper_id": "p17"}))
     assert "p2" in str(response)
@@ -83,6 +88,12 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
         for row in store.expand("p17-s1-p1", 1)["items"]
     )
     assert store.results("predict")["total"] == 0  # results contain numeric claims only
+    ranked = store.rank_evidence("robot", ["p17-s1-p1"])
+    assert ranked["total"] == 1
+    assert ranked["items"][0]["passage_id"] == "p17-s1-p1"
+    assert ranked["items"][0]["score"] > 0
+    store.by_paper["p28"] = {"paper_id": "p28", "title": "DayDreamer: World Models for Physical Robot Learning"}
+    assert store.mentioned_paper_ids("What limitation does DayDreamer report?") == ["p28"]
     assert "items" in store.keyphrases()
     monkeypatch.setattr(
         "harness_corpus.ingest.lookup_dblp_many",

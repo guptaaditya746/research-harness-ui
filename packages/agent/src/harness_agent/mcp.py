@@ -13,11 +13,16 @@ import httpx
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
+from .research_state import ResearchLedger
+from .skills import catalog, relevant
+
 ToolSink = Callable[[dict[str, Any]], None]
 
 
 def _intent(name: str) -> tuple[str, str]:
     evidence_type = {
+        "search_evidence": "ranked_passage", "read_evidence": "passage",
+        "structured_facts": "canonical_metadata", "evidence_for_claim": "claim_evidence",
         "facts": "canonical_metadata", "citations": "citation_fact", "search": "passage",
         "passages": "passage", "tables": "table_cell", "rank_evidence": "ranked_passage",
         "prior_triples": "claim_subgraph", "related": "related_entity",
@@ -114,19 +119,34 @@ class MCPToolClient:
                 }
                 for item in listed.tools
             ]
+            ledger = ResearchLedger(question=question)
+            loaded_skills = relevant(question)
+            for skill in loaded_skills:
+                self._counter += 1
+                self.sink({
+                    "call_id": f"skill-{self._counter:03d}", "agent": self.agent,
+                    "tool": "load_skill", "arguments": {"name": skill.name, "version": skill.version},
+                    "result": {"name": skill.name, "version": skill.version}, "result_count": 1,
+                    "duration_ms": 0.0, "status": "ok",
+                    "purpose": "Load a reusable research strategy for the active question.",
+                    "expected_evidence_type": "research_skill",
+                })
             messages: list[dict[str, Any]] = [
                 {
                     "role": "system",
                     "content": (
-                        "You are the research supervisor. Form a search strategy and freely choose "
-                        "among the corpus MCP tools: search, rank_evidence, facts, citations, "
-                        "prior_triples, tables, passages, and related tools. Preliminary claims are "
+                        "You are the research supervisor. Form hypotheses, then freely choose corpus "
+                        "MCP evidence tools. Prefer search_evidence, read_evidence, structured_facts, "
+                        "citations, tables, and evidence_for_claim; use specialist tools when needed. "
+                        "Preliminary claims are "
                         "candidates, not authority. Verify or challenge them and follow additional "
                         "evidence when it could materially change the answer. Stop when the answer "
                         "requirements are evidenced or a complete indexed absence procedure is "
                         "exhausted. Return only JSON with verified_claim_ids (list of preliminary "
                         "claim IDs), additional_evidence_ids (list of observed passage IDs), and "
-                        "reasoning_summary. Never invent IDs, facts, or counts."
+                        "reasoning_summary. Never invent IDs, facts, or counts. Available skills: "
+                        + catalog() + ". Loaded skills: "
+                        + "; ".join(f"{skill.name}@{skill.version}: {skill.instructions}" for skill in loaded_skills)
                     ),
                 },
                 {"role": "user", "content": question},
@@ -191,6 +211,7 @@ class MCPToolClient:
                         if error:
                             record["error"] = error
                         self.sink(record)
+                        ledger.record(name, result, record["purpose"])
                         messages.append(
                             {
                                 "role": "tool",
@@ -198,6 +219,20 @@ class MCPToolClient:
                                 "content": json.dumps(result, ensure_ascii=False, default=str),
                             }
                         )
+                        checkpoint = ledger.checkpoint(messages)
+                        if checkpoint:
+                            self._counter += 1
+                            self.sink({
+                                "call_id": f"context-{self._counter:03d}", "agent": self.agent,
+                                "tool": "context_checkpoint", "arguments": {}, "result": checkpoint,
+                                "result_count": len(ledger.evidence_ids), "duration_ms": 0.0, "status": "ok",
+                                "purpose": "Preserve research state and exact evidence handles while compacting context.",
+                                "expected_evidence_type": "research_ledger",
+                            })
+                            messages = messages[:2] + [{
+                                "role": "user",
+                                "content": "Research ledger checkpoint (raw evidence remains available by ID): " + ledger.summary(),
+                            }] + messages[-4:]
 
     def run_agent(
         self, model: Any, question: str, grounded_context: dict[str, Any] | None = None
