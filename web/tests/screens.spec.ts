@@ -62,3 +62,17 @@ test('runs open an artifact inline from the API', async ({ page }) => {
   await row.getByRole('button', { name: 'query.rq' }).click();
   await expect(row.locator('pre')).toContainText('SELECT');
 });
+
+test('question library runs a question without typing', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: /Question library/ }).click();
+  const library = page.getByRole('region', { name: 'Question library' });
+  await expect(library.getByText('Which paper introduced Video Prediction Policy?')).toBeVisible();
+  await library.getByRole('textbox', { name: 'Filter questions' }).fill('DayDreamer');
+  const row = library.locator('.library-row').filter({ hasText: 'How many indexed papers cite DayDreamer' });
+  await row.hover();
+  await page.screenshot({ path: 'test-results/library-hover.png' });
+  await row.getByRole('button', { name: 'Fast', exact: true }).click();
+  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue(/How many indexed papers cite DayDreamer/);
+  await expect(page.getByText('Fast baseline').first()).toBeVisible();
+});

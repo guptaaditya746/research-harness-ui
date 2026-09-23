@@ -299,3 +299,24 @@ def test_model_calls_respect_the_run_budget() -> None:
             assert "stopped" in str(exc)
         else:
             raise AssertionError("call started after stop")
+
+
+def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeypatch) -> None:
+    datasets = tmp_path / "datasets"
+    datasets.mkdir()
+    (datasets / "question_matrix_20.json").write_text(
+        '[{"id": "q01", "category": "metadata", "type": "paper_identification", '
+        '"question": "Which paper introduced Video Prediction Policy?"}]'
+    )
+    test_runtime = RunRuntime(tmp_path / "artifacts", datasets)
+    test_runtime.gold._write([
+        {"id": "gold-1", "question": "Which paper introduced  Video Prediction Policy?", "status": "draft"},
+        {"id": "gold-2", "question": "Who wrote FOCUS?", "status": "approved"},
+    ])
+    monkeypatch.setenv("DATASETS_ROOT", str(datasets))
+    monkeypatch.setattr(main, "runtime", test_runtime)
+    body = TestClient(app).get("/questions").json()["questions"]
+    assert [(item["question"], item["category"]) for item in body] == [
+        ("Which paper introduced Video Prediction Policy?", "metadata"),
+        ("Who wrote FOCUS?", "gold"),
+    ]

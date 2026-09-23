@@ -5,6 +5,8 @@ type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_resu
 type TripleView = 'statements' | 'graph' | 'turtle';
 type GoldCandidate = { id: string; run_id: string; question: string; gold_triples: Triple[]; gold_claims?: ClaimSubgraph[]; notes: string; status: string };
 type PaperLabel = { paper_id: string; dblp_iri?: string | null; title: string };
+type LibraryQuestion = { question: string; id?: string | null; category: string; type?: string | null; expected?: string | null; source: string };
+type RunPath = 'agentic' | 'baseline' | 'baseline-enhanced';
 type Aggregate = { mean: number | null; min: number | null; max: number | null };
 type BenchmarkPath = { path: string; completed: number; failed: number; precision: Aggregate; recall: Aggregate; f1: Aggregate; claim_precision: Aggregate; claim_recall: Aggregate; claim_f1: Aggregate; repetitions: string[] };
 type BenchmarkQuestion = { id: string; question: string; category: string; gold_version: string; paths: BenchmarkPath[] };
@@ -105,6 +107,30 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
   </div>;
 }
 
+const categoryOrder = ['metadata', 'citation', 'aggregation', 'synthesis', 'ambiguity', 'gold', 'recent'];
+const categoryLabel: Record<string, string> = { metadata: 'Metadata', citation: 'Citations', aggregation: 'Aggregation', synthesis: 'Synthesis over full text', ambiguity: 'Ambiguous — agent interprets', gold: 'Gold candidates', recent: 'Recent runs' };
+
+function QuestionLibrary({ items, filter, setFilter, onPick, onRun, onCompare }: { items: LibraryQuestion[]; filter: string; setFilter: (value: string) => void; onPick: (text: string) => void; onRun: (kind: RunPath, text: string) => void; onCompare: (text: string) => void }) {
+  const needle = filter.trim().toLowerCase();
+  const visible = items.filter(item => !needle || item.question.toLowerCase().includes(needle) || (item.type || '').toLowerCase().includes(needle));
+  const groups = [...new Set(visible.map(item => item.category))].sort((a, b) => (categoryOrder.indexOf(a) + 1 || 99) - (categoryOrder.indexOf(b) + 1 || 99));
+  return <section id="question-library" className="library" aria-label="Question library">
+    <input className="input library-filter" autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter questions" aria-label="Filter questions" />
+    {visible.length === 0 && <p className="muted micro">No questions match.</p>}
+    {groups.map(group => <div key={group} className="library-group"><div className="section-title">{categoryLabel[group] || group}</div>
+      {visible.filter(item => item.category === group).map(item => <div key={`${item.source}-${item.id ?? item.question}`} className="library-row">
+        <button className="text-button library-text" title="Put this question in the box to edit it" onClick={() => onPick(item.question)}>{item.question}</button>
+        <span className="library-meta muted micro">{item.type?.replaceAll('_', ' ')}</span>
+        <span className="library-run" aria-label={`Run: ${item.question}`}>
+          <button className="text-button micro" onClick={() => onRun('baseline', item.question)}>Fast</button>
+          <button className="text-button micro" onClick={() => onRun('baseline-enhanced', item.question)}>Adaptive</button>
+          <button className="text-button micro" onClick={() => onRun('agentic', item.question)}>Agentic</button>
+          <button className="text-button micro" onClick={() => onCompare(item.question)}>Compare</button>
+        </span>
+      </div>)}</div>)}
+  </section>;
+}
+
 export default function App() {
   const initial = new URLSearchParams(location.search).get('screen') as Scene | null;
   const [scene, setScene] = useState<Scene>(initial || 'idle');
@@ -127,6 +153,9 @@ export default function App() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [goldErrors, setGoldErrors] = useState<Record<string, string>>({});
   const [picking, setPicking] = useState(false);
+  const [library, setLibrary] = useState<LibraryQuestion[]>([]);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryFilter, setLibraryFilter] = useState('');
   // Exactly one set of live streams belongs to the screen; older ones are closed.
   const streams = useRef<EventSource[]>([]);
   const watched = useRef<string>('');
@@ -141,6 +170,9 @@ export default function App() {
     if (!response.ok) throw new Error(`${response.status} ${await response.text().catch(() => '')}`.trim());
     return response.json() as Promise<T>;
   };
+  const loadLibrary = () => getJson<{ questions: LibraryQuestion[] }>(`${api}/questions`).then(data => setLibrary(data.questions || [])).catch(() => undefined);
+  useEffect(() => { loadLibrary(); }, []);
+  useEffect(() => { if (!libraryOpen) return; const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setLibraryOpen(false); }; window.addEventListener('keydown', close); return () => window.removeEventListener('keydown', close); }, [libraryOpen]);
   useEffect(() => { getJson<{ baseline: 'fast' | 'slow'; agentic: 'fast' | 'slow' }>(`${api}/settings`).then(value => { setBaseMode(value.baseline); setAgMode(value.agentic); }).catch(() => undefined); }, []);
   const saveSettings = (change: { baseline?: 'fast' | 'slow'; agentic?: 'fast' | 'slow' }) => {
     if (change.baseline) setBaseMode(change.baseline);
@@ -168,7 +200,7 @@ export default function App() {
   };
 
   const openRun = (run: Run) => { setActiveId(run.id); setQuestion(run.question); setPick(run.chosenReading ?? 0); setPromotion(''); setNotice(''); setScene(run.status === 'awaiting_reading' ? 'readings' : run.status === 'incomplete' ? 'failed' : run.status === 'stopped' ? 'idle' : run.path === 'agentic' ? 'agentic_result' : 'baseline_result'); };
-  const remember = (run: Run) => setRuns(items => [run, ...items.filter(item => item.id !== run.id)]);
+  const remember = (run: Run) => { setRuns(items => [run, ...items.filter(item => item.id !== run.id)]); loadLibrary(); };
   // Poll until the run is persisted: used when the event stream drops, so a
   // network blip never turns a still-running run into a "failed" screen.
   const settle = async (id: string): Promise<Run | null> => {
@@ -199,19 +231,19 @@ export default function App() {
     watched.current = id;
     watch(id, run => { remember(run); if (watched.current === id) openRun(run); });
   };
-  const runFixture = async (kind: 'agentic' | 'baseline' | 'baseline-enhanced') => {
-    closeStreams(); setPath(kind); setScene('running'); setLiveTrace([]); setNotice(''); setActiveId('');
+  const runFixture = async (kind: RunPath, text: string = question) => {
+    closeStreams(); setQuestion(text); setLibraryOpen(false); setPath(kind); setScene('running'); setLiveTrace([]); setNotice(''); setActiveId('');
     try {
-      const { id } = await getJson<{ id: string }>(`${api}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, path: kind, budget: kind === 'agentic' ? agMode : baseMode }) });
+      const { id } = await getJson<{ id: string }>(`${api}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text, path: kind, budget: kind === 'agentic' ? agMode : baseMode }) });
       setActiveId(id); follow(id);
     } catch (error) { setNotice(`The run could not be started: ${(error as Error).message}`); setScene('failed'); }
   };
-  const runCompare = async () => {
-    closeStreams(); setScene('running'); setLiveTrace([]); setNotice(''); watched.current = '*';
+  const runCompare = async (text: string = question) => {
+    closeStreams(); setQuestion(text); setLibraryOpen(false); setScene('running'); setLiveTrace([]); setNotice(''); watched.current = '*';
     const paths = ['baseline', 'baseline-enhanced', 'agentic'] as const;
     let started: { id: string; kind: typeof paths[number] }[];
     try {
-      started = await Promise.all(paths.map(async kind => ({ kind, ...(await getJson<{ id: string }>(`${api}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, path: kind, budget: kind === 'agentic' ? agMode : baseMode }) })) })));
+      started = await Promise.all(paths.map(async kind => ({ kind, ...(await getJson<{ id: string }>(`${api}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text, path: kind, budget: kind === 'agentic' ? agMode : baseMode }) })) })));
     } catch (error) { setNotice(`The comparison could not be started: ${(error as Error).message}`); setScene('failed'); return; }
     compareIds.current = started.map(item => item.id);
     const finished: Run[] = [];
@@ -265,8 +297,9 @@ export default function App() {
       {scene === 'gold' && <><h2>Gold candidates</h2><p className="muted">Review claim subgraphs and their provenance before approving a dataset row. Triples remain diagnostic. JSON is checked when you save.</p>{candidates.length === 0 && <p className="muted">No candidates yet. Rate a run, then promote it from the result sidebar.</p>}{candidates.map(candidate => { const claimsKey = `${candidate.id}:claims`; const triplesKey = `${candidate.id}:triples`; return <details className="run-row" key={candidate.id}><summary><span>{candidate.question}</span><span className="muted micro">{candidate.status}</span></summary><div className="muted micro">Gold claims</div><textarea className="input code" aria-label={`Claims for ${candidate.question}`} value={drafts[claimsKey] ?? JSON.stringify(candidate.gold_claims || [], null, 2)} onChange={event => { const value = event.target.value; setDrafts(previous => ({ ...previous, [claimsKey]: value })); }} /><div className="muted micro">Diagnostic triples</div><textarea className="input code" aria-label={`Triples for ${candidate.question}`} value={drafts[triplesKey] ?? JSON.stringify(candidate.gold_triples || [], null, 2)} onChange={event => { const value = event.target.value; setDrafts(previous => ({ ...previous, [triplesKey]: value })); }} /><button className="btn btn-secondary" onClick={() => saveGold(candidate)}>Save and approve</button>{goldErrors[candidate.id] && <p className="muted micro" role="status">{goldErrors[candidate.id]}</p>}</details>; })}</>}
       {scene === 'benchmark' && <><h2>Benchmark</h2><p className="muted">Approved claim subgraphs aggregated across evaluation repetitions. Edge scores remain diagnostic. Agentic repetitions research the agent's top-ranked concept.</p><button className="btn btn-secondary" onClick={loadBenchmark}>Refresh</button>{benchmarkRows.length === 0 && <p className="muted" style={{ marginTop: 20 }}>No approved gold questions yet. Approve a candidate on the Gold page first.</p>}<table className="table"><thead><tr><th>Question</th><th>Category</th><th>Fast</th><th>Adaptive</th><th>Agentic</th></tr></thead><tbody>{benchmarkRows.map(row => <tr key={row.id}><td><details><summary>{row.question}</summary><div className="muted micro">Gold {row.gold_version}</div><button className="text-button micro" onClick={() => runBenchmark(row)}>Run benchmark · 3× per path</button>{row.paths.map(path => <div key={path.path} className="micro">{path.path}: {path.completed}/{path.completed + path.failed} runs · edge F1 {path.f1.mean?.toFixed(2) || '—'} · repetitions {path.repetitions.join(', ')}</div>)}</details></td><td>{row.category}</td>{['baseline', 'adaptive-baseline', 'agentic'].map(pathName => { const path = row.paths.find(item => item.path === pathName || (pathName === 'adaptive-baseline' && item.path === 'baseline-enhanced')); return <td key={pathName}>{path ? path.completed ? `Claim F1 ${path.claim_f1.mean?.toFixed(2) ?? '—'} · P ${path.claim_precision.mean?.toFixed(2) ?? '—'} · R ${path.claim_recall.mean?.toFixed(2) ?? '—'}` : `${path.failed} failed` : '—'}</td>; })}</tr>)}</tbody></table></>}
       {notice && <p className="notice" role="alert">{notice}</p>}
-      {!['corpus', 'settings', 'runs', 'gold', 'benchmark'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline')}>Fast</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline-enhanced')}>Adaptive</button><button className="btn btn-primary" disabled={busy || !question.trim()} onClick={() => runFixture('agentic')}>Agentic</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={runCompare}>Compare all</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
-        {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'corpus_absent' || r.status === 'no_evidence_found' || r.status === 'incomplete').slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
+      {!['corpus', 'settings', 'runs', 'gold', 'benchmark'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline')}>Fast</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline-enhanced')}>Adaptive</button><button className="btn btn-primary" disabled={busy || !question.trim()} onClick={() => runFixture('agentic')}>Agentic</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runCompare()}>Compare all</button><button className="text-button micro" aria-expanded={libraryOpen} aria-controls="question-library" disabled={busy} onClick={() => setLibraryOpen(open => !open)}>{libraryOpen ? 'Close question library' : `Question library (${library.length})`}</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
+        {libraryOpen && !busy && <QuestionLibrary items={library} filter={libraryFilter} setFilter={setLibraryFilter} onPick={text => { setQuestion(text); setLibraryOpen(false); }} onRun={(kind, text) => runFixture(kind, text)} onCompare={text => runCompare(text)} />}
+        {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'corpus_absent' || r.status === 'no_evidence_found' || r.status === 'incomplete').filter((run, index, all) => all.findIndex(other => other.question === run.question) === index).slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
         {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Adaptive baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'Concept · shared evidence graph · MCP verification' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction · evidence review' : 'Fixed pipeline · no verification pass'}</span></div>{liveTrace.map((step, i) => <div className="log-row" key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={stopRun}>Stop run</button></section>}
         {scene === 'readings' && active && <section style={{ marginTop: 60 }}><p style={{ maxWidth: '56ch' }}>The agent proposed {active.readings.length} interpretations of this question. Choose one to research.</p><p className="muted" style={{ fontSize: 13.5, marginBottom: 34 }}>Each interpretation scopes retrieval and extraction differently; the question itself stays unchanged.</p>{active.readings.map((r, i) => { const concept = active.concepts[i]; return <button key={i} className="reading-row" disabled={picking} onClick={() => chooseReading(i)}><span className="muted micro">{i + 1}</span><span style={{ display: 'grid', gap: 4 }}><strong style={{ fontSize: 16.5 }}>{r.label}</strong><span className="muted" style={{ fontSize: 13.5 }}>{r.gloss}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{[r.classes.join(' · '), r.properties.join(' · '), concept?.evidenceHits != null ? `${concept.evidenceHits} matching corpus passages` : ''].filter(Boolean).join('  |  ')}</span></span></button>; })}<button className="text-button" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setScene('idle'); }}>None of these — rephrase the question</button></section>}
         {scene === 'failed' && !active && !notice && <p className="notice">The run failed before it produced a result.</p>}

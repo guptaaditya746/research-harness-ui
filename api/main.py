@@ -818,6 +818,51 @@ def papers() -> list[dict]:
     return store.papers
 
 
+def _question_sets() -> list[Path]:
+    root = Path(os.getenv("DATASETS_ROOT", ROOT / "datasets"))
+    configured = os.getenv("HARNESS_QUESTION_SETS", "question_matrix_20.json")
+    paths = []
+    for name in configured.split(","):
+        name = name.strip()
+        if name:
+            path = Path(name)
+            paths.append(path if path.is_absolute() else root / path)
+    return paths
+
+
+@app.get("/questions")
+def questions() -> dict[str, list[dict]]:
+    """Questions the UI offers for one-click runs: curated sets, gold rows, recent runs."""
+    items: list[dict] = []
+    seen: set[str] = set()
+
+    def add(question: object, **meta: object) -> None:
+        text = " ".join(str(question or "").split())
+        key = text.casefold()
+        if text and key not in seen:
+            seen.add(key)
+            items.append({"question": text, **meta})
+
+    for path in _question_sets():
+        try:
+            rows = json.loads(path.read_text())
+        except (OSError, ValueError):
+            LOGGER.warning("Question set %s is unreadable", path)
+            continue
+        for row in rows if isinstance(rows, list) else rows.get("questions", []):
+            if isinstance(row, dict):
+                add(row.get("question"), id=row.get("id"), category=row.get("category", "curated"),
+                    type=row.get("type"), expected=row.get("expected"), source=path.stem)
+    for row in runtime.gold.list():
+        add(row.get("question"), id=row.get("id"), category="gold", type=row.get("status"),
+            source="gold")
+    for run in runtime.artifacts.list_runs()[:50]:
+        if run.path in {"agentic", "baseline", "baseline-enhanced"} and not run.evaluation_mode:
+            add(run.question, id=run.id, category="recent", type=run.status, source="runs")
+    recent = [item for item in items if item["category"] == "recent"][:10]
+    return {"questions": [item for item in items if item["category"] != "recent"] + recent}
+
+
 @app.get("/settings")
 def settings() -> dict[str, str]:
     return dict(runtime.settings)

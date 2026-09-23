@@ -33,3 +33,15 @@
 .graph-edge { display: flex; flex-direction: column; align-items: center; gap: 4px; color: var(--color-accent-700); font-size: 11.5px; }
 .graph-edge::after { content: ''; width: 100%; height: 1px; background: var(--color-accent); }
 @media (max-width: 760px) { .sidebar { position: static; max-width: none; } }
+
+.library { margin-top: 22px; padding: 18px 0 6px; border-top: 1px solid color-mix(in srgb, var(--color-text) 12%, transparent); display: grid; gap: 22px; max-height: 60vh; overflow-y: auto; }
+.library-filter { width: 100%; max-width: 420px; font-size: 14px; padding: 6px 0; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--color-text) 25%, transparent); background: transparent; color: inherit; }
+.library-group { display: grid; gap: 2px; }
+.library-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px 18px; align-items: baseline; padding: 8px 6px; border-radius: 2px; }
+.library-row:hover, .library-row:focus-within { background: color-mix(in srgb, var(--color-text) 4%, transparent); }
+.library-text { color: var(--color-text); font-size: 14.5px; }
+.library-meta { white-space: nowrap; }
+.library-run { display: flex; gap: 14px; visibility: hidden; }
+.library-row:hover .library-run, .library-row:focus-within .library-run { visibility: visible; }
+@media (hover: none) { .library-run { visibility: visible; } }
+@media (max-width: 720px) { .library-row { grid-template-columns: 1fr; } }

@@ -42,6 +42,11 @@ Open `http://127.0.0.1:25173` on the laptop.
 
 ## 2. What to show
 
+No typing is needed. Open **Question library** under the question box. Hover a question to
+run it with **Fast**, **Adaptive**, **Agentic** or **Compare**; click its text to put it in the box and
+edit it first. The library lists the question matrix (`HARNESS_QUESTION_SETS`, default
+`question_matrix_20.json`), gold candidates and your recent live runs. Filter by any word.
+
 The corpus has 37 DBLP-verified papers. These questions come from
 `datasets/question_matrix_20.json`.
 
