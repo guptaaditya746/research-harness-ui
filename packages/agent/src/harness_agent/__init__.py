@@ -10,6 +10,7 @@ from time import monotonic
 
 import httpx
 from harness_baseline import Baseline20
+from harness_extraction import model_purpose
 from harness_observability import record_tool_call
 from harness_schema.models import (
     Check,
@@ -69,6 +70,7 @@ class AgenticResearch:
         agent_decision: dict = {}
         shown_ids: set[str] = set()
         agent_checks: list[Check] = []
+        independent: dict | None = None
 
         def tool_sink(record: dict) -> None:
             tool_calls.append(record)
@@ -189,6 +191,13 @@ class AgenticResearch:
                             f"{len(unobserved)} IDs were never returned by a tool and were rejected: "
                             + ", ".join(unobserved[:5])),
                 ))
+                if verified or evidence_ids:
+                    # A second opinion from a fresh context: does the cited evidence
+                    # actually support what the agent decided? Advisory, never a gate.
+                    independent, check = self._independent_verification(
+                        question, agent_decision, verified, evidence_ids, corpus_calls, base_run,
+                    )
+                    agent_checks.append(check)
                 if unknown_claims and not verified and not evidence_ids:
                     mcp_error = "agent_claim_id_not_in_preliminary_graph"
                 elif unobserved and not evidence_ids and not verified:
@@ -371,6 +380,7 @@ class AgenticResearch:
                 "rejected_unobserved": sorted(
                     str(item) for item in decision.get("additional_evidence_ids") or [] if str(item) not in observed),
             },
+            "independent_verification": independent,
             "checks": [check.model_dump() for check in run.checks],
             "heavy_model_used": not heavy_busy and not bool(mcp_error),
             "agentic_degraded": bool(mcp_error),
@@ -525,6 +535,93 @@ class AgenticResearch:
         except (httpx.HTTPError, ValueError):
             return None
         return None
+
+    def _independent_verification(
+        self, question: str, decision: dict, verified: list, evidence_ids: list,
+        corpus_calls: list[dict], base_run: Run,
+    ) -> tuple[dict | None, Check]:
+        """One structured call, in a fresh context, judging whether the cited evidence supports the decision.
+
+        The verifier never sees the agent's conversation: only the question, the
+        decision and the text of the evidence items it cites (looked up in this
+        session's tool results and preliminary claims). It cannot add evidence,
+        only mark cited items supported or not, and it never fails a run.
+        """
+        verifier = getattr(self.baseline, "refinement_model", None) or self.agent_model
+        complete = getattr(verifier, "complete_json", None)
+        if complete is None:
+            return None, Check(name="independent verification", status="skipped", detail="no verifier model configured")
+        wanted = {str(item) for item in evidence_ids}
+        excerpts: dict[str, str] = {}
+
+        def collect(value: object) -> None:
+            if isinstance(value, dict):
+                handle = next((str(value[key]) for key in ("passage_id", "fact_id", "reference_id", "source_id")
+                               if value.get(key) not in (None, "")), None)
+                if handle in wanted and handle not in excerpts:
+                    if {"subject", "predicate", "object"} <= value.keys():
+                        excerpts[handle] = f"{value['subject']} {value['predicate']} {value['object']}"
+                    else:
+                        text = next((str(value[key]) for key in ("text", "evidence", "snippet", "title") if value.get(key)), "")
+                        excerpts[handle] = text[:600] if text else json.dumps(value, ensure_ascii=False, default=str)[:600]
+                for item in value.values():
+                    collect(item)
+            elif isinstance(value, list):
+                for item in value:
+                    collect(item)
+
+        for call in corpus_calls:
+            collect(call.get("result"))
+        claims = {claim.id: claim for reading in base_run.readings for claim in reading.claims}
+        cited_claims = [{
+            "id": claim_id,
+            "fields": {key: field.value for key, field in claims[claim_id].fields.items()},
+            "evidence": {source: text[:400] for source, text in claims[claim_id].evidence.items()},
+        } for claim_id in verified if claim_id in claims]
+        request = {
+            "question": question,
+            "agent_decision": {
+                "reasoning_summary": str(decision.get("reasoning_summary") or "")[:1200],
+                "verified_claim_ids": [str(item) for item in verified],
+                "additional_evidence_ids": sorted(wanted),
+            },
+            "cited_claims": cited_claims,
+            "cited_evidence": excerpts,
+            "evidence_not_found_in_session": sorted(wanted - set(excerpts)),
+        }
+        system = (
+            "You are an independent verifier for a research harness over a fixed corpus. You see only "
+            "the question, an agent's decision, and the text of the evidence it cites. For each cited "
+            "claim id and evidence id, decide whether the cited text supports what the decision says "
+            "about the question. You cannot add evidence or ids. Return strict JSON: "
+            '{"supported_ids": [ids whose text supports the decision], "unsupported_ids": [ids whose text '
+            'does not, or is missing], "notes": one sentence}.'
+        )
+        try:
+            with model_purpose("independent verification"):
+                payload = complete(system, json.dumps(request, ensure_ascii=False))
+        except Exception as exc:  # noqa: BLE001 - advisory step; report, never fail the run
+            return ({"status": "unavailable", "reason": f"{type(exc).__name__}: {exc}"[:200]},
+                    Check(name="independent verification", status="skipped",
+                          detail=f"verifier call failed: {type(exc).__name__}"))
+        cited = set(excerpts) | {claim["id"] for claim in cited_claims}
+        supported = [str(item) for item in (payload.get("supported_ids") or []) if str(item) in cited] \
+            if isinstance(payload, dict) else []
+        unsupported = [str(item) for item in (payload.get("unsupported_ids") or []) if str(item) in cited] \
+            if isinstance(payload, dict) else []
+        unsupported += sorted((wanted - set(excerpts)) - set(unsupported))
+        notes = str(payload.get("notes") or "")[:300] if isinstance(payload, dict) else ""
+        result = {"status": "checked", "model": getattr(verifier, "model", "verifier"), "cited": sorted(cited),
+                  "supported_ids": supported, "unsupported_ids": unsupported, "notes": notes}
+        if not cited:
+            status, detail = "skipped", "the decision cites nothing this session returned"
+        elif unsupported:
+            status = "warn"
+            detail = (f"{len(supported)} of {len(cited)} cited items judged to support the decision; "
+                      f"not supported: {', '.join(unsupported[:5])}" + (f" — {notes}" if notes else ""))
+        else:
+            status, detail = "pass", f"all {len(cited)} cited items judged to support the decision" + (f" — {notes}" if notes else "")
+        return result, Check(name="independent verification", status=status, detail=detail)
 
     @staticmethod
     def _evidence_ids(value: object) -> set[str]:

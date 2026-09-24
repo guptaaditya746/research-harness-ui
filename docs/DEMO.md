@@ -85,6 +85,26 @@ What every answer screen shows, top to bottom:
   *agentic execution*. "MCP found no matches", "extraction produced no supported triples"
   and "the agent's evidence IDs were never returned by a tool" therefore read differently.
 
+How the agent is kept honest and bounded (say this if asked about "agentic behaviour"):
+
+- **Ledger, not truncation.** When the agent's conversation outgrows the model window, the
+  oldest tool exchanges are replaced by a digest of what every call asked and found (ids and
+  one line per item), so nothing gathered is lost. The trace shows a *Context checkpoint*.
+- **Loop guards.** An identical tool call is answered from the ledger without going to the
+  server (*repeated call answered from the ledger* in the trace). After four per-paper calls
+  of one tool the result carries a hint pointing at `aggregate_facts` / `metadata_table`.
+- **One self-correction.** A final decision that cites ids no tool returned, names unknown
+  claim ids, is not JSON, or was made without any tool call is sent back once with exactly
+  those problems (*Agent decision sent back*). Only if the corrected decision still fails
+  does the run degrade.
+- **Independent verifier.** A separate structured call in a fresh context (the judge model)
+  sees only the question, the decision and the text of the evidence it cites, and marks each
+  cited item supported or not. It is advisory: the *independent verification* check reads
+  pass/warn, it never changes the answer.
+
+There is deliberately no multi-agent debate: on a 30B/8B setup it multiplies latency and
+context pressure without a measurable gain.
+
 While a run is in progress the screen shows the current stage, the model call in flight, the
 number of tool calls and the last tool result, the passages and papers examined, and the
 elapsed time. For corpus-wide questions the agent has `aggregate_facts` and

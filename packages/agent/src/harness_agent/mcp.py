@@ -21,7 +21,7 @@ from .context import (
     is_context_error,
     window_from_error,
 )
-from .research_state import ResearchLedger
+from .research_state import ResearchLedger, _handles
 from .skills import catalog, relevant
 
 ToolSink = Callable[[dict[str, Any]], None]
@@ -62,6 +62,47 @@ def _tool_payload(result: Any) -> Any:
         return json.loads(texts[0])
     except json.JSONDecodeError:
         return {"text": texts[0]}
+
+
+DECISION_KEYS = ("verified_claim_ids", "additional_evidence_ids", "reasoning_summary")
+
+
+def decision_problems(
+    final: str, *, observed: set[str], claim_ids: set[str], corpus_calls: int, needs_tools: bool,
+) -> list[str]:
+    """Why the agent's final decision cannot be accepted as-is (empty when it can).
+
+    Checked deterministically before the decision leaves the tool loop, so the
+    agent gets one chance to repair it instead of the run degrading.
+    """
+    start, end = final.find("{"), final.rfind("}")
+    try:
+        decision = json.loads(final[start:end + 1]) if start >= 0 else None
+    except json.JSONDecodeError:
+        decision = None
+    if not isinstance(decision, dict):
+        return ["the final message must be one JSON object with keys " + ", ".join(DECISION_KEYS)]
+    problems: list[str] = []
+    for key in ("verified_claim_ids", "additional_evidence_ids"):
+        if not isinstance(decision.get(key), list):
+            problems.append(f"{key} must be a list (use [] when empty)")
+    evidence = [str(item) for item in decision.get("additional_evidence_ids") or [] if isinstance(decision.get("additional_evidence_ids"), list)]
+    unobserved = [item for item in evidence if item not in observed]
+    if unobserved:
+        problems.append(
+            "these additional_evidence_ids were never returned by any tool in this session and must be "
+            "removed or replaced by ids you actually read: " + ", ".join(unobserved[:8])
+        )
+    verified = [str(item) for item in decision.get("verified_claim_ids") or [] if isinstance(decision.get("verified_claim_ids"), list)]
+    unknown = [item for item in verified if item not in claim_ids]
+    if unknown:
+        problems.append(
+            "these verified_claim_ids are not preliminary claim ids (allowed: "
+            + ", ".join(sorted(claim_ids)[:8]) + "): " + ", ".join(unknown[:8])
+        )
+    if needs_tools and corpus_calls == 0:
+        problems.append("no corpus tool was called; verify the preliminary claims with at least one tool call before deciding")
+    return problems
 
 
 class MCPUnavailable(RuntimeError):
@@ -178,6 +219,18 @@ class MCPToolClient:
             reply_tokens = min(configured_reply, max(512, window // 4))
             retried_for_length = False
             turn_number = 0
+            # One bounded self-correction: a decision that fails validation is
+            # sent back once with the exact problems, instead of degrading the run.
+            reflections_left = int(os.getenv("HARNESS_AGENT_REFLECTIONS", "1"))
+            shown_ids = _handles(grounded_context or {}) | {
+                str(claim.get("id")) for claim in (grounded_context or {}).get("preliminary_claims", [])
+                if isinstance(claim, dict) and claim.get("id") is not None
+            }
+            claim_ids = {
+                str(claim.get("id")) for claim in (grounded_context or {}).get("preliminary_claims", [])
+                if isinstance(claim, dict) and claim.get("id") is not None
+            }
+            needs_tools = (grounded_context or {}).get("answer_source") != "verified_facts"
 
             def limit() -> int:
                 # Leave room for the reply and a margin for estimation error.
@@ -270,7 +323,24 @@ class MCPToolClient:
                         + (f"{len(requested)} tool calls" if requested else "final answer"),
                     )
                     if not requested:
-                        return str(message.get("content") or "")
+                        final = str(message.get("content") or "")
+                        problems = decision_problems(
+                            final, observed=shown_ids | ledger.evidence_ids, claim_ids=claim_ids,
+                            corpus_calls=ledger.tool_calls, needs_tools=needs_tools,
+                        )
+                        if problems and reflections_left > 0:
+                            reflections_left -= 1
+                            emit_model_event("Agent decision sent back", "; ".join(problems)[:400])
+                            conversation.add_exchange(
+                                {"role": "assistant", "content": final},
+                                [{"role": "user", "content": (
+                                    "Your decision was not accepted. Fix exactly these problems and "
+                                    "return the corrected JSON (call tools first if you need more "
+                                    "evidence):\n- " + "\n- ".join(problems)
+                                )}],
+                            )
+                            continue
+                        return final
                     assistant = {
                         "role": "assistant",
                         "content": message.get("content"),
@@ -294,6 +364,21 @@ class MCPToolClient:
                             status = "error"
                             error = result["error"]
                         else:
+                            repeat = ledger.repeat_of(name, arguments)
+                        if error:
+                            pass
+                        elif repeat is not None:
+                            # The same call again returns the same data; answer
+                            # from the ledger and say so, instead of looping.
+                            earlier_id, earlier_result = repeat
+                            result = {
+                                "repeated_call": earlier_id,
+                                "note": "identical to an earlier call; the corpus has not changed. Use the "
+                                        "ids you already have, change the arguments, or decide.",
+                                "result": earlier_result,
+                            }
+                            status = "repeat"
+                        else:
                             try:
                                 raw = await session.call_tool(name, arguments)
                                 result = _tool_payload(_serialise(raw))
@@ -301,6 +386,10 @@ class MCPToolClient:
                                 result = {"error": str(exc)}
                                 status = "error"
                                 error = str(exc)
+                            hint = ledger.loop_hint(name, arguments)
+                            if hint and isinstance(result, dict):
+                                result = {**result, "hint": hint}
+                                emit_model_event("Tool-loop hint", f"{name} called for several papers; aggregate tools suggested")
                         self._counter += 1
                         record = {
                             "call_id": f"tool-{self._counter:03d}",
@@ -319,10 +408,13 @@ class MCPToolClient:
                         # Live progress: which tool ran and what it returned.
                         emit_model_event("Tool call", f"{name} · " + (
                             f"error: {str(error)[:160]}" if error
+                            else "repeated call answered from the ledger" if status == "repeat"
                             else "returned" if record["result_count"] is None
                             else f"{record['result_count']} results"
                         ) + f" · {record['duration_ms']:.0f} ms")
-                        ledger.record(name, result, record["purpose"])
+                        if status != "repeat":
+                            ledger.record(name, result, record["purpose"], arguments=arguments,
+                                          call_id=record["call_id"])
                         tool_messages.append({
                             "role": "tool",
                             "tool_call_id": call["id"],

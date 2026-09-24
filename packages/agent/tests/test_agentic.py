@@ -175,3 +175,51 @@ def test_only_unobserved_evidence_ids_degrade_the_agentic_result(monkeypatch) ->
     # Provenance of the grounded answer is reported separately from agent execution.
     assert verification["triple_provenance"]["verified"] is True
     assert verification["agentic_degraded"] is True
+
+
+class VerifierModel:
+    model = "judge"
+
+    def __init__(self, payload):
+        self.payload = payload
+        self.requests: list[dict] = []
+
+    def complete_json(self, _system: str, user: str) -> dict:
+        self.requests.append(json.loads(user))
+        return self.payload
+
+
+def test_independent_verifier_sees_only_cited_evidence_and_never_gates(monkeypatch) -> None:
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+
+    def run_agent(self, model, question, grounded_context):
+        self.sink({"call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+                   "arguments": {"query": "video prediction"}, "status": "ok", "duration_ms": 3.0,
+                   "result": {"total": 2, "items": [
+                       {"passage_id": "p4-intro", "text": "We introduce the Video Prediction Policy."},
+                       {"passage_id": "p4-related", "text": "Prior work on diffusion policies."}]},
+                   "result_count": 2})
+        return json.dumps({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro", "p4-related"],
+                           "reasoning_summary": "p4 introduces VPP"})
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    baseline = StubBaseline()
+    baseline.last_route = "verified_facts"
+    verifier = VerifierModel({"supported_ids": ["p4-intro"], "unsupported_ids": ["p4-related"],
+                              "notes": "the related-work passage is not about the introduction"})
+    baseline.refinement_model = verifier
+    result = AgenticResearch(baseline, agent_model=HighModel()).run(
+        "Which paper introduced Video Prediction Policy?", "slow", "r-verify", concept=CONCEPT
+    )
+    run = result["run"]
+    [request] = verifier.requests
+    assert set(request["cited_evidence"]) == {"p4-intro", "p4-related"}
+    assert "Video Prediction Policy" in request["cited_evidence"]["p4-intro"]
+    assert "messages" not in request                       # fresh context: no agent conversation
+    checks = {check.name: check for check in run.checks}
+    assert checks["independent verification"].status == "warn"
+    assert "p4-related" in checks["independent verification"].detail
+    assert run.status == "answered" and run.execution_status != "degraded"   # advisory only
+    verification = json.loads(result["artifacts"]["verification.json"])
+    assert verification["independent_verification"]["supported_ids"] == ["p4-intro"]
+    assert verification["independent_verification"]["unsupported_ids"] == ["p4-related"]
