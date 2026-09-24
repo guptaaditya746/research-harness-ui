@@ -5,7 +5,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from .models import Metrics, Reading, Run, TraceRow, Triple, required_artifacts
+from .models import (
+    AnswerGraph,
+    Check,
+    ComputedResult,
+    GraphEdge,
+    GraphNode,
+    Metrics,
+    Reading,
+    Run,
+    TraceRow,
+    Triple,
+    required_artifacts,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 QUESTION = "Across this corpus, which author is most successful?"
@@ -116,6 +128,7 @@ def reading(label: str, gloss: str, op: str) -> Reading:
         )
         for index, (subject, property_name, value) in enumerate(rows, 1)
     ]
+    measure = rows[0][1].replace("_", " ")
     return Reading(
         label=label,
         gloss=gloss,
@@ -128,7 +141,49 @@ def reading(label: str, gloss: str, op: str) -> Reading:
         triples=triples,
         metrics=Metrics(disagreement=0.42, precision=precision, recall=recall),
         status="answered",
+        measure=measure,
+        graph=fixture_graph(rows, measure),
     )
+
+
+def fixture_graph(rows: list[tuple[str, str, str]], measure: str) -> AnswerGraph:
+    """An illustrative connected graph: each ranked author shares one node across their papers,
+    and the ranking number is a computed node derived from those author edges."""
+    nodes: list[GraphNode] = []
+    edges: list[GraphEdge] = []
+    computed: list[ComputedResult] = []
+    for index, (author, _property, value) in enumerate(rows):
+        author_id = f"author:{author.lower().replace(' ', '-')}"
+        nodes.append(GraphNode(id=author_id, label=author, kind="author", iri=None))
+        derived = []
+        for k in range(2):
+            paper = f"paper:https://harness.local/resource/p{index * 2 + k + 1}"
+            nodes.append(GraphNode(id=paper, label=f"Fixture paper {index * 2 + k + 1}", kind="paper",
+                                   iri=paper.split(":", 1)[1]))
+            edge_id = f"t-{index:02d}{k}"
+            edges.append(GraphEdge(id=edge_id, source=paper, target=author_id, label="authoredBy", kind="fact",
+                                   sourceIds=[f"p{index * 2 + k + 1}-metadata"],
+                                   evidence="DBLP author list (fixture)"))
+            derived.append(edge_id)
+        computed_id = f"computed:{index}"
+        label = f"{value} {measure}"
+        nodes.append(GraphNode(id=computed_id, label=label, kind="computed", iri=None))
+        edges.append(GraphEdge(id=f"d-{index}", source=computed_id, target=author_id, label="computed for",
+                               kind="derived", sourceIds=[], evidence=f"count {measure} (fixture)"))
+        computed.append(ComputedResult(id=computed_id, label=label, operation=f"count {measure}",
+                                       about=author_id, derivedFrom=derived))
+    return AnswerGraph(nodes=nodes, edges=edges, computed=computed)
+
+
+FIXTURE_CHECKS = [
+    Check(name="question understanding", status="pass", detail="operation research; measure stated"),
+    Check(name="retrieval", status="pass", detail="12 passages from 6 papers"),
+    Check(name="extraction", status="pass", detail="4 supported triples"),
+    Check(name="triple provenance", status="pass", detail="every answer triple has a source and evidence"),
+    Check(name="agent research (MCP)", status="pass", detail="3 corpus tool calls, 1 returned no matches"),
+    Check(name="agent evidence IDs", status="warn", detail="1 IDs were never returned by a tool and were rejected: p99-x"),
+    Check(name="agentic execution", status="pass", detail="agent review accepted"),
+]
 
 
 def fixture_runs() -> list[Run]:
@@ -185,6 +240,7 @@ def fixture_runs() -> list[Run]:
             ],
             "rating": "partial",
             "coverage": 0.74,
+            "checks": [check.model_dump() for check in FIXTURE_CHECKS],
             "artifacts": list(required_artifacts("agentic")),
         }
     )
@@ -215,6 +271,7 @@ def fixture_runs() -> list[Run]:
             "readings": [baseline_reading.model_dump(by_alias=True)],
             "chosenReading": 0,
             "coverage": None,
+            "checks": [check.model_dump() for check in FIXTURE_CHECKS[:4]],
             "artifacts": list(required_artifacts("baseline")),
         }
     )
@@ -230,6 +287,11 @@ def fixture_runs() -> list[Run]:
             "reason": "no_results",
             "readings": [],
             "chosenReading": None,
+            "checks": [
+                Check(name="question understanding", status="pass", detail="operation research").model_dump(),
+                Check(name="retrieval", status="pass", detail="9 passages from 4 papers").model_dump(),
+                Check(name="extraction", status="fail", detail="0 supported triples").model_dump(),
+            ],
             "artifacts": list(required_artifacts("baseline")),
         }
     )

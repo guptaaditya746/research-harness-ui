@@ -74,7 +74,146 @@
         "author_of",
         "cites",
         "citation_count"
-      ]
+      ],
+      "measure": "in corpus citations",
+      "graph": {
+        "nodes": [
+          {
+            "id": "author:jonathan-berant",
+            "label": "Jonathan Berant",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p1",
+            "label": "Fixture paper 1",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p1"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p2",
+            "label": "Fixture paper 2",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p2"
+          },
+          {
+            "id": "computed:0",
+            "label": "214 in corpus citations",
+            "kind": "computed",
+            "iri": null
+          },
+          {
+            "id": "author:matt-gardner",
+            "label": "Matt Gardner",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p3",
+            "label": "Fixture paper 3",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p3"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p4",
+            "label": "Fixture paper 4",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p4"
+          },
+          {
+            "id": "computed:1",
+            "label": "187 in corpus citations",
+            "kind": "computed",
+            "iri": null
+          }
+        ],
+        "edges": [
+          {
+            "id": "t-000",
+            "source": "paper:https://harness.local/resource/p1",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p1-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-001",
+            "source": "paper:https://harness.local/resource/p2",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p2-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-0",
+            "source": "computed:0",
+            "target": "author:jonathan-berant",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count in corpus citations (fixture)"
+          },
+          {
+            "id": "t-010",
+            "source": "paper:https://harness.local/resource/p3",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p3-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-011",
+            "source": "paper:https://harness.local/resource/p4",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p4-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-1",
+            "source": "computed:1",
+            "target": "author:matt-gardner",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count in corpus citations (fixture)"
+          }
+        ],
+        "computed": [
+          {
+            "id": "computed:0",
+            "label": "214 in corpus citations",
+            "operation": "count in corpus citations",
+            "about": "author:jonathan-berant",
+            "derivedFrom": [
+              "t-000",
+              "t-001"
+            ]
+          },
+          {
+            "id": "computed:1",
+            "label": "187 in corpus citations",
+            "operation": "count in corpus citations",
+            "about": "author:matt-gardner",
+            "derivedFrom": [
+              "t-010",
+              "t-011"
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "First-author publication count",
@@ -136,7 +275,146 @@
       "properties": [
         "first_author_of",
         "year"
-      ]
+      ],
+      "measure": "first author papers",
+      "graph": {
+        "nodes": [
+          {
+            "id": "author:tomer-wolfson",
+            "label": "Tomer Wolfson",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p1",
+            "label": "Fixture paper 1",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p1"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p2",
+            "label": "Fixture paper 2",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p2"
+          },
+          {
+            "id": "computed:0",
+            "label": "3 first author papers",
+            "kind": "computed",
+            "iri": null
+          },
+          {
+            "id": "author:mor-geva",
+            "label": "Mor Geva",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p3",
+            "label": "Fixture paper 3",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p3"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p4",
+            "label": "Fixture paper 4",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p4"
+          },
+          {
+            "id": "computed:1",
+            "label": "2 first author papers",
+            "kind": "computed",
+            "iri": null
+          }
+        ],
+        "edges": [
+          {
+            "id": "t-000",
+            "source": "paper:https://harness.local/resource/p1",
+            "target": "author:tomer-wolfson",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p1-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-001",
+            "source": "paper:https://harness.local/resource/p2",
+            "target": "author:tomer-wolfson",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p2-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-0",
+            "source": "computed:0",
+            "target": "author:tomer-wolfson",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count first author papers (fixture)"
+          },
+          {
+            "id": "t-010",
+            "source": "paper:https://harness.local/resource/p3",
+            "target": "author:mor-geva",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p3-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-011",
+            "source": "paper:https://harness.local/resource/p4",
+            "target": "author:mor-geva",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p4-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-1",
+            "source": "computed:1",
+            "target": "author:mor-geva",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count first author papers (fixture)"
+          }
+        ],
+        "computed": [
+          {
+            "id": "computed:0",
+            "label": "3 first author papers",
+            "operation": "count first author papers",
+            "about": "author:tomer-wolfson",
+            "derivedFrom": [
+              "t-000",
+              "t-001"
+            ]
+          },
+          {
+            "id": "computed:1",
+            "label": "2 first author papers",
+            "operation": "count first author papers",
+            "about": "author:mor-geva",
+            "derivedFrom": [
+              "t-010",
+              "t-011"
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "Venue prestige of published work",
@@ -205,7 +483,146 @@
         "author_of",
         "published_in",
         "venue_rank"
-      ]
+      ],
+      "measure": "venue weighted score",
+      "graph": {
+        "nodes": [
+          {
+            "id": "author:jonathan-berant",
+            "label": "Jonathan Berant",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p1",
+            "label": "Fixture paper 1",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p1"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p2",
+            "label": "Fixture paper 2",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p2"
+          },
+          {
+            "id": "computed:0",
+            "label": "24 venue weighted score",
+            "kind": "computed",
+            "iri": null
+          },
+          {
+            "id": "author:matt-gardner",
+            "label": "Matt Gardner",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p3",
+            "label": "Fixture paper 3",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p3"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p4",
+            "label": "Fixture paper 4",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p4"
+          },
+          {
+            "id": "computed:1",
+            "label": "24 venue weighted score",
+            "kind": "computed",
+            "iri": null
+          }
+        ],
+        "edges": [
+          {
+            "id": "t-000",
+            "source": "paper:https://harness.local/resource/p1",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p1-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-001",
+            "source": "paper:https://harness.local/resource/p2",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p2-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-0",
+            "source": "computed:0",
+            "target": "author:jonathan-berant",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count venue weighted score (fixture)"
+          },
+          {
+            "id": "t-010",
+            "source": "paper:https://harness.local/resource/p3",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p3-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-011",
+            "source": "paper:https://harness.local/resource/p4",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p4-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-1",
+            "source": "computed:1",
+            "target": "author:matt-gardner",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count venue weighted score (fixture)"
+          }
+        ],
+        "computed": [
+          {
+            "id": "computed:0",
+            "label": "24 venue weighted score",
+            "operation": "count venue weighted score",
+            "about": "author:jonathan-berant",
+            "derivedFrom": [
+              "t-000",
+              "t-001"
+            ]
+          },
+          {
+            "id": "computed:1",
+            "label": "24 venue weighted score",
+            "operation": "count venue weighted score",
+            "about": "author:matt-gardner",
+            "derivedFrom": [
+              "t-010",
+              "t-011"
+            ]
+          }
+        ]
+      }
     },
     {
       "label": "Breadth of collaboration",
@@ -267,7 +684,146 @@
       "properties": [
         "author_of",
         "co_author_with"
-      ]
+      ],
+      "measure": "distinct co authors",
+      "graph": {
+        "nodes": [
+          {
+            "id": "author:matt-gardner",
+            "label": "Matt Gardner",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p1",
+            "label": "Fixture paper 1",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p1"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p2",
+            "label": "Fixture paper 2",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p2"
+          },
+          {
+            "id": "computed:0",
+            "label": "19 distinct co authors",
+            "kind": "computed",
+            "iri": null
+          },
+          {
+            "id": "author:jonathan-berant",
+            "label": "Jonathan Berant",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p3",
+            "label": "Fixture paper 3",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p3"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p4",
+            "label": "Fixture paper 4",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p4"
+          },
+          {
+            "id": "computed:1",
+            "label": "17 distinct co authors",
+            "kind": "computed",
+            "iri": null
+          }
+        ],
+        "edges": [
+          {
+            "id": "t-000",
+            "source": "paper:https://harness.local/resource/p1",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p1-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-001",
+            "source": "paper:https://harness.local/resource/p2",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p2-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-0",
+            "source": "computed:0",
+            "target": "author:matt-gardner",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count distinct co authors (fixture)"
+          },
+          {
+            "id": "t-010",
+            "source": "paper:https://harness.local/resource/p3",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p3-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-011",
+            "source": "paper:https://harness.local/resource/p4",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p4-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-1",
+            "source": "computed:1",
+            "target": "author:jonathan-berant",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count distinct co authors (fixture)"
+          }
+        ],
+        "computed": [
+          {
+            "id": "computed:0",
+            "label": "19 distinct co authors",
+            "operation": "count distinct co authors",
+            "about": "author:matt-gardner",
+            "derivedFrom": [
+              "t-000",
+              "t-001"
+            ]
+          },
+          {
+            "id": "computed:1",
+            "label": "17 distinct co authors",
+            "operation": "count distinct co authors",
+            "about": "author:jonathan-berant",
+            "derivedFrom": [
+              "t-010",
+              "t-011"
+            ]
+          }
+        ]
+      }
     }
   ],
   "chosenReading": null,
@@ -319,6 +875,43 @@
   "concept": null,
   "concepts": [],
   "parentRunId": null,
+  "checks": [
+    {
+      "name": "question understanding",
+      "status": "pass",
+      "detail": "operation research; measure stated"
+    },
+    {
+      "name": "retrieval",
+      "status": "pass",
+      "detail": "12 passages from 6 papers"
+    },
+    {
+      "name": "extraction",
+      "status": "pass",
+      "detail": "4 supported triples"
+    },
+    {
+      "name": "triple provenance",
+      "status": "pass",
+      "detail": "every answer triple has a source and evidence"
+    },
+    {
+      "name": "agent research (MCP)",
+      "status": "pass",
+      "detail": "3 corpus tool calls, 1 returned no matches"
+    },
+    {
+      "name": "agent evidence IDs",
+      "status": "warn",
+      "detail": "1 IDs were never returned by a tool and were rejected: p99-x"
+    },
+    {
+      "name": "agentic execution",
+      "status": "pass",
+      "detail": "agent review accepted"
+    }
+  ],
   "coverage": 0.74,
   "theta": 0.3,
   "modelAgent": "fixture",

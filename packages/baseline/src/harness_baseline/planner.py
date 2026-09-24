@@ -37,10 +37,28 @@ Operation = Literal[
     "papers_in_year",
     "publication_year_extreme",
     "author_paper_counts",
+    "author_citation_counts",
     "research",
 ]
 
 EvidenceFocus = Literal["general", "results", "limitations", "methods", "metrics"]
+
+# What each fact operation measures, stated with the answer so an ambiguous
+# question ("best author") never silently answers a different measure.
+MEASURES: dict[str, str] = {
+    "find_paper": "the corpus paper matching the named method or title",
+    "paper_authors": "the paper's authors (DBLP)",
+    "paper_year": "the paper's publication year (DBLP)",
+    "paper_venue": "the paper's publication venue (DBLP)",
+    "citing_papers": "corpus papers whose resolved references cite the paper",
+    "citing_count": "number of distinct corpus papers citing the paper",
+    "cited_papers": "corpus papers the paper's resolved references point to",
+    "cites": "whether a resolved reference links the two papers",
+    "papers_in_year": "number of corpus papers with that publication year",
+    "publication_year_extreme": "earliest or latest publication year among corpus papers",
+    "author_paper_counts": "number of distinct corpus papers per author (a preprint and its journal version count once)",
+    "author_citation_counts": "number of distinct corpus papers citing each author's papers",
+}
 
 OPERATIONS: dict[str, str] = {
     "find_paper": "Identify which corpus paper a name or description refers to "
@@ -57,6 +75,8 @@ OPERATIONS: dict[str, str] = {
                                 "papers. extreme=earliest|latest.",
     "author_paper_counts": "Authors ranked by number of distinct corpus papers: the authors with "
                            "the most papers (rank=top) or with at least N papers (min_papers=N).",
+    "author_citation_counts": "Authors ranked by how often other corpus papers cite their papers: the most "
+                              "cited authors (rank=top) or those with at least N citing papers (min_papers=N).",
     "research": "Anything that needs the papers' full text: results, numbers, methods, "
                 "mechanisms, limitations, comparisons, opinions, open questions.",
 }
@@ -65,6 +85,10 @@ SYSTEM_PROMPT = (
     "You convert a research question about a fixed corpus of scientific papers into a typed "
     "query plan. You do not answer the question. Choose exactly one operation:\n"
     + "\n".join(f"- {name}: {text}" for name, text in OPERATIONS.items())
+    + "\nIf a research interpretation is supplied, choose the operation that computes exactly the "
+    "measure it names (for example citation-based versus paper-count rankings); if no operation "
+    "computes it, use research. Set measure to a short phrase naming the quantity or criterion the "
+    "answer will use."
     + "\nRules: copy paper names or titles exactly as written in the question, without words "
     "like 'the' or 'paper'. Use a metadata operation only when the question asks for that "
     "metadata; otherwise use research. For research, set evidence_focus to results, "
@@ -72,7 +96,7 @@ SYSTEM_PROMPT = (
     "setting if the question names one. If a research interpretation is supplied, plan for it. "
     'Return strict JSON: {"operation": str, "papers": [str], "year": int|null, '
     '"extreme": "earliest"|"latest"|null, "rank": "top"|null, "min_papers": int|null, '
-    '"evidence_focus": str, "benchmark": str|null, "rationale": str}'
+    '"evidence_focus": str, "benchmark": str|null, "measure": str|null, "rationale": str}'
 )
 
 
@@ -87,8 +111,13 @@ class QueryPlan(BaseModel):
     min_papers: int | None = None
     evidence_focus: EvidenceFocus = "general"
     benchmark: str | None = None
+    measure: str | None = None
     rationale: str = ""
     source: Literal["model", "fallback"] = "model"
+
+    def stated_measure(self) -> str | None:
+        """The measure the answer uses: fixed for fact operations, the planner's phrase for research."""
+        return MEASURES.get(self.operation) or (self.measure.strip() if self.measure else None)
 
     @field_validator("papers", mode="before")
     @classmethod
@@ -117,7 +146,7 @@ class QueryPlan(BaseModel):
             return self.year is not None and 1900 <= self.year <= 2100
         if self.operation == "publication_year_extreme":
             return self.extreme is not None
-        if self.operation == "author_paper_counts":
+        if self.operation in {"author_paper_counts", "author_citation_counts"}:
             return self.rank == "top" or (self.min_papers is not None and self.min_papers >= 1)
         return True
 

@@ -21,6 +21,23 @@
   "concept": null,
   "concepts": [],
   "parentRunId": null,
+  "checks": [
+    {
+      "name": "question understanding",
+      "status": "pass",
+      "detail": "operation research"
+    },
+    {
+      "name": "retrieval",
+      "status": "pass",
+      "detail": "9 passages from 4 papers"
+    },
+    {
+      "name": "extraction",
+      "status": "fail",
+      "detail": "0 supported triples"
+    }
+  ],
   "coverage": null,
   "theta": 0.3,
   "modelAgent": "fixture",

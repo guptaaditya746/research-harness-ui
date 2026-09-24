@@ -74,7 +74,146 @@
         "author_of",
         "cites",
         "citation_count"
-      ]
+      ],
+      "measure": "in corpus citations",
+      "graph": {
+        "nodes": [
+          {
+            "id": "author:jonathan-berant",
+            "label": "Jonathan Berant",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p1",
+            "label": "Fixture paper 1",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p1"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p2",
+            "label": "Fixture paper 2",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p2"
+          },
+          {
+            "id": "computed:0",
+            "label": "214 in corpus citations",
+            "kind": "computed",
+            "iri": null
+          },
+          {
+            "id": "author:matt-gardner",
+            "label": "Matt Gardner",
+            "kind": "author",
+            "iri": null
+          },
+          {
+            "id": "paper:https://harness.local/resource/p3",
+            "label": "Fixture paper 3",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p3"
+          },
+          {
+            "id": "paper:https://harness.local/resource/p4",
+            "label": "Fixture paper 4",
+            "kind": "paper",
+            "iri": "https://harness.local/resource/p4"
+          },
+          {
+            "id": "computed:1",
+            "label": "187 in corpus citations",
+            "kind": "computed",
+            "iri": null
+          }
+        ],
+        "edges": [
+          {
+            "id": "t-000",
+            "source": "paper:https://harness.local/resource/p1",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p1-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-001",
+            "source": "paper:https://harness.local/resource/p2",
+            "target": "author:jonathan-berant",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p2-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-0",
+            "source": "computed:0",
+            "target": "author:jonathan-berant",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count in corpus citations (fixture)"
+          },
+          {
+            "id": "t-010",
+            "source": "paper:https://harness.local/resource/p3",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p3-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "t-011",
+            "source": "paper:https://harness.local/resource/p4",
+            "target": "author:matt-gardner",
+            "label": "authoredBy",
+            "kind": "fact",
+            "sourceIds": [
+              "p4-metadata"
+            ],
+            "evidence": "DBLP author list (fixture)"
+          },
+          {
+            "id": "d-1",
+            "source": "computed:1",
+            "target": "author:matt-gardner",
+            "label": "computed for",
+            "kind": "derived",
+            "sourceIds": [],
+            "evidence": "count in corpus citations (fixture)"
+          }
+        ],
+        "computed": [
+          {
+            "id": "computed:0",
+            "label": "214 in corpus citations",
+            "operation": "count in corpus citations",
+            "about": "author:jonathan-berant",
+            "derivedFrom": [
+              "t-000",
+              "t-001"
+            ]
+          },
+          {
+            "id": "computed:1",
+            "label": "187 in corpus citations",
+            "operation": "count in corpus citations",
+            "about": "author:matt-gardner",
+            "derivedFrom": [
+              "t-010",
+              "t-011"
+            ]
+          }
+        ]
+      }
     }
   ],
   "chosenReading": 0,
@@ -91,6 +230,28 @@
   "concept": null,
   "concepts": [],
   "parentRunId": null,
+  "checks": [
+    {
+      "name": "question understanding",
+      "status": "pass",
+      "detail": "operation research; measure stated"
+    },
+    {
+      "name": "retrieval",
+      "status": "pass",
+      "detail": "12 passages from 6 papers"
+    },
+    {
+      "name": "extraction",
+      "status": "pass",
+      "detail": "4 supported triples"
+    },
+    {
+      "name": "triple provenance",
+      "status": "pass",
+      "detail": "every answer triple has a source and evidence"
+    }
+  ],
   "coverage": null,
   "theta": 0.3,
   "modelAgent": "fixture",

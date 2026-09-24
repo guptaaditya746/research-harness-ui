@@ -49,3 +49,25 @@
 .log-model { opacity: 0.72; font-size: 13px; }
 .log-failed { opacity: 1; color: var(--color-accent-2-800); }
 .log-waiting { color: var(--color-accent-700); }
+
+/* Answer graph */
+.answer-graph-canvas { height: 440px; border: 1px solid var(--color-divider); border-radius: 2px; background: var(--color-bg); }
+.answer-graph-detail { min-height: 48px; padding: 10px 2px 0; font-size: 14px; }
+
+/* Stage checks */
+.checks { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.check { display: grid; grid-template-columns: 18px minmax(140px, auto) 1fr; gap: 10px; align-items: baseline; font-size: 14px; }
+.check-mark { font-weight: 600; text-align: center; }
+.check-pass .check-mark { color: var(--color-accent-700); }
+.check-warn .check-mark { color: var(--color-accent-2-600); }
+.check-fail .check-mark, .check-fail .check-name { color: var(--color-accent-2-800); }
+.check-skipped { opacity: .6; }
+@media (max-width: 720px) { .check { grid-template-columns: 18px 1fr; } .check > .muted { grid-column: 2; } }
+
+/* Answered-using measure */
+.measure { margin: 10px 0 0; padding: 8px 12px; border-left: 3px solid var(--color-accent-2); background: var(--color-surface); font-size: 14.5px; max-width: 70ch; }
+
+/* Live progress */
+.progress { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px 24px; margin: 0 0 28px; padding: 14px 16px; background: var(--color-surface); border-radius: 2px; }
+.progress dt { margin: 0 0 2px; }
+.progress dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }

@@ -20,6 +20,13 @@ SKILLS = (
         "Search result passages and tables. Preserve metric, value, unit, comparator, benchmark, and setting separately. Treat absent context as unresolved, not inferred.",
     ),
     ResearchSkill(
+        "corpus-aggregation",
+        "Answer counts, rankings and earliest/latest questions over all papers.",
+        "Call aggregate_facts once (count_papers_by_author, count_by_value, min, max, "
+        "count_incoming_citations, count_citations_by_author) or metadata_table for the raw facts. "
+        "Do not open papers one by one. Cite the fact or reference IDs the aggregate returns.",
+    ),
+    ResearchSkill(
         "citation-analysis",
         "Analyse corpus-local incoming or outgoing citations.",
         "Use citations with indexed_only=true for corpus-scoped questions. Only report corpus_absent after an exhaustive incoming-index query with no failures.",
@@ -60,6 +67,8 @@ def relevant(question: str) -> list[ResearchSkill]:
     text = question.casefold()
     keywords = {
         "numeric-result-verification": ("%", "improvement", "accuracy", "f1", "score", "result"),
+        "corpus-aggregation": ("how many", "most", "least", "earliest", "latest", "oldest", "newest",
+                               "best", "rank", "more than", "count", "every paper", "all papers"),
         "citation-analysis": ("cite", "citation", "citing", "cited"),
         "cross-paper-comparison": ("compare", "across", "shared", "common"),
         "corpus-absence-verification": ("any", "none", "no paper", "absent"),

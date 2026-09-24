@@ -1087,6 +1087,7 @@ dependencies = [
     { name = "harness-schema" },
     { name = "harness-semantic" },
     { name = "langgraph" },
+    { name = "networkx" },
 ]
 
 [package.metadata]
@@ -1099,6 +1100,7 @@ requires-dist = [
     { name = "harness-schema", editable = "packages/schema" },
     { name = "harness-semantic", editable = "packages/semantic" },
     { name = "langgraph", specifier = ">=1.0,<2" },
+    { name = "networkx", specifier = ">=3.3" },
 ]
 
 [[package]]

@@ -88,6 +88,51 @@ class Metrics(Contract):
     recall: tuple[int, int] | None = None
 
 
+class GraphNode(Contract):
+    """One entity in the answer graph; the same entity appears exactly once."""
+
+    id: str
+    label: str
+    kind: Literal["paper", "author", "value", "entity", "claim", "passage", "computed"]
+    iri: str | None = None
+
+
+class GraphEdge(Contract):
+    """A source fact or claim field (``fact``/``claim``/``evidence``) or a computed step (``derived``)."""
+
+    id: str
+    source: str
+    target: str
+    label: str
+    kind: Literal["fact", "claim", "evidence", "derived"]
+    source_ids: list[str] = Field(default_factory=list, alias="sourceIds")
+    evidence: str | None = None
+
+
+class ComputedResult(Contract):
+    """A conclusion the harness computed from source facts; never presented as a source fact."""
+
+    id: str
+    label: str
+    operation: str
+    about: str
+    derived_from: list[str] = Field(default_factory=list, alias="derivedFrom")
+
+
+class AnswerGraph(Contract):
+    nodes: list[GraphNode] = Field(default_factory=list)
+    edges: list[GraphEdge] = Field(default_factory=list)
+    computed: list[ComputedResult] = Field(default_factory=list)
+
+
+class Check(Contract):
+    """One stage's outcome, so a failure names the stage that failed."""
+
+    name: str
+    status: Literal["pass", "warn", "fail", "skipped", "info"]
+    detail: str = ""
+
+
 class Reading(Contract):
     label: str
     gloss: str
@@ -103,6 +148,9 @@ class Reading(Contract):
     status: Literal["proposed", "answered", "incomplete"] = "proposed"
     op: str = ""
     properties: list[str] = Field(default_factory=list)
+    # What the answer actually computed or asked for (e.g. "distinct papers per author").
+    measure: str | None = None
+    graph: AnswerGraph | None = None
 
 
 class TraceRow(Contract):
@@ -158,6 +206,7 @@ class Run(Contract):
     concept: ConceptChoice | None = None
     concepts: list[ConceptChoice] = Field(default_factory=list)
     parent_run_id: str | None = Field(default=None, alias="parentRunId")
+    checks: list[Check] = Field(default_factory=list)
     coverage: float | None = None
     theta: float = 0.30
     model_agent: str = Field(default="", alias="modelAgent")

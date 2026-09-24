@@ -6,6 +6,7 @@ import json
 import re
 import time
 from collections import Counter
+from difflib import SequenceMatcher
 from pathlib import Path
 
 import bm25s
@@ -45,6 +46,10 @@ def read_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
     return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+class UnknownIdentifier(ValueError):
+    """An identifier the corpus does not know; the message says what is accepted."""
 
 
 def paged(rows: list[dict], offset: int = 0, limit: int = 10) -> dict:
@@ -173,6 +178,188 @@ class CorpusStore:
             for row in self.fact_rows
             if row.get("predicate") != "cites" or row.get("in_corpus") is True
         ]
+
+    # ─── Identifiers ──────────────────────────────────────────────────────────
+
+    def paper_key(self, value: str) -> str:
+        """Normalise any accepted paper identifier to the local key (``p23``).
+
+        Accepted: the local key (``p23``), a verified DBLP record IRI
+        (``https://dblp.org/rec/...``), a harness resource IRI
+        (``https://harness.local/resource/p23``), or a source/fact id that starts
+        with the key (``p23-metadata``, ``p23-abstract``). Anything else raises
+        UnknownIdentifier with the accepted formats, so a wrong id is never
+        mistaken for an empty corpus result.
+        """
+        raw = str(value or "").strip()
+        if raw in self.by_paper:
+            return raw
+        if raw in self.by_dblp:
+            return self.by_dblp[raw]
+        if raw.startswith("https://harness.local/resource/"):
+            tail = raw.rsplit("/", 1)[-1]
+            if tail in self.by_paper:
+                return tail
+        prefix = re.match(r"(p\d+)[-_]", raw)
+        if prefix and prefix.group(1) in self.by_paper:
+            return prefix.group(1)
+        examples = ", ".join(sorted(self.by_paper, key=lambda key: (len(key), key))[:3])
+        raise UnknownIdentifier(
+            f"unknown paper_id {raw!r}. Use a local paper key such as {examples} (list_papers shows all), "
+            "a verified DBLP record IRI (https://dblp.org/rec/...), or a source id like 'p23-metadata'."
+        )
+
+    def paper_keys(self, values: list[str] | None) -> list[str] | None:
+        return None if values is None else [self.paper_key(value) for value in values]
+
+    def normalise_scope(self, scope: dict | None) -> dict | None:
+        if not scope or not scope.get("paper_ids"):
+            return scope
+        return {**scope, "paper_ids": self.paper_keys(list(scope["paper_ids"]))}
+
+    def fact_predicates(self) -> list[str]:
+        return sorted({str(row.get("predicate")) for row in self.fact_rows if row.get("predicate")})
+
+    def check_predicate(self, predicate: str | None) -> str | None:
+        if predicate is None:
+            return None
+        aliases = {"authoredby": "author", "authored_by": "author", "authors": "author",
+                   "yearofpublication": "year", "publishedin": "venue"}
+        normalised = aliases.get(predicate.casefold().replace(" ", ""), predicate)
+        known = self.fact_predicates()
+        if normalised not in known:
+            raise UnknownIdentifier(f"unknown predicate {predicate!r}. Available predicates: {', '.join(known)}.")
+        return normalised
+
+    def distinct_works(self, rows: list[dict]) -> list[dict]:
+        """A preprint and its near-identical journal version count as one work."""
+        works: list[tuple[str, dict]] = []
+        for row in sorted(rows, key=lambda item: str(item["subject"])):
+            title = self.paper_title(str(row["subject"])) or str(row["subject"])
+            normalized = " ".join(re.findall(r"[a-z0-9]+", title.casefold()))
+            if any(SequenceMatcher(None, normalized, prior).ratio() >= 0.98 for prior, _ in works):
+                continue
+            works.append((normalized, row))
+        return [row for _, row in works]
+
+    # ─── Corpus-wide metadata ────────────────────────────────────────────────
+
+    def metadata_table(
+        self, predicates: list[str] | None = None, paper_ids: list[str] | None = None,
+        offset: int = 0, limit: int = 500,
+    ) -> dict:
+        """Every fact of the given predicates for every (or the given) paper, in one call."""
+        wanted = {self.check_predicate(item) for item in predicates} if predicates else None
+        keys = set(self.paper_keys(paper_ids) or []) or None
+        rows = [
+            {
+                "paper_id": str(row["subject"]),
+                "dblp_iri": self.canonical_paper_iri(str(row["subject"])),
+                "title": self.paper_title(str(row["subject"])),
+                "predicate": row["predicate"], "object": row["object"],
+                "fact_id": row.get("fact_id"), "source_id": row["source_id"],
+            }
+            for row in self.fact_rows
+            if (wanted is None or row.get("predicate") in wanted)
+            and (keys is None or str(row["subject"]) in keys)
+            and str(row["subject"]) in self.by_paper
+        ]
+        rows.sort(key=lambda row: (row["paper_id"], row["predicate"], str(row["object"])))
+        return paged(rows, offset, limit)
+
+    def aggregate(
+        self, operation: str, predicate: str | None = None, top_k: int | None = None,
+        min_count: int | None = None,
+    ) -> dict:
+        """Deterministic corpus-wide aggregates, each with the fact/reference ids it used.
+
+        operation:
+          count_papers_by_author   distinct works per author (preprint + journal version = one)
+          count_by_value           papers per value of ``predicate`` (e.g. year, venue)
+          min / max                smallest / largest numeric value of ``predicate`` (e.g. year)
+          count_incoming_citations in-corpus citations received per paper
+          count_citations_by_author in-corpus citations received by each author's distinct works
+        """
+        facts = [row for row in self.fact_rows if str(row.get("subject")) in self.by_paper]
+        items: list[dict] = []
+        if operation == "count_papers_by_author":
+            grouped: dict[str, list[dict]] = {}
+            for row in facts:
+                if row.get("predicate") == "author":
+                    grouped.setdefault(str(row["object"]), []).append(row)
+            for author, rows in grouped.items():
+                works = self.distinct_works(rows)
+                items.append({"author": author, "count": len(works),
+                              "paper_ids": sorted(str(row["subject"]) for row in works),
+                              "fact_ids": sorted(str(row.get("fact_id") or row["source_id"]) for row in works),
+                              "source_ids": sorted({str(row["source_id"]) for row in works})})
+            unit = "distinct papers"
+        elif operation == "count_by_value":
+            key = self.check_predicate(predicate or "")
+            grouped = {}
+            for row in facts:
+                if row.get("predicate") == key:
+                    grouped.setdefault(str(row["object"]), []).append(row)
+            items = [{"value": value, "count": len({str(row["subject"]) for row in rows}),
+                      "paper_ids": sorted({str(row["subject"]) for row in rows}),
+                      "fact_ids": sorted(str(row.get("fact_id") or row["source_id"]) for row in rows),
+                      "source_ids": sorted({str(row["source_id"]) for row in rows})}
+                     for value, rows in grouped.items()]
+            unit = "papers"
+        elif operation in {"min", "max"}:
+            key = self.check_predicate(predicate or "")
+            numeric = [row for row in facts if row.get("predicate") == key
+                       and re.fullmatch(r"-?\d+(?:\.\d+)?", str(row["object"]))]
+            if not numeric:
+                raise UnknownIdentifier(f"predicate {predicate!r} has no numeric values; try 'year'.")
+            pick = min if operation == "min" else max
+            best = pick(float(row["object"]) for row in numeric)
+            rows = [row for row in numeric if float(row["object"]) == best]
+            items = [{"value": rows[0]["object"], "count": len(rows),
+                      "paper_ids": sorted(str(row["subject"]) for row in rows),
+                      "fact_ids": sorted(str(row.get("fact_id") or row["source_id"]) for row in rows),
+                      "source_ids": sorted({str(row["source_id"]) for row in rows})}]
+            unit = f"{operation} {key}"
+        elif operation in {"count_incoming_citations", "count_citations_by_author"}:
+            incoming: dict[str, list[dict]] = {}
+            for reference in self.references:
+                target = reference.get("resolved_paper_id")
+                if target and target in self.by_paper:
+                    incoming.setdefault(str(target), []).append(reference)
+            if operation == "count_incoming_citations":
+                items = [{"paper_id": paper, "title": self.paper_title(paper),
+                          "count": len({str(ref["paper_id"]) for ref in refs}),
+                          "citing_paper_ids": sorted({str(ref["paper_id"]) for ref in refs}),
+                          "reference_ids": sorted(str(ref["reference_id"]) for ref in refs)}
+                         for paper, refs in incoming.items()]
+                unit = "citing papers"
+            else:
+                grouped = {}
+                for row in facts:
+                    if row.get("predicate") == "author":
+                        grouped.setdefault(str(row["object"]), []).append(row)
+                for author, rows in grouped.items():
+                    works = self.distinct_works(rows)
+                    refs = [ref for row in works for ref in incoming.get(str(row["subject"]), [])]
+                    items.append({"author": author, "count": len({str(ref["paper_id"]) for ref in refs}),
+                                  "paper_ids": sorted(str(row["subject"]) for row in works),
+                                  "reference_ids": sorted(str(ref["reference_id"]) for ref in refs),
+                                  "fact_ids": sorted(str(row.get("fact_id") or row["source_id"]) for row in works)})
+                unit = "citing papers (in-corpus) across the author's distinct papers"
+        else:
+            raise UnknownIdentifier(
+                f"unknown operation {operation!r}. Use count_papers_by_author, count_by_value, min, max, "
+                "count_incoming_citations or count_citations_by_author."
+            )
+        items.sort(key=lambda item: (-int(item["count"]), str(item.get("author") or item.get("value") or item.get("paper_id"))))
+        if min_count is not None:
+            items = [item for item in items if item["count"] >= min_count]
+        if top_k is not None and operation not in {"min", "max"} and items and top_k >= 1:
+            cutoff = items[min(top_k, len(items)) - 1]["count"]
+            items = [item for item in items if item["count"] >= cutoff]   # keep ties
+        return {"operation": operation, "unit": unit, "computed": True, "total": len(items), "items": items,
+                "coverage": {"scope": "all_indexed_papers", "exhaustive": True,
+                             "papers_total": len(self.by_paper), "papers_examined": len(self.by_paper)}}
 
     def canonical_paper_iri(self, value: str) -> str | None:
         """Return a verified DBLP IRI for an internal paper key or IRI."""
@@ -366,6 +553,8 @@ class CorpusStore:
         self, paper_id: str, offset: int = 0, limit: int = 10,
         predicate: str | None = None,
     ) -> dict:
+        paper_id = self.paper_key(paper_id)
+        predicate = self.check_predicate(predicate)
         return paged(
             [
                 fact for fact in self.fact_rows
@@ -381,6 +570,7 @@ class CorpusStore:
     ) -> dict:
         if direction not in {"in", "out"}:
             raise ValueError("direction must be in or out")
+        paper_id = self.paper_key(paper_id)
         references = [
             r
             for r in self.references

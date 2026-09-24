@@ -128,3 +128,50 @@ def test_mcp_result_text_is_unwrapped_for_model_context() -> None:
     result = {"content": [{"type": "text", "text": '{"total": 1, "items": [{"fact_id": "f1"}]}'}]}
 
     assert _tool_payload(result) == {"total": 1, "items": [{"fact_id": "f1"}]}
+
+
+def _agent_run(monkeypatch, evidence_ids: list[str]):
+    """One agentic run whose agent searches once and returns the given evidence IDs."""
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+
+    def run_agent(self, model, question, grounded_context):
+        self.sink({"call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+                   "arguments": {"query": "video prediction"}, "status": "ok", "duration_ms": 3.0,
+                   "result": {"total": 1, "items": [{"passage_id": "p4-intro", "text": "..."}]},
+                   "result_count": 1})
+        return json.dumps({"verified_claim_ids": [], "additional_evidence_ids": evidence_ids,
+                           "reasoning_summary": "searched once"})
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    baseline = StubBaseline()
+    baseline.last_route = "verified_facts"
+    result = AgenticResearch(baseline, agent_model=HighModel()).run(
+        "Which paper introduced Video Prediction Policy?", "slow", "r-ids", concept=CONCEPT
+    )
+    return result["run"], json.loads(result["artifacts"]["verification.json"])
+
+
+def test_agent_evidence_ids_must_have_been_observed_in_the_session(monkeypatch) -> None:
+    run, verification = _agent_run(monkeypatch, ["p4-intro", "p99-invented"])
+    checks = {check.name: check for check in run.checks}
+    assert run.status == "answered" and run.execution_status != "degraded"
+    assert checks["agent evidence IDs"].status == "warn"
+    assert "p99-invented" in checks["agent evidence IDs"].detail
+    assert checks["agent research (MCP)"].status == "pass"
+    assert verification["agent_evidence_ids"] == {
+        "supplied": ["p4-intro", "p99-invented"], "observed_in_session": ["p4-intro"],
+        "rejected_unobserved": ["p99-invented"],
+    }
+    assert verification["triple_provenance"]["verified"] is True
+    assert verification["agentic_execution"]["reason"] is None
+
+
+def test_only_unobserved_evidence_ids_degrade_the_agentic_result(monkeypatch) -> None:
+    run, verification = _agent_run(monkeypatch, ["p99-invented"])
+    checks = {check.name: check for check in run.checks}
+    assert checks["agent evidence IDs"].status == "fail"
+    assert checks["agentic execution"].status == "warn"
+    assert verification["agentic_execution"]["reason"].startswith("agent_evidence_ids_not_observed")
+    # Provenance of the grounded answer is reported separately from agent execution.
+    assert verification["triple_provenance"]["verified"] is True
+    assert verification["agentic_degraded"] is True

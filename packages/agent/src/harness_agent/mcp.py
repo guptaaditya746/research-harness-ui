@@ -146,6 +146,9 @@ class MCPToolClient:
                         "You are the research supervisor. Form hypotheses, then freely choose corpus "
                         "MCP evidence tools. Prefer search_evidence, read_evidence, structured_facts, "
                         "citations, tables, and evidence_for_claim; use specialist tools when needed. "
+                        "For questions over all papers (counts, rankings, earliest/latest, 'which "
+                        "authors/papers') call aggregate_facts or metadata_table once instead of opening "
+                        "papers one by one. Paper ids are local keys like p23. "
                         "Preliminary claims are "
                         "candidates, not authority. Verify or challenge them and follow additional "
                         "evidence when it could materially change the answer. Stop when the answer "
@@ -162,8 +165,8 @@ class MCPToolClient:
             conversation = Conversation(fixed, grounded=grounded_context or None)
             # Priority order: the evidence tools the supervisor is told to prefer,
             # then the specialist tools, which are dropped first when space is short.
-            core_names = ["search_evidence", "read_evidence", "structured_facts",
-                          "citations", "tables", "evidence_for_claim"]
+            core_names = ["search_evidence", "read_evidence", "structured_facts", "aggregate_facts",
+                          "metadata_table", "citations", "evidence_for_claim"]
             tools.sort(key=lambda tool: (
                 core_names.index(tool["function"]["name"])
                 if tool["function"]["name"] in core_names else len(core_names)
@@ -313,6 +316,12 @@ class MCPToolClient:
                         if error:
                             record["error"] = error
                         self.sink(record)
+                        # Live progress: which tool ran and what it returned.
+                        emit_model_event("Tool call", f"{name} · " + (
+                            f"error: {str(error)[:160]}" if error
+                            else "returned" if record["result_count"] is None
+                            else f"{record['result_count']} results"
+                        ) + f" · {record['duration_ms']:.0f} ms")
                         ledger.record(name, result, record["purpose"])
                         tool_messages.append({
                             "role": "tool",

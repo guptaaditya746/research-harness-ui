@@ -8,7 +8,6 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
-from difflib import SequenceMatcher
 from typing import Any, TypedDict
 from urllib.parse import quote
 
@@ -32,6 +31,7 @@ from harness_extraction.claims import (
 from harness_graphstore import ProvenanceDataset, sparql_check
 from harness_observability import record_stage, record_tool_call
 from harness_schema.models import (
+    Check,
     ClaimSubgraph,
     Metrics,
     Reading,
@@ -44,6 +44,7 @@ from harness_semantic import DBLP, HRN, validate_subschema
 from langgraph.graph import END, START, StateGraph
 from rdflib import RDFS, XSD, Literal, URIRef
 
+from . import answer_graph
 from .planner import PaperResolver, QueryPlan, QueryPlanner
 
 TraceSink = Callable[[TraceRow], None]
@@ -54,6 +55,7 @@ class BaselineState(TypedDict, total=False):
     concept: dict[str, Any] | None
     plan: QueryPlan
     paper_ids: list[str]
+    computed: list[dict[str, Any]]
     passages: list[dict[str, Any]]
     inferred: SchemaInference
     extracted: list[ExtractedTriple]
@@ -152,6 +154,8 @@ class Baseline20:
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
         self.concept: dict[str, Any] | None = None
+        self.checks: list[Check] = []
+        self.stage = "question understanding"
         # How the last run was answered: "verified_facts" or "research".
         self.last_route: str | None = None
         self.graph = self._graph()
@@ -166,6 +170,11 @@ class Baseline20:
             f"{state['question']}\n\nResearch interpretation chosen by the user: "
             f"{concept.get('label', '')}: {concept.get('gloss', '')}"
         )
+
+    def _check(self, name: str, status: str, detail: str = "") -> None:
+        """Record one stage's outcome (pass/warn/fail/skipped) for the run's checks."""
+        self.checks = [check for check in self.checks if check.name != name]
+        self.checks.append(Check(name=name, status=status, detail=detail))
 
     def _emit(self, action: str, returned: str) -> None:
         row = TraceRow(
@@ -189,6 +198,7 @@ class Baseline20:
         return graph.compile()
 
     def _retrieve(self, state: BaselineState) -> dict[str, Any]:
+        self.stage = "retrieval"
         question = state["question"]
         plan = state.get("plan") or QueryPlan.fallback("no plan")
         # Papers named in the plan scope retrieval. Without a model plan, fall
@@ -291,7 +301,10 @@ class Baseline20:
                 "papers_in_scope": len(mentioned_papers) or len(self.corpus.papers),
                 "retrieval_methods": "lexical+semantic-rank", "parser_failures": 0,
             })
-        self._emit("Retrieving top passages", f"{len(rows)} passages across {len(rounds)} rounds")
+        paper_count = len({row["paper_id"] for row in rows})
+        self._emit("Retrieving top passages",
+                   f"{len(rows)} passages from {paper_count} papers across {len(rounds)} rounds")
+        self._check("retrieval", "pass", f"{len(rows)} passages from {paper_count} papers")
         return {"passages": rows, "retrieval": {
             "queries": rounds, "stop_reason": "relative_bm25_relevance",
             "mentioned_paper_ids": mentioned_papers,
@@ -308,6 +321,7 @@ class Baseline20:
         }}
 
     def _infer_schema(self, state: BaselineState) -> dict[str, Any]:
+        self.stage = "schema inference"
         inferred = self.extraction.infer_schema(self._research_question(state), state["passages"])
         self._emit(
             "Inferring schema",
@@ -316,6 +330,8 @@ class Baseline20:
         return {"inferred": inferred}
 
     def _extract_build(self, state: BaselineState) -> dict[str, Any]:
+        self._check("schema inference", "pass", f"{', '.join(state['inferred'].classes)}")
+        self.stage = "extraction"
         if self.edc:
             extracted = []
             reports = []
@@ -400,7 +416,7 @@ class Baseline20:
             )
             reports.append({"stage": "evidence_review", **review})
             if not extracted:
-                raise NoResults("No in-corpus evidence found for a question-relevant triple")
+                raise NoResults("evidence review kept no extracted triple as relevant to the question")
         plan = state.get("plan") or QueryPlan.fallback("no plan")
         mentioned = list(state.get("paper_ids") or [])
         if self.enhanced and len(mentioned) > 1 and plan.evidence_focus == "metrics":
@@ -439,9 +455,11 @@ class Baseline20:
             if recovered:
                 reports.append({"stage": "missing_paper_metric_coverage", "triples": recovered})
         self._emit("Extracting triples", f"{len(extracted)} supported triples")
+        self._check("extraction", "pass", f"{len(extracted)} supported triples")
         return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports}
 
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
+        self.stage = "answer composition"
         plan = state.get("plan") or QueryPlan.fallback("no plan")
         if plan.evidence_focus == "results":
             context_terms = (
@@ -530,6 +548,8 @@ class Baseline20:
         facts = self.corpus.seed_facts()
         op = plan.operation
         target = self._title_row(papers[0]) if papers else None
+        # Conclusions computed below (counts, extremes) with the facts they rest on.
+        self._computed: list[dict[str, Any]] = []
 
         if op == "find_paper" and target:
             triple = ExtractedTriple(
@@ -583,6 +603,11 @@ class Baseline20:
             sources = ", ".join(item.source_id for item in triples)
             if op == "citing_count":
                 count = len({item.subject for item in triples})
+                self._computed.append({
+                    "label": f"{count} citing papers", "operation": "count distinct in-corpus papers citing it",
+                    "about": {"role": "subject", "value": self._iri(papers[0])},
+                    "support": [{"p": "cites", "o": self._iri(papers[0])}],
+                })
                 return self._fact_answer(triples, f"{count} indexed papers cite {target['object']} [{sources}].")
             names = sorted({self.corpus.paper_title(item.subject) or item.subject for item in triples})
             return self._fact_answer(triples, f"{', '.join(names)} cite {target['object']} [{sources}].")
@@ -615,6 +640,12 @@ class Baseline20:
                                    "metadata_facts", len(years))
             triples = [self._fact_triple(row) for row in rows]
             names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
+            self._computed.append({
+                "label": f"{len({item.subject for item in triples})} papers in {plan.year}",
+                "operation": "count papers whose publication year matches",
+                "about": {"role": "value", "value": str(plan.year)},
+                "support": [{"p": "year", "o": str(plan.year)}],
+            })
             return self._fact_answer(triples, f"{len({item.subject for item in triples})} corpus papers were published in {plan.year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
 
         if op == "publication_year_extreme" and plan.extreme and years:
@@ -623,6 +654,12 @@ class Baseline20:
             rows = [row for row in years if int(row["object"]) == year]
             triples = [self._fact_triple(row) for row in rows]
             names = [self.corpus.paper_title(item.subject) or item.subject for item in triples]
+            self._computed.append({
+                "label": f"{plan.extreme} year: {year}",
+                "operation": f"{'minimum' if plan.extreme == 'earliest' else 'maximum'} over all publication years",
+                "about": {"role": "value", "value": str(year)},
+                "support": [{"p": "year", "o": str(year)}],
+            })
             return self._fact_answer(triples, f"The {plan.extreme} publication year is {year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
 
         if op == "author_paper_counts":
@@ -650,10 +687,50 @@ class Baseline20:
                 f"{name} ({len(rows)}): " + ", ".join(self.corpus.paper_title(r["subject"]) or r["subject"] for r in rows)
                 for name, rows in sorted(selected.items())
             ]
+            for name, rows in sorted(selected.items()):
+                self._computed.append({
+                    "label": f"{len(rows)} distinct papers",
+                    "operation": "count distinct corpus papers per author (a preprint and its journal version count once)",
+                    "about": {"role": "author", "value": name},
+                    "support": [{"p": "authoredBy", "o": name}],
+                })
             return self._fact_answer(
                 triples, f"{header} [{', '.join(sorted({item.source_id for item in triples}))}]:\n" + "\n".join(lines)
             )
+
+        if op == "author_citation_counts":
+            aggregate = self.corpus.aggregate(
+                "count_citations_by_author", top_k=1 if plan.rank == "top" else None,
+                min_count=None if plan.rank == "top" else (plan.min_papers or 1),
+            )
+            chosen = [item for item in aggregate["items"] if item["count"] > 0]
+            if not chosen:
+                raise CorpusAbsent("No author's papers are cited by another indexed paper.",
+                                   "citation_index", len(self.corpus.references))
+            by_reference = {str(row["reference_id"]): row for row in self.corpus.references}
+            triples, lines = [], []
+            for item in chosen:
+                works = set(item["paper_ids"])
+                triples += [self._fact_triple(row) for row in facts
+                            if row["predicate"] == "author" and str(row["object"]) == item["author"]
+                            and str(row["subject"]) in works]
+                triples += [self._citation_triple(by_reference[ref]) for ref in item["reference_ids"]]
+                noun = "citing paper" if item["count"] == 1 else "citing papers"
+                lines.append(f"{item['author']} ({item['count']} {noun})")
+                self._computed.append({
+                    "label": f"{item['count']} {noun}",
+                    "operation": "count distinct in-corpus papers citing the author's distinct papers",
+                    "about": {"role": "author", "value": item["author"]},
+                    "support": [{"p": "authoredBy", "o": item["author"]},
+                                {"p": "cites", "o_in": [self._iri(paper) for paper in works]}],
+                })
+            header = ("Most cited in the corpus: " if plan.rank == "top" else "In-corpus citations: ") + "; ".join(lines)
+            return self._fact_answer(triples, f"{header} [{', '.join(sorted({t.source_id for t in triples}))}].")
         return None
+
+    def _iri(self, paper: str) -> str:
+        """The identifier the answer triples use for a paper (DBLP IRI when verified)."""
+        return self.corpus.canonical_paper_iri(paper) or paper
 
     @staticmethod
     def _fact_triple(row: dict[str, Any]) -> ExtractedTriple:
@@ -692,15 +769,8 @@ class Baseline20:
         )
 
     def _distinct_works(self, author_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Treat indexed preprints and their near-identical journal versions as one work."""
-        works: list[tuple[str, dict[str, Any]]] = []
-        for row in sorted(author_rows, key=lambda item: str(item["subject"])):
-            title = self.corpus.paper_title(str(row["subject"])) or str(row["subject"])
-            normalized = " ".join(re.findall(r"[a-z0-9]+", title.casefold()))
-            if any(SequenceMatcher(None, normalized, prior).ratio() >= 0.98 for prior, _ in works):
-                continue
-            works.append((normalized, row))
-        return [row for _, row in works]
+        """A preprint and its near-identical journal version count as one work (shared corpus rule)."""
+        return self.corpus.distinct_works(author_rows)
 
     def _author_triples(self, paper_id: str) -> list[ExtractedTriple]:
         return [
@@ -737,21 +807,31 @@ class Baseline20:
         self.current_run_id = run_id
         self.trace = []
         self.concept = concept or None
+        self.checks = []
+        self.stage = "question understanding"
         try:
             plan = self._plan(question)
             self._emit(
                 "Understanding question",
                 f"{plan.operation}" + (f" · {plan.rationale}" if plan.rationale else ""),
             )
+            self._check("question understanding", "warn" if plan.source == "fallback" else "pass",
+                        plan.rationale if plan.source == "fallback" else
+                        f"{plan.operation}" + (f" · measure: {plan.stated_measure()}" if plan.stated_measure() else ""))
             papers, unresolved = self._resolve_papers(plan)
             if unresolved:
                 self._emit("Paper not found in corpus titles", "; ".join(unresolved))
             direct: tuple[AnswerResult, list[ExtractedTriple]] | None = None
             lookup_started = time.monotonic()
+            self._computed = []
             if plan.operation != "research" and not unresolved:
+                self.stage = "verified facts"
                 direct = self._fact_query(plan, papers)
                 if direct is None:
                     self._emit("Verified facts do not cover this", "continuing with full-text research")
+                    self._check("verified facts", "skipped", "the facts needed are not indexed; used full text")
+            elif unresolved:
+                self._check("verified facts", "skipped", f"paper not found: {'; '.join(unresolved)}")
             self.last_route = "verified_facts" if direct is not None else "research"
             if direct is not None:
                 answer, triples = direct
@@ -763,9 +843,13 @@ class Baseline20:
                 )
                 self._emit("Retrieving verified corpus facts", f"{len(triples)} facts")
                 self._emit("Selecting atomic triples", f"{len(triples)} question-relevant triples")
+                self._check("verified facts", "pass", f"{len(triples)} DBLP facts / resolved references")
+                self._check("retrieval", "skipped", "answered from verified facts")
+                self._check("extraction", "skipped", "answered from verified facts")
                 state: BaselineState = {
                     "question": question, "passages": [], "inferred": inferred,
                     "extracted": triples, "answer": answer, "plan": plan, "paper_ids": papers,
+                    "computed": list(self._computed),
                     "retrieval": {
                         "queries": [], "stop_reason": "verified_facts",
                         "plan": plan.model_dump(),
@@ -776,18 +860,23 @@ class Baseline20:
             else:
                 state = self.graph.invoke({
                     "question": question, "concept": self.concept, "plan": plan,
-                    "paper_ids": papers,
+                    "paper_ids": papers, "computed": [],
                 })
+            self.stage = "triple provenance"
             run, artifacts = self._success(run_id, started_at, question, budget, state)
         except CorpusAbsent as exc:
+            self._check(self.stage, "pass", f"completed: nothing matches on {exc.evidence_surface}")
             run, artifacts = self._absence(run_id, started_at, question, budget, exc)
         except NoEvidenceFound as exc:
+            self._check("retrieval", "fail", f"full-text search found no matching passage: {exc}")
             run, artifacts = self._no_evidence(run_id, started_at, question, budget, exc)
         except NoResults as exc:
+            self._check(self.stage, "fail", str(exc))
             run, artifacts = self._failure(
                 run_id, started_at, question, budget, "no_results", str(exc)
             )
         except ModelFailure as exc:
+            self._check(self.stage, "fail", f"model call failed: {exc}")
             run, artifacts = self._failure(
                 run_id, started_at, question, budget, "provider_error", str(exc)
             )
@@ -797,7 +886,9 @@ class Baseline20:
                 if "SPARQL" in str(exc) or "query" in str(exc)
                 else "schema_rejected"
             )
+            self._check(self.stage, "fail", f"{reason}: {exc}")
             run, artifacts = self._failure(run_id, started_at, question, budget, reason, str(exc))
+        run = run.model_copy(update={"checks": list(self.checks)})
         return {"run": run, "artifacts": artifacts}
 
     def _failure(
@@ -1017,7 +1108,26 @@ class Baseline20:
                 ),
                 "cited_source_ids": sorted({source for claim in claims for source in claim.source_ids}),
             })
+        plan = state.get("plan")
+        graph = answer_graph.build(
+            ui_triples, claims, state.get("computed") or [],
+            is_paper=lambda value: bool(self.corpus.canonical_paper_iri(value)) or value in self.corpus.by_paper,
+            paper_label=lambda value: self.corpus.paper_title(
+                self.corpus.by_dblp.get(value, value)) or value,
+        )
+        supported = bool(ui_triples) and all(t.source.strip() and t.evidence.strip() for t in ui_triples)
+        self._check("triple provenance", "pass" if supported else "fail",
+                    f"{len(ui_triples)} triples, each with a source and evidence" if supported
+                    else "some triples lack a source or evidence")
+        if self.refine:
+            self._check("answer verification",
+                        "pass" if state.get("retrieval", {}).get("stop_reason") != "verified_facts" else "skipped",
+                        "every claim in the answer was checked against its triples"
+                        if state.get("retrieval", {}).get("stop_reason") != "verified_facts"
+                        else "answer composed directly from verified facts")
         reading = Reading(
+            measure=plan.stated_measure() if plan is not None else None,
+            graph=graph,
             label=inferred.label,
             gloss=inferred.gloss,
             classes=inferred.classes,

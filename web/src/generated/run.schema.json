@@ -1,5 +1,65 @@
 {
   "$defs": {
+    "AnswerGraph": {
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/GraphNode"
+          },
+          "title": "Nodes",
+          "type": "array"
+        },
+        "edges": {
+          "items": {
+            "$ref": "#/$defs/GraphEdge"
+          },
+          "title": "Edges",
+          "type": "array"
+        },
+        "computed": {
+          "items": {
+            "$ref": "#/$defs/ComputedResult"
+          },
+          "title": "Computed",
+          "type": "array"
+        }
+      },
+      "title": "AnswerGraph",
+      "type": "object"
+    },
+    "Check": {
+      "additionalProperties": false,
+      "description": "One stage's outcome, so a failure names the stage that failed.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "warn",
+            "fail",
+            "skipped",
+            "info"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "detail": {
+          "default": "",
+          "title": "Detail",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "status"
+      ],
+      "title": "Check",
+      "type": "object"
+    },
     "ClaimField": {
       "additionalProperties": false,
       "properties": {
@@ -158,6 +218,43 @@
         "evidence"
       ],
       "title": "ClaimSubgraph",
+      "type": "object"
+    },
+    "ComputedResult": {
+      "additionalProperties": false,
+      "description": "A conclusion the harness computed from source facts; never presented as a source fact.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "operation": {
+          "title": "Operation",
+          "type": "string"
+        },
+        "about": {
+          "title": "About",
+          "type": "string"
+        },
+        "derivedFrom": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Derivedfrom",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "operation",
+        "about"
+      ],
+      "title": "ComputedResult",
       "type": "object"
     },
     "ConceptChoice": {
@@ -322,6 +419,112 @@
       "title": "EvidenceAnchor",
       "type": "object"
     },
+    "GraphEdge": {
+      "additionalProperties": false,
+      "description": "A source fact or claim field (``fact``/``claim``/``evidence``) or a computed step (``derived``).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "source": {
+          "title": "Source",
+          "type": "string"
+        },
+        "target": {
+          "title": "Target",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "fact",
+            "claim",
+            "evidence",
+            "derived"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "sourceIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sourceids",
+          "type": "array"
+        },
+        "evidence": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Evidence"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "target",
+        "label",
+        "kind"
+      ],
+      "title": "GraphEdge",
+      "type": "object"
+    },
+    "GraphNode": {
+      "additionalProperties": false,
+      "description": "One entity in the answer graph; the same entity appears exactly once.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "paper",
+            "author",
+            "value",
+            "entity",
+            "claim",
+            "passage",
+            "computed"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "iri": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Iri"
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "kind"
+      ],
+      "title": "GraphNode",
+      "type": "object"
+    },
     "Metrics": {
       "additionalProperties": false,
       "properties": {
@@ -483,6 +686,29 @@
             "type": "string"
           },
           "title": "Properties"
+        },
+        "measure": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Measure"
+        },
+        "graph": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AnswerGraph"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -861,6 +1087,13 @@
       ],
       "default": null,
       "title": "Parentrunid"
+    },
+    "checks": {
+      "items": {
+        "$ref": "#/$defs/Check"
+      },
+      "title": "Checks",
+      "type": "array"
     },
     "coverage": {
       "anyOf": [

@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import type { ClaimSubgraph, Reading, Run, Triple } from './generated/run';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
+import type { Check, ClaimSubgraph, Reading, Run, Triple } from './generated/run';
+
+// The graph library is large; load it only when a graph is shown.
+const AnswerGraphView = lazy(() => import('./AnswerGraph').then(module => ({ default: module.AnswerGraphView })));
 
 type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_result' | 'failed' | 'runs' | 'corpus' | 'settings' | 'gold' | 'benchmark';
 type TripleView = 'statements' | 'graph' | 'turtle';
@@ -55,13 +58,13 @@ function Sidebar({ run, reading, onRate, onPromote }: { run: Run; reading?: Read
 }
 
 function Triples({ reading, labels }: { reading: Reading; labels: Record<string, string> }) {
-  const [view, setView] = useState<TripleView>('statements');
+  const [view, setView] = useState<TripleView>('graph');
   const label = (value: string) => labels[value] ? `${labels[value]} (${value})` : value;
-  return <section className="section" aria-label="Triples"><div className="section-top"><span className="section-title">Triples</span><div className="section-links">
-    {(['statements', 'graph', 'turtle'] as const).map(v => <button key={v} className="text-button micro" style={{ color: view === v ? 'var(--color-text)' : undefined }} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
+  return <section className="section" aria-label="Triples"><div className="section-top"><span className="section-title">Answer graph</span><div className="section-links">
+    {(['graph', 'statements', 'turtle'] as const).map(v => <button key={v} className="text-button micro" style={{ color: view === v ? 'var(--color-text)' : undefined }} onClick={() => setView(v)}>{v[0].toUpperCase() + v.slice(1)}</button>)}
   </div></div>
     {view === 'statements' && reading.triples.map((t: Triple, i: number) => <details className="row-details" key={i}><summary><span style={{ fontSize: 15.5 }}>{label(t.s)}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{t.p}</span><span style={{ fontSize: 15.5 }}>{label(t.o)}</span><span className="muted" style={{ marginLeft: 'auto', fontSize: 12 }}>{t.support}</span></summary><p style={{ margin: '12px 0 0', fontStyle: 'italic', fontSize: 14 }}>{t.evidence}</p><div className="muted micro">{t.source}</div></details>)}
-    {view === 'graph' && reading.triples.map((t: Triple, i: number) => <div className="graph-row" key={i}><span>{label(t.s)}</span><span className="graph-edge">{t.p}</span><span style={{ textAlign: 'right' }}>{label(t.o)}</span></div>)}
+    {view === 'graph' && <Suspense fallback={<p className="muted micro">Loading graph…</p>}><AnswerGraphView reading={reading} labels={labels} /></Suspense>}
     {view === 'turtle' && <pre className="code">{turtle(reading)}</pre>}
   </section>;
 }
@@ -72,6 +75,55 @@ function Claims({ reading, labels }: { reading: Reading; labels: Record<string, 
     {reading.claims.map(claim => <details className="row-details" key={claim.id}><summary><strong>{claim.kind}</strong><span>{label(claim.paperId)}</span><span className="muted micro" style={{ marginLeft: 'auto' }}>{claim.status}</span></summary><div style={{ display: 'grid', gap: 7, marginTop: 12 }}>{Object.entries(claim.fields).map(([name, field]) => <div key={name}><strong>{name}</strong>: {label(field.value)} <span className="muted micro">[{field.sourceIds.join(', ')}]</span></div>)}</div><p className="muted" style={{ marginTop: 10 }}>{Object.entries(claim.evidence).map(([source, excerpt]) => `${source}: ${excerpt}`).join(' · ')}</p>{claim.evidenceAnchors.length > 0 && <div className="muted micro">Evidence anchors: {claim.evidenceAnchors.map(anchor => `${anchor.kind}:${anchor.sourceId}`).join(' · ')}</div>}</details>)}
     {reading.claimRelations.map((relation, i) => <div className="muted micro" key={i}>{relation.sourceClaim} {relation.relation} {relation.targetClaim}: {relation.reason}</div>)}
   </section>;
+}
+
+const checkMark: Record<Check['status'], string> = { pass: '✓', warn: '!', fail: '✕', skipped: '–', info: 'i' };
+
+function Checks({ checks }: { checks: Check[] }) {
+  if (!checks.length) return null;
+  return <section className="section" aria-label="Checks"><div className="section-top"><span className="section-title">Checks</span><span className="muted micro">each stage's outcome</span></div>
+    <ul className="checks">{checks.map(check => <li key={check.name} className={`check check-${check.status}`}><span className="check-mark" aria-label={check.status}>{checkMark[check.status]}</span><span className="check-name">{check.name}</span><span className="muted micro">{check.detail}</span></li>)}</ul>
+  </section>;
+}
+
+type TraceRows = Run['trace'];
+const MODEL_ROWS = new Set(['Model call started', 'Model call finished', 'Model call failed', 'Tool call']);
+
+/** Live progress, derived only from streamed trace rows: what is running now, not whether it will succeed. */
+function Progress({ rows, waitingOn, waitedS, phase }: { rows: TraceRows; waitingOn: string | null; waitedS: number; phase: string }) {
+  const last = rows[rows.length - 1];
+  const stageRow = [...rows].reverse().find(row => !MODEL_ROWS.has(row.action));
+  const [model, purpose] = (waitingOn || '').split(' · ');
+  const tools = rows.filter(row => row.action === 'Tool call');
+  const models = rows.filter(row => row.action === 'Model call finished').length;
+  let passages = '';
+  for (const row of rows) {
+    const found = row.returned.match(/(\d+) passages? from (\d+) papers?/);
+    if (found) passages = `${found[1]} passages from ${found[2]} papers`;
+    const facts = row.action === 'Retrieving verified corpus facts' && row.returned.match(/(\d+) facts?/);
+    if (facts) passages = `${facts[1]} verified facts`;
+  }
+  const elapsed = Math.round((last?.atS ?? 0) + waitedS);
+  const items: [string, string][] = [
+    ['Phase', phase],
+    ['Stage', purpose || stageRow?.action || 'starting'],
+    ['Model in flight', waitingOn ? `${model} · ${waitedS}s` : 'none'],
+    ['Model calls done', String(models)],
+    ['Corpus tools', tools.length ? `${tools.length} · last: ${tools[tools.length - 1].returned}` : 'none yet'],
+    ['Examined', passages || '—'],
+    ['Elapsed', `${elapsed}s`],
+  ];
+  return <dl className="progress" aria-label="Run progress">{items.map(([name, value]) => <div key={name}><dt className="muted micro">{name}</dt><dd>{value}</dd></div>)}</dl>;
+}
+
+/** The outcome in words, taken from the stage checks: which stage ended the run and why. */
+function outcome(run: Run): string | null {
+  const failed = run.checks.find(check => check.status === 'fail');
+  if (!failed) return null;
+  if (failed.name === 'retrieval') return `Corpus search found no usable passages: ${failed.detail}`;
+  if (failed.name === 'extraction pass' || failed.name === 'extraction') return `Passages were found, but extraction produced no supported triples: ${failed.detail}`;
+  if (failed.name.startsWith('agent')) return `Agent validation failed (${failed.name}): ${failed.detail}`;
+  return `Stopped at ${failed.name}: ${failed.detail}`;
 }
 
 function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: number; setPick: (index: number) => void; onDeeper: () => void; labels: Record<string, string> }) {
@@ -93,9 +145,12 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
         : reason.startsWith('concept_proposal_failed')
           ? `The agent could not propose interpretations of this question (${reason.replace('concept_proposal_failed: ', '')}). Check that the agent model is reachable, then try again.`
           : `The ${pathLabel} ended before it produced an answer (${reason || 'unknown failure'}).`;
+  const stageOutcome = outcome(run);
   return <div style={{ marginTop: 64 }}>
     <p className="notice">{failed ? `Incomplete — ${pathLabel} stopped before answer composition.` : absent ? `No in-corpus match found. ${run.evidenceSurface || 'Corpus evidence'} was checked${run.searchCoverage?.inspected != null ? ` (${run.searchCoverage.inspected} records)` : ''}.` : noEvidence ? `No evidence found on ${run.evidenceSurface || 'the indexed full-text surface'} after the declared search procedure; this is not proof of corpus absence.` : run.executionStatus === 'degraded' ? 'Agentic execution degraded; showing a grounded fallback excluded from agentic scores.' : `Interpreted as: ${reading?.label}.${run.coverage != null && run.coverage < 1 ? ` Evaluated ${Math.round(run.coverage * 100)}% of obligations; ranking is provisional.` : ''}`}</p>
     {run.concept && <p className="muted micro" style={{ marginTop: 12 }}>Researched as: <strong>{run.concept.label}</strong> — {run.concept.gloss}{run.concept.autoSelected ? ' (selected automatically for evaluation)' : ''}</p>}
+    {reading?.measure && !failed && !absent && !noEvidence && <p className="measure">Answered using: <strong>{reading.measure}</strong></p>}
+    {stageOutcome && <p className="muted" style={{ marginTop: 12 }}>{stageOutcome}</p>}
     {failed && <button className="btn btn-secondary" style={{ marginTop: 24 }} onClick={onDeeper}>Try agentic research</button>}
     {!failed && run.path === 'agentic' && run.readings.length > 1 && <div style={{ marginTop: 20 }}><div className="muted micro" style={{ marginBottom: 8 }}>Re-answer under another reading</div><div style={{ display: 'flex', gap: '12px 24px', flexWrap: 'wrap' }}>{run.readings.map((r, i) => i !== pick && <button key={i} className="text-button" style={{ fontSize: 13 }} onClick={() => setPick(i)}>{r.label}</button>)}</div></div>}
     {(absent || noEvidence) && <section className="section" aria-label="Research result"><div className="section-top"><span className="section-title">Research result</span></div><p className="answer">{run.reason}</p><pre className="code">{JSON.stringify(run.searchCoverage, null, 2)}</pre></section>}
@@ -105,6 +160,7 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
       {showOntology && <pre className="code">{ontology(reading)}</pre>}{showQuery && <pre className="code">{reading.sparql}</pre>}
     </section><Claims reading={reading} labels={labels} /><Triples key={pick} reading={reading} labels={labels} /><section className="section" aria-label="Natural-language answer" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span><span className="muted micro">Downstream of accepted claims</span></div><p className="answer">{reading.answer}</p></section></>}
     {failed && <section className="section" aria-label="Run result" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span></div><p className="answer">{failure}</p></section>}
+    <Checks checks={run.checks} />
   </div>;
 }
 
@@ -155,6 +211,7 @@ export default function App() {
   const [goldErrors, setGoldErrors] = useState<Record<string, string>>({});
   const [picking, setPicking] = useState(false);
   const [lastRowAt, setLastRowAt] = useState(0);
+  const [phase, setPhase] = useState('');
   const [, setTick] = useState(0);
   const [library, setLibrary] = useState<LibraryQuestion[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
@@ -235,14 +292,14 @@ export default function App() {
     watch(id, run => { remember(run); if (watched.current === id) openRun(run); });
   };
   const runFixture = async (kind: RunPath, text: string = question) => {
-    closeStreams(); setQuestion(text); setLibraryOpen(false); setPath(kind); setScene('running'); setLiveTrace([]); setNotice(''); setActiveId('');
+    closeStreams(); setQuestion(text); setLibraryOpen(false); setPath(kind); setPhase(kind === 'agentic' ? 'proposing interpretations — you choose one before research' : 'research'); setScene('running'); setLiveTrace([]); setNotice(''); setActiveId('');
     try {
       const { id } = await getJson<{ id: string }>(`${api}/runs`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: text, path: kind, budget: kind === 'agentic' ? agMode : baseMode }) });
       setActiveId(id); follow(id);
     } catch (error) { setNotice(`The run could not be started: ${(error as Error).message}`); setScene('failed'); }
   };
   const runCompare = async (text: string = question) => {
-    closeStreams(); setQuestion(text); setLibraryOpen(false); setScene('running'); setLiveTrace([]); setNotice(''); watched.current = '*';
+    closeStreams(); setQuestion(text); setLibraryOpen(false); setPhase('fast + adaptive research; agentic proposes interpretations'); setScene('running'); setLiveTrace([]); setNotice(''); watched.current = '*';
     const paths = ['baseline', 'baseline-enhanced', 'agentic'] as const;
     let started: { id: string; kind: typeof paths[number] }[];
     try {
@@ -274,7 +331,7 @@ export default function App() {
     setPicking(true);
     try {
       const selected = await getJson<Run>(`${api}/runs/${activeId}/reading`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pick: index }) });
-      closeStreams(); setPath(selected.path); setActiveId(selected.id); setPick(0); setLiveTrace([]); setScene('running'); follow(selected.id);
+      closeStreams(); setPath(selected.path); setPhase('agentic research on the chosen interpretation'); setActiveId(selected.id); setPick(0); setLiveTrace([]); setScene('running'); follow(selected.id);
     } catch (error) { setNotice(`Could not start research for that interpretation: ${(error as Error).message}`); }
     finally { setPicking(false); }
   };
@@ -307,7 +364,7 @@ export default function App() {
       {!['corpus', 'settings', 'runs', 'gold', 'benchmark'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline')}>Fast</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline-enhanced')}>Adaptive</button><button className="btn btn-primary" disabled={busy || !question.trim()} onClick={() => runFixture('agentic')}>Agentic</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runCompare()}>Compare all</button><button className="text-button micro" aria-expanded={libraryOpen} aria-controls="question-library" disabled={busy} onClick={() => setLibraryOpen(open => !open)}>{libraryOpen ? 'Close question library' : `Question library (${library.length})`}</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
         {libraryOpen && !busy && <QuestionLibrary items={library} filter={libraryFilter} setFilter={setLibraryFilter} onPick={text => { setQuestion(text); setLibraryOpen(false); }} onRun={(kind, text) => runFixture(kind, text)} onCompare={text => runCompare(text)} />}
         {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'corpus_absent' || r.status === 'no_evidence_found' || r.status === 'incomplete').filter((run, index, all) => all.findIndex(other => other.question === run.question) === index).slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
-        {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Adaptive baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'Concept · shared evidence graph · MCP verification' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction · evidence review' : 'Fixed pipeline · no verification pass'}</span></div>{liveTrace.map((step, i) => <div className={`log-row${step.action.startsWith('Model call') ? ' log-model' : ''}${step.action === 'Model call failed' ? ' log-failed' : ''}`} key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}{waitingOn && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Waiting {waitedS}s</span><span className="muted micro">{waitingOn}</span></div>}{busy && !waitingOn && lastRow && waitedS >= 10 && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Working {waitedS}s</span><span className="muted micro">since “{lastRow.action}”</span></div>}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={stopRun}>Stop run</button></section>}
+        {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Adaptive baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'Concept · shared evidence graph · MCP verification' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction · evidence review' : 'Fixed pipeline · no verification pass'}</span></div><Progress rows={liveTrace} waitingOn={waitingOn} waitedS={waitedS} phase={phase} />{liveTrace.map((step, i) => <div className={`log-row${step.action.startsWith('Model call') ? ' log-model' : ''}${step.action === 'Model call failed' ? ' log-failed' : ''}`} key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}{waitingOn && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Waiting {waitedS}s</span><span className="muted micro">{waitingOn}</span></div>}{busy && !waitingOn && lastRow && waitedS >= 10 && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Working {waitedS}s</span><span className="muted micro">since “{lastRow.action}”</span></div>}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={stopRun}>Stop run</button></section>}
         {scene === 'readings' && active && <section style={{ marginTop: 60 }}><p style={{ maxWidth: '56ch' }}>The agent proposed {active.readings.length} interpretations of this question. Choose one to research.</p><p className="muted" style={{ fontSize: 13.5, marginBottom: 34 }}>Each interpretation scopes retrieval and extraction differently; the question itself stays unchanged.</p>{active.readings.map((r, i) => { const concept = active.concepts[i]; return <button key={i} className="reading-row" disabled={picking} onClick={() => chooseReading(i)}><span className="muted micro">{i + 1}</span><span style={{ display: 'grid', gap: 4 }}><strong style={{ fontSize: 16.5 }}>{r.label}</strong><span className="muted" style={{ fontSize: 13.5 }}>{r.gloss}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{[r.classes.join(' · '), r.properties.join(' · '), concept?.evidenceHits != null ? `${concept.evidenceHits} matching corpus passages` : ''].filter(Boolean).join('  |  ')}</span></span></button>; })}<button className="text-button" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setScene('idle'); }}>None of these — rephrase the question</button></section>}
         {scene === 'failed' && !active && !notice && <p className="notice">The run failed before it produced a result.</p>}
         {['agentic_result', 'baseline_result', 'failed'].includes(scene) && active && <Result key={`${active.id}-${pick}`} run={active} pick={pick} setPick={setPick} labels={labels} onDeeper={() => runFixture('agentic')} />}

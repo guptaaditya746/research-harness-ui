@@ -68,6 +68,29 @@ The corpus has 37 DBLP-verified papers. These questions come from
 | Agentic research | Agentic | *What limitation of learning on physical robots does the DayDreamer paper report?* | pick a concept → MCP tool calls in the trace → verified answer |
 | Side by side | Compare all | *Which paper introduced Video Prediction Policy?* | fast and adaptive finish; then you choose the agentic concept |
 
+What every answer screen shows, top to bottom:
+
+- **Answered using: …** — the measure the answer is computed with (for example *number of
+  distinct corpus papers per author* versus *number of distinct corpus papers citing each
+  author's papers*). An ambiguous question such as "best author" is answered under one
+  stated measure, never silently under another.
+- **Answer graph** — one connected graph, not a list of triples: each paper, author or value
+  is one node, so three papers by the same author meet at one author node. Solid edges are
+  source facts (click one to see its source id and evidence), dotted edges lead to evidence
+  passages, and dashed boxes are results the harness *computed* (such as "3 distinct
+  papers"); clicking one highlights exactly the facts it was computed from. Result claims
+  connect a number to its metric, benchmark, paper and passage.
+- **Checks** — one line per stage: question understanding, retrieval, extraction, triple
+  provenance, then for agentic runs *agent research (MCP)*, *agent evidence IDs* and
+  *agentic execution*. "MCP found no matches", "extraction produced no supported triples"
+  and "the agent's evidence IDs were never returned by a tool" therefore read differently.
+
+While a run is in progress the screen shows the current stage, the model call in flight, the
+number of tool calls and the last tool result, the passages and papers examined, and the
+elapsed time. For corpus-wide questions the agent has `aggregate_facts` and
+`metadata_table`, so counting an author's papers is one call that cites its facts rather
+than one `structured_facts` call per paper.
+
 Gold and benchmark flow:
 
 1. On an answered result, rate it in the sidebar, then **Promote to gold**.
@@ -84,7 +107,7 @@ Gold and benchmark flow:
 | A run seems stuck | the trace shows "Waiting Ns · <model> · <stage>" for the model call in flight | if one model stage keeps taking long, that model is the bottleneck; see the model note in section 1 |
 | Failed: "A model call failed: timed out after …" | that model call exceeded its per-call timeout | a thinking model on structured calls is the usual cause (section 1) |
 | "Queued for model capacity" in the trace | another agentic run holds the single heavy slot | wait, or **Stop run** on the other one (stop is immediate) |
-| "Agentic execution degraded" | MCP server or agent model unavailable; you see the grounded baseline answer | check `make preflight`; restart `make dev` |
+| "Agentic execution degraded" | see the *Checks* list: *agent research (MCP)* failed means the MCP server or agent model was unavailable; *agent evidence IDs* failed means the agent cited IDs no tool returned; the grounded pipeline answer is shown either way | for an MCP failure check `make preflight` and restart `make dev`; otherwise retry |
 | Failed: "exceeded its time limit" | the run hit `HARNESS_RUN_DEADLINE_*` | the model is overloaded; retry with the fast budget |
 | Failed: "could not propose interpretations" | the agent model is unreachable or returned unusable output | check the Granite alias in preflight |
 | Failed: "interrupted" | the API restarted while the run was active | run it again |

@@ -412,3 +412,74 @@ def test_author_ranking_and_threshold_come_from_the_plan(tmp_path: Path) -> None
     assert top.status == repeated.status == "answered"
     assert top.readings[0].answer.startswith("Ada appears on the most distinct corpus papers (2)")
     assert {item.o for item in repeated.readings[0].triples} == {"Ada"}
+
+
+def _ranking_runner(tmp_path: Path, plans: dict[str, QueryPlan]) -> Baseline20:
+    store = corpus(tmp_path)
+    store.by_paper["p5"] = {"paper_id": "p5", "title": "A Second Robot Paper", "year": 2025}
+    store.by_paper["p8"] = {"paper_id": "p8", "title": "A Citing Robot Paper", "year": 2026}
+    store.fact_rows.extend([
+        {"fact_id": "a1", "subject": "p4", "predicate": "author", "object": "Ada", "source_id": "p4-metadata"},
+        {"fact_id": "a2", "subject": "p5", "predicate": "author", "object": "Ada", "source_id": "p5-metadata"},
+        {"fact_id": "a3", "subject": "p5", "predicate": "author", "object": "Bo", "source_id": "p5-metadata"},
+        {"fact_id": "a4", "subject": "p8", "predicate": "author", "object": "Cy", "source_id": "p8-metadata"},
+    ])
+    store.references.extend([
+        {"reference_id": "p8-ref-1", "paper_id": "p8", "resolved_paper_id": "p4", "title": "Video Prediction Policy"},
+        {"reference_id": "p8-ref-2", "paper_id": "p8", "resolved_paper_id": "p5", "title": "A Second Robot Paper"},
+    ])
+    store.by_reference = {row["reference_id"]: row for row in store.references}
+    return Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()),
+                      planner=StubPlanner(plans))
+
+
+def test_fact_answer_graph_shares_nodes_and_separates_computed_results(tmp_path: Path) -> None:
+    question = "Who has the most papers here?"
+    run = _ranking_runner(tmp_path, {question: plan("author_paper_counts", rank="top")}).run(question)["run"]
+    reading = run.readings[0]
+    graph = reading.graph
+    assert graph is not None
+    authors = [node for node in graph.nodes if node.kind == "author"]
+    assert [node.label for node in authors] == ["Ada"]           # one node, shared by both papers
+    assert sum(1 for edge in graph.edges if edge.target == authors[0].id and edge.kind == "fact") == 2
+    [computed] = graph.computed
+    assert computed.label == "2 distinct papers"
+    fact_ids = {edge.id for edge in graph.edges if edge.kind == "fact"}
+    assert set(computed.derived_from) <= fact_ids and len(computed.derived_from) == 2
+    assert any(node.kind == "computed" for node in graph.nodes)
+    assert reading.measure and "distinct corpus papers per author" in reading.measure
+    names = {check.name: check.status for check in run.checks}
+    assert names["question understanding"] == "pass"
+    assert names["verified facts"] == "pass"
+    assert names["retrieval"] == names["extraction"] == "skipped"
+    assert names["triple provenance"] == "pass"
+
+
+def test_author_citation_ranking_counts_citing_papers_with_cites_edges(tmp_path: Path) -> None:
+    question = "Which author is cited most by other corpus papers?"
+    run = _ranking_runner(tmp_path, {question: plan("author_citation_counts", rank="top")}).run(question)["run"]
+    assert run.status == "answered"
+    reading = run.readings[0]
+    # p8 cites two of Ada's papers but is one citing paper; Bo ties with Ada, and ties are kept.
+    assert reading.answer.startswith("Most cited in the corpus: Ada (1 citing paper); Bo (1 citing paper)")
+    predicates = {triple.p for triple in reading.triples}
+    assert {"cites", "author"} <= predicates or {"cites", "authoredBy"} <= predicates
+    assert [item.label for item in reading.graph.computed] == ["1 citing paper", "1 citing paper"]
+    ada = next(item for item in reading.graph.computed if item.about.endswith("ada"))
+    derived = [edge for edge in reading.graph.edges if edge.id in ada.derived_from]
+    assert sorted(edge.label for edge in derived).count("cites") == 2
+
+
+def test_research_failure_marks_the_stage_that_ended_the_run(tmp_path: Path) -> None:
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    run = runner.run("Unfindable zxqvterm")["run"]
+    checks = {check.name: check for check in run.checks}
+    assert checks["retrieval"].status == "fail"
+    assert "extraction" not in checks or checks["extraction"].status != "pass"
+
+
+def test_planner_states_the_measure_used() -> None:
+    assert "distinct corpus papers citing" in plan("author_citation_counts", rank="top").stated_measure()
+    research = QueryPlan(operation="research", measure="  success rate on CALVIN ABC→D ")
+    assert research.stated_measure() == "success rate on CALVIN ABC→D"
+    assert QueryPlan(operation="research").stated_measure() is None

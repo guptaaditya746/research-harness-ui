@@ -12,6 +12,7 @@ import httpx
 from harness_baseline import Baseline20
 from harness_observability import record_tool_call
 from harness_schema.models import (
+    Check,
     ConceptChoice,
     Metrics,
     Reading,
@@ -24,6 +25,8 @@ from .concepts import ConceptProposalError, propose_concepts
 from .mcp import MCPToolClient, MCPUnavailable
 
 DEFAULT_CLASSES = {"Paper", "Author", "Venue", "Dataset", "Metric", "Claim"}
+# Bookkeeping records in tool_calls that are not corpus research.
+NON_CORPUS_RECORDS = {"load_skill", "context_checkpoint", "mcp_session"}
 
 
 class AgenticResearch:
@@ -64,6 +67,8 @@ class AgenticResearch:
         mcp_error: str | None = None
         agent_final = ""
         agent_decision: dict = {}
+        shown_ids: set[str] = set()
+        agent_checks: list[Check] = []
 
         def tool_sink(record: dict) -> None:
             tool_calls.append(record)
@@ -120,6 +125,9 @@ class AgenticResearch:
             mcp = MCPToolClient(tool_sink, agent="supervisor")
             try:
                 grounded_context = self._grounded_context(base_run, concept_input)
+                shown_ids = self._evidence_ids(grounded_context) | {
+                    str(claim["id"]) for claim in grounded_context.get("preliminary_claims", [])
+                }
                 agent_final = mcp.run_agent(self.agent_model, question, grounded_context)
                 if agent_final:
                     try:
@@ -147,24 +155,45 @@ class AgenticResearch:
                 self.trace_sink(row)
         if base_run.status == "answered" and not clarification_needed and not heavy_busy and not agent_decision and not mcp_error:
             mcp_error = "agent_returned_no_research_decision"
+        corpus_calls = [item for item in tool_calls if item["tool"] not in NON_CORPUS_RECORDS]
+        # Only IDs the agent actually saw in this session (tool results and the
+        # preliminary result shown to it) count as evidence; existing somewhere
+        # in the corpus is not enough.
+        observed = shown_ids.union(*(self._evidence_ids(item.get("result")) for item in corpus_calls))
         if agent_decision and not mcp_error:
             available = {claim.id for reading in base_run.readings for claim in reading.claims}
             verified = agent_decision.get("verified_claim_ids")
             evidence_ids = agent_decision.get("additional_evidence_ids")
             if not isinstance(verified, list) or not isinstance(evidence_ids, list):
                 mcp_error = "invalid_agent_decision_shape"
-            elif any(item not in available for item in verified):
-                mcp_error = "agent_claim_id_not_in_preliminary_graph"
+                agent_checks.append(Check(name="agent decision", status="fail",
+                                          detail="decision JSON lacks verified_claim_ids / additional_evidence_ids lists"))
             else:
-                corpus = getattr(self.baseline, "corpus", None)
-                known = self._known_evidence_ids(corpus) if corpus is not None else None
-                unknown_evidence = (
-                    [str(item) for item in evidence_ids if item not in known]
-                    if known is not None else []
-                )
-                if unknown_evidence:
-                    mcp_error = "agent_evidence_id_not_in_corpus:" + ",".join(unknown_evidence[:5])
-                elif not tool_calls:
+                unknown_claims = [str(item) for item in verified if item not in available]
+                verified = [item for item in verified if item in available]
+                agent_checks.append(Check(
+                    name="agent claim IDs",
+                    status="pass" if not unknown_claims else ("fail" if not verified else "warn"),
+                    detail=(f"{len(verified)} preliminary claims confirmed" if not unknown_claims else
+                            f"{len(unknown_claims)} claim IDs are not in the preliminary graph and were ignored: "
+                            + ", ".join(unknown_claims[:5])),
+                ))
+                unobserved = [str(item) for item in evidence_ids if str(item) not in observed]
+                evidence_ids = [item for item in evidence_ids if str(item) in observed]
+                agent_checks.append(Check(
+                    name="agent evidence IDs",
+                    status=("skipped" if not unobserved and not evidence_ids else
+                            "pass" if not unobserved else "fail" if not evidence_ids else "warn"),
+                    detail=("no additional evidence supplied" if not unobserved and not evidence_ids else
+                            f"{len(evidence_ids)} IDs observed in tool results" if not unobserved else
+                            f"{len(unobserved)} IDs were never returned by a tool and were rejected: "
+                            + ", ".join(unobserved[:5])),
+                ))
+                if unknown_claims and not verified and not evidence_ids:
+                    mcp_error = "agent_claim_id_not_in_preliminary_graph"
+                elif unobserved and not evidence_ids and not verified:
+                    mcp_error = "agent_evidence_ids_not_observed:" + ",".join(unobserved[:5])
+                elif not corpus_calls:
                     mcp_error = "agent_used_no_corpus_tools"
                 elif getattr(self.baseline, "last_route", None) == "verified_facts":
                     # The answer was computed from verified corpus facts; the
@@ -231,8 +260,39 @@ class AgenticResearch:
         readings = list(base_run.readings)
         status = base_run.status
         chosen = base_run.chosen_reading
+        # One check per agent stage, so "MCP returned nothing", "the agent did
+        # not use tools" and "the agent's decision failed validation" read differently.
+        if heavy_busy:
+            research = Check(name="agent research (MCP)", status="skipped", detail=mcp_error or "heavy model busy")
+        elif base_run.status != "answered":
+            research = Check(name="agent research (MCP)", status="skipped",
+                             detail=f"the shared pipeline ended {base_run.status} before agent review")
+        elif mcp_error and mcp_error.startswith("MCP agent workflow failed"):
+            research = Check(name="agent research (MCP)", status="fail", detail=mcp_error)
+        else:
+            empty = sum(1 for item in corpus_calls if not item.get("result_count"))
+            research = Check(name="agent research (MCP)", status="pass" if corpus_calls else "fail",
+                             detail=(f"{len(corpus_calls)} corpus tool calls"
+                                     + (f", {empty} returned no matches" if empty else ""))
+                             if corpus_calls else "the agent answered without calling a corpus tool")
+        agent_checks.insert(0, research)
+        agent_checks.append(Check(
+            name="agentic execution",
+            status="pass" if not mcp_error and base_run.status != "incomplete" else
+            "fail" if base_run.status == "incomplete" else "warn",
+            detail=("agent review accepted" if not mcp_error and base_run.status != "incomplete" else
+                    base_run.reason or "pipeline incomplete" if base_run.status == "incomplete" else
+                    f"degraded ({mcp_error}); showing the grounded pipeline answer"),
+        ))
+        if concept is not None and base_run.chosen_reading is not None and base_run.readings:
+            measure = base_run.readings[base_run.chosen_reading].measure
+            agent_checks.append(Check(
+                name="interpretation", status="info",
+                detail=f"researched as '{concept.label}'" + (f"; answered using: {measure}" if measure else ""),
+            ))
         run = base_run.model_copy(
             update={
+                "checks": list(base_run.checks) + agent_checks,
                 "path": "agentic",
                 "concept": concept,
                 "duration_s": round(monotonic() - started, 3),
@@ -292,11 +352,29 @@ class AgenticResearch:
             triple.source and triple.evidence
             for reading in run.readings for triple in reading.triples
         ) and any(reading.triples for reading in run.readings)
-        artifacts["verification.json"] = json.dumps(
-            {"status": "triple provenance checked", "verified": run.status == "answered" and supported,
-             "heavy_model_used": not heavy_busy and not bool(mcp_error), "agentic_degraded": bool(mcp_error)},
-            indent=2,
-        ).encode()
+        decision = agent_decision if isinstance(agent_decision, dict) else {}
+        artifacts["verification.json"] = json.dumps({
+            # Separate checks: provenance of the answer's triples is not the same
+            # as a successful agentic execution.
+            "triple_provenance": {
+                "verified": run.status == "answered" and supported,
+                "detail": "every answer triple has a source and evidence" if supported else "not all triples are sourced",
+            },
+            "agentic_execution": {
+                "status": run.execution_status, "producing_path": run.producing_path,
+                "reason": mcp_error,
+            },
+            "agent_evidence_ids": {
+                "supplied": [str(item) for item in decision.get("additional_evidence_ids") or []],
+                "observed_in_session": sorted(
+                    str(item) for item in decision.get("additional_evidence_ids") or [] if str(item) in observed),
+                "rejected_unobserved": sorted(
+                    str(item) for item in decision.get("additional_evidence_ids") or [] if str(item) not in observed),
+            },
+            "checks": [check.model_dump() for check in run.checks],
+            "heavy_model_used": not heavy_busy and not bool(mcp_error),
+            "agentic_degraded": bool(mcp_error),
+        }, indent=2).encode()
         artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in trace], indent=2).encode()
         baseline_calls = result["artifacts"].get("tool_calls.jsonl", b"")
         agent_calls = b"\n".join(
@@ -455,6 +533,9 @@ class AgenticResearch:
                 str(item) for key, item in value.items()
                 if key.endswith("_id") and isinstance(item, (str, int))
             }
+            for key, item in value.items():
+                if key.endswith("_ids") and isinstance(item, list):
+                    found.update(str(entry) for entry in item if isinstance(entry, (str, int)))
             for item in value.values():
                 found.update(AgenticResearch._evidence_ids(item))
             return found

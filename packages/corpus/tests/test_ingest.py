@@ -150,3 +150,72 @@ def test_model_written_patterns_have_a_time_budget() -> None:
         BoundedPattern("a" * 400)
     except ValueError as exc:
         assert "longer than" in str(exc)
+
+
+def _aggregate_store(tmp_path):
+    import json
+
+    from harness_corpus.store import CorpusStore
+
+    rows = {
+        "papers.jsonl": [
+            {"paper_id": "p4", "title": "Video Prediction Policy", "year": 2025, "dblp_iri": "https://dblp.org/rec/x/vpp"},
+            {"paper_id": "p6", "title": "FOCUS: object-centric world models", "year": 2024, "dblp_iri": None},
+            {"paper_id": "p7", "title": "FOCUS: Object-Centric World Models", "year": 2025, "dblp_iri": None},
+            {"paper_id": "p9", "title": "Dream to Manipulate", "year": 2014, "dblp_iri": None},
+        ],
+        "passages.jsonl": [],
+        "facts.jsonl": [
+            *({"fact_id": f"{p}-y", "subject": p, "predicate": "year", "object": y, "source_id": f"{p}-metadata"}
+              for p, y in (("p4", "2025"), ("p6", "2024"), ("p7", "2025"), ("p9", "2014"))),
+            *({"fact_id": f"{p}-{a}", "subject": p, "predicate": "author", "object": a, "source_id": f"{p}-metadata"}
+              for p, a in (("p4", "Ada"), ("p6", "Ada"), ("p7", "Ada"), ("p9", "Ada"), ("p9", "Bo"))),
+        ],
+        "references.jsonl": [
+            {"reference_id": "p9-ref-1", "paper_id": "p9", "resolved_paper_id": "p4"},
+            {"reference_id": "p6-ref-1", "paper_id": "p6", "resolved_paper_id": "p4"},
+        ],
+    }
+    for name, values in rows.items():
+        (tmp_path / name).write_text("".join(json.dumps(row) + "\n" for row in values))
+    return CorpusStore(tmp_path)
+
+
+def test_paper_ids_accept_documented_formats_and_reject_unknown_ones(tmp_path) -> None:
+    from harness_corpus.store import UnknownIdentifier
+
+    store = _aggregate_store(tmp_path)
+    assert store.paper_key("p4") == store.paper_key("https://dblp.org/rec/x/vpp") == "p4"
+    assert store.paper_key("p9-metadata") == store.paper_key("https://harness.local/resource/p9") == "p9"
+    assert store.facts("https://dblp.org/rec/x/vpp", predicate="year")["items"][0]["object"] == "2025"
+    assert store.facts("p4", predicate="authoredBy")["total"] == 1          # alias of author
+    try:
+        store.facts("https://dblp.org/rec/unknown")
+    except UnknownIdentifier as exc:
+        assert "unknown paper_id" in str(exc) and "p4" in str(exc)
+    else:
+        raise AssertionError("unknown id returned an empty result")
+    try:
+        store.facts("p4", predicate="citations")
+    except UnknownIdentifier as exc:
+        assert "Available predicates" in str(exc)
+    else:
+        raise AssertionError("unknown predicate returned an empty result")
+
+
+def test_aggregates_are_exhaustive_and_cite_their_facts(tmp_path) -> None:
+    store = _aggregate_store(tmp_path)
+    authors = store.aggregate("count_papers_by_author", top_k=1)
+    assert [(i["author"], i["count"]) for i in authors["items"]] == [("Ada", 3)]   # p6/p7 same work
+    assert authors["computed"] and authors["coverage"]["exhaustive"]
+    assert set(authors["items"][0]["fact_ids"]) == {"p4-Ada", "p6-Ada", "p9-Ada"}
+    earliest = store.aggregate("min", predicate="year")
+    assert earliest["items"][0]["value"] == "2014" and earliest["items"][0]["paper_ids"] == ["p9"]
+    by_year = store.aggregate("count_by_value", predicate="year")
+    assert by_year["items"][0] == {**by_year["items"][0], "value": "2025", "count": 2}
+    cited = store.aggregate("count_incoming_citations")
+    assert cited["items"][0]["paper_id"] == "p4" and cited["items"][0]["count"] == 2
+    by_author = store.aggregate("count_citations_by_author", top_k=1)
+    assert by_author["items"][0]["author"] == "Ada" and by_author["items"][0]["count"] == 2
+    table = store.metadata_table(["year"])
+    assert table["total"] == 4 and {row["paper_id"] for row in table["items"]} == {"p4", "p6", "p7", "p9"}
