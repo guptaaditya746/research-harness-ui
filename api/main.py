@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import threading
 import uuid
 from collections.abc import AsyncIterator, Callable
@@ -16,7 +17,7 @@ from statistics import mean
 from time import monotonic
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from harness_agent import AgenticResearch
 from harness_baseline import Baseline20
@@ -41,12 +42,19 @@ from sse_starlette import EventSourceResponse, JSONServerSentEvent
 ROOT = Path(__file__).resolve().parents[1]
 load_dotenv(ROOT / ".env")
 FIXTURES = Path(os.getenv("FIXTURES_DIR", ROOT / "web" / "fixtures"))
-HEAVY_MODEL_SLOT = threading.BoundedSemaphore(
-    int(os.getenv("HARNESS_MAX_CONCURRENT_HEAVY", "1"))
+HEAVY_MODEL_SLOT = threading.BoundedSemaphore(int(os.getenv("HARNESS_MAX_CONCURRENT_HEAVY", "1")))
+RUN_CAPACITY = int(os.getenv("HARNESS_MAX_CONCURRENT_RUNS", "2"))
+MODEL_SLOT = threading.BoundedSemaphore(RUN_CAPACITY)
+# Reserve at least one total slot for private work. If total capacity is one,
+# public work stays disabled instead of taking the only researcher slot.
+PUBLIC_RUN_CAPACITY = max(
+    0,
+    min(int(os.getenv("HARNESS_MAX_CONCURRENT_PUBLIC_RUNS", "1")), RUN_CAPACITY - 1),
 )
-MODEL_SLOT = threading.BoundedSemaphore(
-    int(os.getenv("HARNESS_MAX_CONCURRENT_RUNS", "2"))
-)
+PUBLIC_MODEL_SLOT = threading.BoundedSemaphore(PUBLIC_RUN_CAPACITY)
+PUBLIC_RESERVATION_TTL_S = 15.0
+PUBLIC_RESERVATIONS: dict[str, tuple[float, tuple[threading.BoundedSemaphore, ...]]] = {}
+PUBLIC_RESERVATIONS_LOCK = threading.Lock()
 LOGGER = logging.getLogger(__name__)
 
 
@@ -64,11 +72,18 @@ class RunCancelled(BaseException):
 
 def run_deadline_seconds(path: str, budget: str) -> float:
     """Hard wall-clock limit for one run, independent of per-call timeouts."""
-    default = 300.0 if path == "agentic" and budget == "slow" else {
-        "fast": 300.0, "slow": 900.0,
-    }[budget]
+    default = (
+        300.0
+        if path == "agentic" and budget == "slow"
+        else {
+            "fast": 300.0,
+            "slow": 900.0,
+        }[budget]
+    )
     path_key = f"HARNESS_RUN_DEADLINE_{path.upper().replace('-', '_')}_{budget.upper()}_S"
-    return float(os.getenv(path_key, os.getenv(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default)))
+    return float(
+        os.getenv(path_key, os.getenv(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default))
+    )
 
 
 class RunRequest(BaseModel):
@@ -81,6 +96,8 @@ class RunRequest(BaseModel):
     # Agent-proposed concept chosen by the user; required before agentic research.
     concept: ConceptChoice | None = None
     parent_run_id: str | None = None
+    origin: str = "private"
+    deadline_seconds: int | None = None
 
 
 class RatingRequest(BaseModel):
@@ -190,7 +207,9 @@ class RunRuntime:
         budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "90"))
         model = OpenAICompatibleModel(model=model_name, timeout_s=timeout_s or budget_timeout)
         edc_model = OpenAICompatibleModel(
-            model=os.getenv("HARNESS_MODEL_EDC") or model_name or os.getenv("HARNESS_MODEL_SMALL", "heavy-model"),
+            model=os.getenv("HARNESS_MODEL_EDC")
+            or model_name
+            or os.getenv("HARNESS_MODEL_SMALL", "heavy-model"),
             timeout_s=timeout_s or budget_timeout,
         )
         return Baseline20(
@@ -199,8 +218,11 @@ class RunRuntime:
             planner=QueryPlanner(model),
             retrieve_k=int(os.getenv("BASELINE_RETRIEVE_K", "20")),
             max_passages=(
-                max_passages if max_passages is not None else
-                int(os.getenv("HARNESS_ADAPTIVE_MAX_PASSAGES", "16")) if enhanced else None
+                max_passages
+                if max_passages is not None
+                else int(os.getenv("HARNESS_ADAPTIVE_MAX_PASSAGES", "16"))
+                if enhanced
+                else None
             ),
             enhanced=enhanced,
             edc=True,
@@ -208,14 +230,26 @@ class RunRuntime:
             refine=enhanced,
             refinement_model=refinement_model,
             claim_lookup=self.claims.search,
-            relation_proposer=lambda name, definition, run_id, domain, range_: self.relations.propose(
-                name, definition, run_id=run_id, domain=domain, range_=range_
+            relation_proposer=lambda name, definition, run_id, domain, range_: (
+                self.relations.propose(
+                    name, definition, run_id=run_id, domain=domain, range_=range_
+                )
             ),
         )
 
-    def start(self, request: RunRequest) -> str:
+    def start(
+        self,
+        request: RunRequest,
+        reserved_slots: list[threading.BoundedSemaphore] | None = None,
+    ) -> str:
         if request.path not in {"agentic", "baseline", "baseline-enhanced"}:
             raise ValueError("unknown research path")
+        if request.origin not in {"private", "public"}:
+            raise ValueError("unknown run origin")
+        if request.origin == "public" and reserved_slots is None:
+            raise ValueError("public model capacity reservation is required")
+        if request.deadline_seconds is not None and not 1 <= request.deadline_seconds <= 900:
+            raise ValueError("invalid deadline")
         if request.budget not in {"fast", "slow"}:
             raise ValueError("budget must be fast or slow")
         if not request.question.strip():
@@ -226,8 +260,15 @@ class RunRuntime:
             self.running.add(run_id)
         self._mark_pending(run_id, request)
         run_started = monotonic()
-        deadline = run_started + run_deadline_seconds(request.path, request.budget)
+        configured_deadline = run_deadline_seconds(request.path, request.budget)
+        requested_deadline = request.deadline_seconds
+        deadline = run_started + (
+            min(configured_deadline, requested_deadline)
+            if requested_deadline
+            else configured_deadline
+        )
         question = request.question.strip()
+        held_reservation = reserved_slots
 
         def check_cancelled() -> None:
             with self.lock:
@@ -248,6 +289,10 @@ class RunRuntime:
             check_cancelled()
 
         def acquire(*slots: threading.BoundedSemaphore) -> list[threading.BoundedSemaphore]:
+            nonlocal held_reservation
+            if request.origin == "public" and held_reservation is not None:
+                held, held_reservation = held_reservation, None
+                return held
             held: list[threading.BoundedSemaphore] = []
             announced = False
             try:
@@ -256,10 +301,13 @@ class RunRuntime:
                         if not announced:
                             announced = True
                             with self.lock:
-                                self.events[run_id].append(TraceRow(
-                                    atS=0.0, action="Queued for model capacity",
-                                    returned="waiting for an earlier run to finish",
-                                ))
+                                self.events[run_id].append(
+                                    TraceRow(
+                                        atS=0.0,
+                                        action="Queued for model capacity",
+                                        returned="waiting for an earlier run to finish",
+                                    )
+                                )
                         check_cancelled()
                     held.append(slot)
             except BaseException:
@@ -269,22 +317,33 @@ class RunRuntime:
             return held
 
         def execute() -> None:
+            nonlocal held_reservation
             result: dict | None = None
             try:
                 with (
                     run_observation(run_id, question, request.path, request.budget) as observation,
                     call_budget(deadline, lambda: run_id in self.stop_requested),
-                    model_events(lambda action, detail: sink(TraceRow(
-                        atS=round(monotonic() - run_started, 2), action=action, returned=detail,
-                    ))),
+                    model_events(
+                        lambda action, detail: sink(
+                            TraceRow(
+                                atS=round(monotonic() - run_started, 2),
+                                action=action,
+                                returned=detail,
+                            )
+                        )
+                    ),
                 ):
                     result = self._execute(request, question, run_id, sink, acquire)
                     if observation is not None:
                         observation.update(
                             output={
                                 "status": result["run"].status,
-                                "triple_count": sum(len(item.triples) for item in result["run"].readings),
-                                "claim_count": sum(len(item.claims) for item in result["run"].readings),
+                                "triple_count": sum(
+                                    len(item.triples) for item in result["run"].readings
+                                ),
+                                "claim_count": sum(
+                                    len(item.claims) for item in result["run"].readings
+                                ),
                             }
                         )
                 with self.lock:
@@ -294,12 +353,14 @@ class RunRuntime:
                 result["artifacts"]["trace.json"] = json.dumps(
                     [item.model_dump(by_alias=True) for item in trace], indent=2
                 ).encode()
-                run = result["run"].model_copy(update={
-                    "evaluation_mode": request.evaluation_mode,
-                    "snapshot": request.snapshot,
-                    "parent_run_id": request.parent_run_id,
-                    "trace": trace,
-                })
+                run = result["run"].model_copy(
+                    update={
+                        "evaluation_mode": request.evaluation_mode,
+                        "snapshot": request.snapshot,
+                        "parent_run_id": request.parent_run_id,
+                        "trace": trace,
+                    }
+                )
                 result["run"] = run
                 with self.lock:
                     stopped = run_id in self.stop_requested
@@ -317,14 +378,19 @@ class RunRuntime:
             except RunCancelled as cancelled:
                 stopped = cancelled.reason == "stopped"
                 with self.lock:
-                    self.events[run_id].append(TraceRow(
-                        atS=0.0,
-                        action="Run stopped" if stopped else "Run deadline exceeded",
-                        returned="stopped by user" if stopped
-                        else f"exceeded {run_deadline_seconds(request.path, request.budget):.0f}s",
-                    ))
+                    self.events[run_id].append(
+                        TraceRow(
+                            atS=0.0,
+                            action="Run stopped" if stopped else "Run deadline exceeded",
+                            returned="stopped by user"
+                            if stopped
+                            else f"exceeded {run_deadline_seconds(request.path, request.budget):.0f}s",
+                        )
+                    )
                 self._finalize_terminal(
-                    request, question, run_id,
+                    request,
+                    question,
+                    run_id,
                     status="stopped" if stopped else "incomplete",
                     reason=None if stopped else "deadline_exceeded",
                     message="Run stopped." if stopped else "Run exceeded its time limit.",
@@ -336,12 +402,20 @@ class RunRuntime:
                         TraceRow(atS=0.0, action="Run incomplete", returned="internal_error")
                     )
                 self._finalize_terminal(
-                    request, question, run_id, status="incomplete", reason="internal_error",
+                    request,
+                    question,
+                    run_id,
+                    status="incomplete",
+                    reason="internal_error",
                     message=f"Run failed unexpectedly: {type(exc).__name__}",
                 )
             finally:
                 if (self.artifacts.root / run_id / "run.json").exists():
                     self._pending_path(run_id).unlink(missing_ok=True)
+                if held_reservation is not None:
+                    for slot in held_reservation:
+                        slot.release()
+                    held_reservation = None
                 with self.lock:
                     self.running.discard(run_id)
                     self.stop_requested.discard(run_id)
@@ -352,11 +426,15 @@ class RunRuntime:
     def _execute(self, request: RunRequest, question: str, run_id: str, sink, acquire) -> dict:
         """Run one request, holding model slots only while research runs."""
         if request.path != "agentic" or self.custom_runner:
-            runner = self.runner_factory(sink) if self.custom_runner else self._runner(
-                sink, request.path == "baseline-enhanced"
+            runner = (
+                self.runner_factory(sink)
+                if self.custom_runner
+                else self._runner(sink, request.path == "baseline-enhanced")
             )
             kwargs = {"concept": request.concept} if request.concept else {}
-            held = acquire(MODEL_SLOT)
+            held = acquire(
+                *((PUBLIC_MODEL_SLOT, MODEL_SLOT) if request.origin == "public" else (MODEL_SLOT,))
+            )
             try:
                 return runner.run(question, request.budget, run_id, **kwargs)
             finally:
@@ -365,27 +443,41 @@ class RunRuntime:
 
         # Granite handles the MCP tool loop; the configured heavy model handles
         # concept interpretation, structured extraction, and refinement.
-        agent_timeout = float(os.getenv(
-            "BUDGET_AGENTIC_SLOW_SECONDS" if request.budget == "slow" else "BUDGET_AGENTIC_FAST_SECONDS",
-            "120" if request.budget == "slow" else "45",
-        ))
+        agent_timeout = float(
+            os.getenv(
+                "BUDGET_AGENTIC_SLOW_SECONDS"
+                if request.budget == "slow"
+                else "BUDGET_AGENTIC_FAST_SECONDS",
+                "120" if request.budget == "slow" else "45",
+            )
+        )
         agent_model = OpenAICompatibleModel(
-            model=os.getenv("HARNESS_MODEL_AGENT", "lite-model"), timeout_s=agent_timeout,
+            model=os.getenv("HARNESS_MODEL_AGENT", "lite-model"),
+            timeout_s=agent_timeout,
         )
         high_model = OpenAICompatibleModel(
-            model=os.getenv("HARNESS_MODEL_HIGH", "heavy-model"), timeout_s=agent_timeout,
+            model=os.getenv("HARNESS_MODEL_HIGH", "heavy-model"),
+            timeout_s=agent_timeout,
         )
         baseline_model = os.getenv("HARNESS_MODEL_SMALL", "heavy-model")
         refinement_model = OpenAICompatibleModel(
-            model=os.getenv("HARNESS_MODEL_JUDGE", "heavy-model"), timeout_s=agent_timeout,
+            model=os.getenv("HARNESS_MODEL_JUDGE", "heavy-model"),
+            timeout_s=agent_timeout,
         )
         baseline = self._runner(
-            sink, True, model_name=baseline_model, timeout_s=agent_timeout,
-            refinement_model=refinement_model, schema_model=high_model,
+            sink,
+            True,
+            model_name=baseline_model,
+            timeout_s=agent_timeout,
+            refinement_model=refinement_model,
+            schema_model=high_model,
             max_passages=int(os.getenv("HARNESS_AGENTIC_MAX_PASSAGES", "12")),
         )
         runner = AgenticResearch(
-            baseline, sink, agent_model=agent_model, high_model=high_model,
+            baseline,
+            sink,
+            agent_model=agent_model,
+            high_model=high_model,
         )
         concept = request.concept
         proposal: dict | None = None
@@ -398,9 +490,14 @@ class RunRuntime:
             # Evaluation runs are unattended: research the agent's top-ranked
             # grounded concept and record that it was selected automatically.
             concept = proposal["run"].concepts[0].model_copy(update={"auto_selected": True})
-            sink(TraceRow(atS=0.0, action="Concept auto-selected for evaluation",
-                          returned=concept.label))
-        held = acquire(MODEL_SLOT)
+            sink(
+                TraceRow(
+                    atS=0.0, action="Concept auto-selected for evaluation", returned=concept.label
+                )
+            )
+        held = acquire(
+            *((PUBLIC_MODEL_SLOT, MODEL_SLOT) if request.origin == "public" else (MODEL_SLOT,))
+        )
         try:
             result = runner.run(question, request.budget, run_id, concept=concept)
         finally:
@@ -440,31 +537,55 @@ class RunRuntime:
                 LOGGER.warning("Unreadable pending marker for %s", run_id)
                 continue
             self._finalize_terminal(
-                request, request.question.strip(), run_id, status="incomplete",
-                reason="interrupted", message="The API stopped while this run was active.",
+                request,
+                request.question.strip(),
+                run_id,
+                status="incomplete",
+                reason="interrupted",
+                message="The API stopped while this run was active.",
             )
             if (marker.parent / "run.json").exists():
                 marker.unlink(missing_ok=True)
             LOGGER.warning("Marked interrupted run %s as incomplete", run_id)
 
     def _finalize_terminal(
-        self, request: RunRequest, question: str, run_id: str, *,
-        status: str, reason: str | None, message: str,
+        self,
+        request: RunRequest,
+        question: str,
+        run_id: str,
+        *,
+        status: str,
+        reason: str | None,
+        message: str,
     ) -> None:
         with self.lock:
             trace = list(self.events.get(run_id, []))
         run = Run(
-            id=run_id, startedAt=datetime.now(UTC), durationS=0.0, question=question,
-            path=request.path, budget=request.budget, status=status, reason=reason,
-            trace=trace, concept=request.concept, parentRunId=request.parent_run_id,
-            evaluationMode=request.evaluation_mode, snapshot=request.snapshot,
+            id=run_id,
+            startedAt=datetime.now(UTC),
+            durationS=0.0,
+            question=question,
+            path=request.path,
+            budget=request.budget,
+            status=status,
+            reason=reason,
+            trace=trace,
+            concept=request.concept,
+            parentRunId=request.parent_run_id,
+            evaluationMode=request.evaluation_mode,
+            snapshot=request.snapshot,
             artifacts=list(required_artifacts(request.path)),
         )
         try:
-            self.artifacts.finalize(run, {
-                "answer.md": message.encode(),
-                "trace.json": json.dumps([item.model_dump(by_alias=True) for item in trace]).encode(),
-            })
+            self.artifacts.finalize(
+                run,
+                {
+                    "answer.md": message.encode(),
+                    "trace.json": json.dumps(
+                        [item.model_dump(by_alias=True) for item in trace]
+                    ).encode(),
+                },
+            )
         except Exception:
             LOGGER.exception("Could not persist terminal state for run %s", run_id)
 
@@ -513,24 +634,38 @@ class RunRuntime:
             if existing is None:
                 reading = run.readings[index]
                 concept = (
-                    run.concepts[index] if index < len(run.concepts)
-                    else ConceptChoice(label=reading.label, gloss=reading.gloss,
-                                       classes=reading.classes)
+                    run.concepts[index]
+                    if index < len(run.concepts)
+                    else ConceptChoice(
+                        label=reading.label, gloss=reading.gloss, classes=reading.classes
+                    )
                 )
                 # The question is kept verbatim; the concept is passed as
                 # structured input so routing, matching and gold lookup all
                 # see the user's actual question.
-                child_id = self.start(RunRequest(
-                    question=run.question, path=run.path, budget=run.budget,
-                    concept=concept, parent_run_id=run.id,
-                    evaluation_mode=run.evaluation_mode, snapshot=run.snapshot,
-                ))
+                child_id = self.start(
+                    RunRequest(
+                        question=run.question,
+                        path=run.path,
+                        budget=run.budget,
+                        concept=concept,
+                        parent_run_id=run.id,
+                        evaluation_mode=run.evaluation_mode,
+                        snapshot=run.snapshot,
+                    )
+                )
                 existing = self.picks[run_id] = (child_id, index, concept)
         child_id, picked, concept = existing
-        return run.model_copy(update={
-            "id": child_id, "started_at": datetime.now(UTC), "duration_s": 0.0,
-            "chosen_reading": picked, "concept": concept, "parent_run_id": run.id,
-        })
+        return run.model_copy(
+            update={
+                "id": child_id,
+                "started_at": datetime.now(UTC),
+                "duration_s": 0.0,
+                "chosen_reading": picked,
+                "concept": concept,
+                "parent_run_id": run.id,
+            }
+        )
 
     def stop(self, run_id: str) -> Run | None:
         with self.lock:
@@ -590,9 +725,7 @@ runtime = RunRuntime(
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     # Telemetry must not delay API availability when the remote collector is
     # slow or temporarily unavailable, including during client initialization.
-    asyncio.create_task(
-        asyncio.to_thread(lambda: init_observability() and hello_span())
-    )
+    asyncio.create_task(asyncio.to_thread(lambda: init_observability() and hello_span()))
     yield
 
 
@@ -605,12 +738,89 @@ app.add_middleware(
 )
 
 
-@app.post("/runs", status_code=202)
-def start_run(request: RunRequest) -> dict[str, str]:
+def _require_loopback(request: Request) -> None:
+    import ipaddress
+
+    peer = request.client.host if request.client else ""
     try:
-        return {"id": runtime.start(request)}
+        if not ipaddress.ip_address(peer).is_loopback:
+            raise HTTPException(403, "forbidden")
     except ValueError as exc:
-        raise HTTPException(422, str(exc)) from exc
+        raise HTTPException(403, "forbidden") from exc
+
+
+def _release_expired_public_reservations() -> None:
+    now = monotonic()
+    with PUBLIC_RESERVATIONS_LOCK:
+        expired = [
+            token
+            for token, (created, _) in PUBLIC_RESERVATIONS.items()
+            if now - created > PUBLIC_RESERVATION_TTL_S
+        ]
+        for token in expired:
+            _, slots = PUBLIC_RESERVATIONS.pop(token)
+            for slot in slots:
+                slot.release()
+
+
+def _consume_public_reservation(token: str | None):
+    _release_expired_public_reservations()
+    if not token:
+        return None
+    with PUBLIC_RESERVATIONS_LOCK:
+        reservation = PUBLIC_RESERVATIONS.pop(token, None)
+    return reservation[1] if reservation else None
+
+
+@app.get("/internal/public/capacity")
+def public_capacity(request: Request) -> dict[str, bool]:
+    """Loopback-only gateway seam; reports no private queue or model metrics."""
+    _require_loopback(request)
+    _release_expired_public_reservations()
+    public_ok = PUBLIC_MODEL_SLOT.acquire(blocking=False)
+    model_ok = MODEL_SLOT.acquire(blocking=False) if public_ok else False
+    if model_ok:
+        MODEL_SLOT.release()
+    if public_ok:
+        PUBLIC_MODEL_SLOT.release()
+    return {"available": True, "accepting": public_ok and model_ok}
+
+
+@app.post("/internal/public/reservations")
+def reserve_public_capacity(request: Request) -> dict[str, str]:
+    """Atomically reserve public and total slots before public work is started."""
+    _require_loopback(request)
+    _release_expired_public_reservations()
+    if not PUBLIC_MODEL_SLOT.acquire(blocking=False):
+        raise HTTPException(503, "service busy")
+    if not MODEL_SLOT.acquire(blocking=False):
+        PUBLIC_MODEL_SLOT.release()
+        raise HTTPException(503, "service busy")
+    token = secrets.token_urlsafe(24)
+    with PUBLIC_RESERVATIONS_LOCK:
+        PUBLIC_RESERVATIONS[token] = (monotonic(), (PUBLIC_MODEL_SLOT, MODEL_SLOT))
+    return {"reservation": token}
+
+
+@app.post("/runs", status_code=202)
+def start_run(
+    request: RunRequest,
+    x_public_reservation: str | None = Header(default=None),
+) -> dict[str, str]:
+    reserved_slots = None
+    if request.origin == "public":
+        reserved_slots = _consume_public_reservation(x_public_reservation)
+        if reserved_slots is None:
+            raise HTTPException(503, "service busy")
+    try:
+        return {"id": runtime.start(request, reserved_slots=reserved_slots)}
+    except Exception as exc:
+        if reserved_slots:
+            for slot in reserved_slots:
+                slot.release()
+        if isinstance(exc, ValueError):
+            raise HTTPException(422, str(exc)) from exc
+        raise
 
 
 @app.get("/runs", response_model=list[Run], response_model_by_alias=True)
@@ -739,26 +949,40 @@ def benchmark(category: str | None = None) -> dict:
     for candidate in candidates:
         path_rows = []
         for path in ("baseline", "baseline-enhanced", "agentic"):
-            matching = [run for run in runs if run.question == candidate.get("question") and run.path == path]
+            matching = [
+                run
+                for run in runs
+                if run.question == candidate.get("question") and run.path == path
+            ]
             if candidate.get("snapshot") is not None:
-                matching = [run for run in matching if run.snapshot and
-                            run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]]
+                matching = [
+                    run
+                    for run in matching
+                    if run.snapshot
+                    and run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]
+                ]
             evaluations = []
             for run in matching:
                 if run.status != "answered":
                     continue
                 try:
-                    evaluations.append(evaluate_run(
-                        run, candidate.get("gold_triples", []), candidate.get("gold_claims")
-                    ))
+                    evaluations.append(
+                        evaluate_run(
+                            run, candidate.get("gold_triples", []), candidate.get("gold_claims")
+                        )
+                    )
                 except (ValueError, TypeError, KeyError) as exc:
-                    LOGGER.warning("Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc)
+                    LOGGER.warning(
+                        "Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc
+                    )
             eligible = [result for result in evaluations if result["eligible_for_path_score"]]
             scores = [result["chosen"] for result in eligible if result["chosen"] is not None]
             claim_scores = [
                 reading["claim_score"]["claim"]
-                for result in eligible for reading in result["readings"]
-                if reading["index"] == result["chosen_reading"] and reading["claim_score"] is not None
+                for result in eligible
+                for reading in result["readings"]
+                if reading["index"] == result["chosen_reading"]
+                and reading["claim_score"] is not None
             ]
             costs = [_run_cost(run) for run in matching]
             if not matching:
@@ -795,7 +1019,10 @@ def benchmark(category: str | None = None) -> dict:
                 "paths": path_rows,
             }
         )
-    return {"questions": question_rows, "categories": sorted({row["category"] for row in question_rows})}
+    return {
+        "questions": question_rows,
+        "categories": sorted({row["category"] for row in question_rows}),
+    }
 
 
 @app.get("/benchmark/validate")
@@ -814,19 +1041,32 @@ def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
     if not 1 <= request.repetitions <= 20:
         raise HTTPException(422, "repetitions must be between 1 and 20")
     snapshot = request.snapshot or EvaluationSnapshot(
-        corpusSnapshotId=os.getenv("CORPUS_SNAPSHOT_ID", os.getenv("CORPUS_FINGERPRINT", "unknown")),
+        corpusSnapshotId=os.getenv(
+            "CORPUS_SNAPSHOT_ID", os.getenv("CORPUS_FINGERPRINT", "unknown")
+        ),
         ontologyVersion=os.getenv("ONTOLOGY_VERSION", "unknown"),
         claimSchemaVersion="v3",
         retrievalIndexVersion=os.getenv("RETRIEVAL_INDEX_VERSION", "unknown"),
     )
     ids = [
-        runtime.start(RunRequest(question=request.question, path=request.path, budget=request.budget,
-                                 evaluation_mode=True, snapshot=snapshot,
-                                 concept=request.concept if request.path == "agentic" else None))
+        runtime.start(
+            RunRequest(
+                question=request.question,
+                path=request.path,
+                budget=request.budget,
+                evaluation_mode=True,
+                snapshot=snapshot,
+                concept=request.concept if request.path == "agentic" else None,
+            )
+        )
         for _ in range(request.repetitions)
     ]
-    return {"ids": ids, "repetitions": request.repetitions, "evaluation_mode": True,
-            "snapshot": snapshot.model_dump(by_alias=True)}
+    return {
+        "ids": ids,
+        "repetitions": request.repetitions,
+        "evaluation_mode": True,
+        "snapshot": snapshot.model_dump(by_alias=True),
+    }
 
 
 @app.put("/datasets/candidates/{candidate_id}")
@@ -906,12 +1146,23 @@ def questions() -> dict[str, list[dict]]:
             continue
         for row in rows if isinstance(rows, list) else rows.get("questions", []):
             if isinstance(row, dict):
-                add(row.get("question"), id=row.get("id"), category=row.get("category", "curated"),
-                    type=row.get("type"), theme=row.get("theme"),
-                    expected=row.get("expected"), source=path.stem)
+                add(
+                    row.get("question"),
+                    id=row.get("id"),
+                    category=row.get("category", "curated"),
+                    type=row.get("type"),
+                    theme=row.get("theme"),
+                    expected=row.get("expected"),
+                    source=path.stem,
+                )
     for row in runtime.gold.list():
-        add(row.get("question"), id=row.get("id"), category="gold", type=row.get("status"),
-            source="gold")
+        add(
+            row.get("question"),
+            id=row.get("id"),
+            category="gold",
+            type=row.get("status"),
+            source="gold",
+        )
     for run in runtime.artifacts.list_runs()[:50]:
         if run.path in {"agentic", "baseline", "baseline-enhanced"} and not run.evaluation_mode:
             add(run.question, id=run.id, category="recent", type=run.status, source="runs")

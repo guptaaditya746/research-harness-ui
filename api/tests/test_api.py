@@ -16,7 +16,11 @@ def test_fixture_runs_are_contract_valid() -> None:
     fixtures = {run.id for run in main.fixture_runs()}
     fixture_rows = [run for run in runs if run["id"] in fixtures]
     assert len(fixture_rows) == len(fixtures) == 4
-    assert {run.status for run in main.fixture_runs()} == {"answered", "awaiting_reading", "incomplete"}
+    assert {run.status for run in main.fixture_runs()} == {
+        "answered",
+        "awaiting_reading",
+        "incomplete",
+    }
     assert client.get("/runs/r-0412").json()["chosenReading"] == 0
     assert client.get("/runs/missing").status_code == 404
 
@@ -31,18 +35,31 @@ def test_artifact_preview_is_accessible() -> None:
 def test_reading_selection_starts_a_new_criterion_run(tmp_path: Path, monkeypatch) -> None:
     test_runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
     option = Reading(
-        label="Most distinct papers", gloss="Count distinct works.",
-        classes=[], axioms=[], sparql="", answer="", triples=[], metrics=Metrics(),
+        label="Most distinct papers",
+        gloss="Count distinct works.",
+        classes=[],
+        axioms=[],
+        sparql="",
+        answer="",
+        triples=[],
+        metrics=Metrics(),
     )
     original = Run(
-        id="r-ambiguous", startedAt=datetime.now(UTC), durationS=0.0,
-        question="Who is the best author in the corpus?", path="baseline-enhanced",
-        budget="slow", status="awaiting_reading", readings=[option],
+        id="r-ambiguous",
+        startedAt=datetime.now(UTC),
+        durationS=0.0,
+        question="Who is the best author in the corpus?",
+        path="baseline-enhanced",
+        budget="slow",
+        status="awaiting_reading",
+        readings=[option],
         artifacts=list(required_artifacts("baseline-enhanced")),
     )
     test_runtime.artifacts.finalize(original, {})
     submitted = []
-    monkeypatch.setattr(test_runtime, "start", lambda request: submitted.append(request) or "r-selected")
+    monkeypatch.setattr(
+        test_runtime, "start", lambda request: submitted.append(request) or "r-selected"
+    )
 
     selected = test_runtime.pick_reading("r-ambiguous", 0)
 
@@ -61,7 +78,8 @@ def test_reading_selection_starts_a_new_criterion_run(tmp_path: Path, monkeypatc
 
 
 def test_agentic_routes_mcp_to_lite_and_quality_roles_to_heavy(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     monkeypatch.setenv("HARNESS_MODEL_AGENT", "lite-model")
     monkeypatch.setenv("HARNESS_MODEL_SMALL", "heavy-model")
@@ -95,7 +113,10 @@ def test_agentic_routes_mcp_to_lite_and_quality_roles_to_heavy(
 
     result = test_runtime._execute(
         main.RunRequest(question="Q?", path="agentic", budget="fast"),
-        "Q?", "r-routing", lambda _: None, lambda _: [],
+        "Q?",
+        "r-routing",
+        lambda _: None,
+        lambda _: [],
     )
 
     assert result["marker"] == "proposal"
@@ -297,9 +318,16 @@ def test_run_deadline_ends_run_as_incomplete(tmp_path: Path, monkeypatch) -> Non
 
 def test_corrupt_run_file_does_not_hide_other_runs(tmp_path: Path) -> None:
     runtime = RunRuntime(tmp_path / "artifacts", tmp_path / "datasets")
-    good = Run(id="r-good", startedAt=datetime.now(UTC), durationS=0.0, question="Q?",
-               path="baseline", budget="fast", status="stopped",
-               artifacts=list(required_artifacts("baseline")))
+    good = Run(
+        id="r-good",
+        startedAt=datetime.now(UTC),
+        durationS=0.0,
+        question="Q?",
+        path="baseline",
+        budget="fast",
+        status="stopped",
+        artifacts=list(required_artifacts("baseline")),
+    )
     runtime.artifacts.finalize(good, {})
     bad = tmp_path / "artifacts" / "r-bad"
     bad.mkdir(parents=True)
@@ -358,10 +386,16 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
         '"question": "Which paper introduced Video Prediction Policy?"}]'
     )
     test_runtime = RunRuntime(tmp_path / "artifacts", datasets)
-    test_runtime.gold._write([
-        {"id": "gold-1", "question": "Which paper introduced  Video Prediction Policy?", "status": "draft"},
-        {"id": "gold-2", "question": "Who wrote FOCUS?", "status": "approved"},
-    ])
+    test_runtime.gold._write(
+        [
+            {
+                "id": "gold-1",
+                "question": "Which paper introduced  Video Prediction Policy?",
+                "status": "draft",
+            },
+            {"id": "gold-2", "question": "Who wrote FOCUS?", "status": "approved"},
+        ]
+    )
     monkeypatch.setenv("DATASETS_ROOT", str(datasets))
     monkeypatch.setattr(main, "runtime", test_runtime)
     body = TestClient(app).get("/questions").json()["questions"]
@@ -376,7 +410,9 @@ def test_default_question_library_includes_existing_and_corpus_ten_sets(monkeypa
     monkeypatch.delenv("DATASETS_ROOT", raising=False)
     paths = main._question_sets()
     assert [path.name for path in paths] == [
-        "question_matrix_20.json", "question_library_2025.json", "corpus_10.json",
+        "question_matrix_20.json",
+        "question_library_2025.json",
+        "corpus_10.json",
     ]
     nlp_rows = json.loads(paths[1].read_text())
     assert len(nlp_rows) == 30
@@ -388,3 +424,43 @@ def test_default_question_library_includes_existing_and_corpus_ten_sets(monkeypa
     assert len(corpus_rows) == 10
     assert [row["id"] for row in corpus_rows] == [f"q{number:02d}" for number in range(1, 11)]
     assert all(row["expected"] == "answer" for row in corpus_rows)
+
+
+def test_public_capacity_reservation_is_loopback_only_and_one_use(tmp_path: Path, monkeypatch) -> None:
+    remote = TestClient(app, client=("198.51.100.8", 1234))
+    assert remote.post("/internal/public/reservations").status_code == 403
+
+    runtime = RunRuntime(
+        tmp_path / "artifacts",
+        tmp_path / "datasets",
+        runner_factory=lambda sink: FakeRunner(sink),
+    )
+    monkeypatch.setattr(main, "runtime", runtime)
+    client = TestClient(app, client=("127.0.0.1", 1234))
+    response = client.post("/internal/public/reservations")
+    assert response.status_code == 200
+    ticket = response.json()["reservation"]
+    assert client.post("/internal/public/reservations").status_code == 503
+
+    started = client.post(
+        "/runs",
+        json={
+            "question": "A public research question",
+            "path": "baseline",
+            "budget": "fast",
+            "origin": "public",
+            "deadline_seconds": 90,
+        },
+        headers={"X-Public-Reservation": ticket},
+    )
+    assert started.status_code == 202
+    run_id = started.json()["id"]
+    assert _wait_terminal(runtime, run_id).status == "answered"
+    assert client.post(
+        "/runs",
+        json={"question": "Another public question", "path": "baseline", "budget": "fast", "origin": "public"},
+        headers={"X-Public-Reservation": ticket},
+    ).status_code == 503
+
+    assert main.PUBLIC_MODEL_SLOT.acquire(blocking=False)
+    main.PUBLIC_MODEL_SLOT.release()

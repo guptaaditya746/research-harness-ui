@@ -27,6 +27,7 @@ members = [
     "harness-ledger",
     "harness-mcp-corpus",
     "harness-observability",
+    "harness-public-gateway",
     "harness-runs",
     "harness-schema",
     "harness-semantic",
@@ -1207,6 +1208,25 @@ requires-dist = [
     { name = "langfuse", specifier = ">=4,<5" },
     { name = "opentelemetry-api", specifier = ">=1.28" },
     { name = "structlog", specifier = ">=24.4" },
+]
+
+[[package]]
+name = "harness-public-gateway"
+version = "0.1.0"
+source = { virtual = "packages/public_gateway" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "uvicorn" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "pydantic", specifier = ">=2" },
+    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]

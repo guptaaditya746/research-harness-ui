@@ -81,3 +81,9 @@
 .progress { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px 24px; margin: 0 0 28px; padding: 14px 16px; background: var(--color-surface); border-radius: 2px; }
 .progress dt { margin: 0 0 2px; }
 .progress dd { margin: 0; font-size: 14px; overflow-wrap: anywhere; }
+
+.public-shell { width: min(920px, calc(100vw - 40px)); margin: 48px auto 96px; display: grid; gap: 24px; }
+.public-shell header { margin-bottom: 8px; }
+.public-shell textarea { width: 100%; min-height: 120px; margin: 14px 0; }
+.public-paths { display: flex; flex-wrap: wrap; gap: 14px 24px; margin: 12px 0 18px; }
+.public-shell pre { white-space: pre-wrap; overflow-wrap: anywhere; }
