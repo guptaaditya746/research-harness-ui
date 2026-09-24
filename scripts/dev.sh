@@ -15,7 +15,12 @@ trap cleanup EXIT INT TERM
 MCP_CORPUS_TRANSPORT=streamable-http uv run --python 3.12 python -m harness_mcp_corpus.server &
 mcp_pid=$!
 
-uv run --python 3.12 uvicorn main:app --app-dir api --host 127.0.0.1 --port 8000 &
+reload_args=()
+if [[ "${HARNESS_DEV_RELOAD:-1}" != 0 ]]; then
+  reload_args=(--reload --reload-dir api --reload-dir packages --reload-include .env)
+fi
+uv run --python 3.12 uvicorn main:app --app-dir api --host 127.0.0.1 --port 8000 \
+  "${reload_args[@]}" --env-file .env &
 api_pid=$!
 
 (cd web && exec corepack pnpm dev) &

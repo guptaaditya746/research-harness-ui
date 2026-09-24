@@ -84,9 +84,9 @@ def discover_window(model: Any) -> int:
 
 
 GROUNDED_PREFIX = (
-    "Preliminary corpus result (verify or challenge with MCP). "
+    "Research context (gather evidence with MCP before answer verification). "
     "Source IDs are provenance handles, not paper IDs. When a tool needs paper_id, "
-    "use the corresponding local paper_id from papers. For corpus aggregation, "
+    "use the local paper_id from a search result or the papers list. For corpus aggregation, "
     "retrieve every indexed paper rather than one default page: "
 )
 SHRINKABLE = ("preliminary_claims", "preliminary_triples", "papers")

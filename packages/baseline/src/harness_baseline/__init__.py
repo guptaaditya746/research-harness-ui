@@ -134,10 +134,13 @@ class Baseline20:
         refine: bool = False,
         refinement_model: Any | None = None,
         claim_lookup: Callable[[str], list[ClaimSubgraph]] | None = None,
-        relation_proposer: Callable[[str, str, str | None], dict] | None = None,
+        relation_proposer: Callable[[str, str, str | None, str, str], dict] | None = None,
         seed_passage_ids: list[str] | None = None,
         planner: QueryPlanner | None = None,
+        max_passages: int | None = None,
     ) -> None:
+        if max_passages is not None and max_passages < 1:
+            raise ValueError("max_passages must be positive")
         self.corpus = corpus
         self.planner = planner
         self.extraction = extraction
@@ -150,6 +153,7 @@ class Baseline20:
         self.claim_lookup = claim_lookup
         self.relation_proposer = relation_proposer
         self.seed_passage_ids = seed_passage_ids or []
+        self.max_passages = max_passages
         self.started = 0.0
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
@@ -295,6 +299,49 @@ class Baseline20:
         ]
         if not self.enhanced:
             rows = rows[: self.retrieve_k]
+        # Agent-selected passages have already been observed through MCP.
+        # Keep them even when lexical ranking of the original question gives
+        # them a low score; otherwise the early MCP search cannot help the
+        # extraction and final answer stages.
+        selected_ids = {str(row["passage_id"]) for row in rows}
+        for source_id in self.seed_passage_ids:
+            passage = found.get(source_id)
+            if passage is not None and source_id not in selected_ids:
+                rows.append(passage)
+                selected_ids.add(source_id)
+        excluded_for_budget = 0
+        if self.max_passages is not None and len(rows) > self.max_passages:
+            before_cap = len(rows)
+            by_id = {str(row["passage_id"]): row for row in rows}
+            selected: list[dict[str, Any]] = []
+            used: set[str] = set()
+            for source_id in self.seed_passage_ids:
+                if source_id in by_id and source_id not in used and len(selected) < self.max_passages:
+                    selected.append(by_id[source_id])
+                    used.add(source_id)
+            represented = {str(row["paper_id"]) for row in selected}
+            for row in rows:
+                source_id = str(row["passage_id"])
+                paper_id = str(row["paper_id"])
+                if len(selected) >= self.max_passages:
+                    break
+                if source_id not in used and paper_id not in represented:
+                    selected.append(row)
+                    used.add(source_id)
+                    represented.add(paper_id)
+            for row in rows:
+                source_id = str(row["passage_id"])
+                if len(selected) >= self.max_passages:
+                    break
+                if source_id not in used:
+                    selected.append(row)
+                    used.add(source_id)
+            rows = selected
+            excluded_for_budget = before_cap - len(rows)
+            self._emit(
+                "Bounding extraction scope",
+                f"{len(rows)} passages selected for this run; {excluded_for_budget} lower-priority passages deferred",
+            )
         if not rows:
             raise NoEvidenceFound("No evidence was found after the configured full-text search.", {
                 "coverage_complete": False, "queries": len(queries), "passages_inspected": len(ranked),
@@ -312,6 +359,8 @@ class Baseline20:
             "reused_claim_ids": [claim.id for claim in reused_claims],
             "agent_seed_passage_ids": self.seed_passage_ids,
             "candidates": len(found), "selected": len(rows),
+            "max_passages": self.max_passages,
+            "excluded_for_budget": excluded_for_budget,
             "relative_score_threshold": relative_threshold,
             "ranking": {
                 "query": focus, "candidate_ids": list(found),
@@ -322,7 +371,26 @@ class Baseline20:
 
     def _infer_schema(self, state: BaselineState) -> dict[str, Any]:
         self.stage = "schema inference"
+        seed_properties = set(self.extraction.property_names)
         inferred = self.extraction.infer_schema(self._research_question(state), state["passages"])
+        for name in inferred.properties:
+            if name in seed_properties or self.relation_proposer is None:
+                continue
+            predicate = self.extraction.property_names[name]
+            graph = self.extraction.schema.graph
+            domain = graph.value(predicate, RDFS.domain)
+            range_ = graph.value(predicate, RDFS.range)
+            definition = str(graph.value(predicate, RDFS.comment) or name)
+            range_name = (
+                f"xsd:{str(range_).rsplit('#', 1)[-1]}"
+                if range_ is not None and str(range_).startswith(str(XSD))
+                else str(range_).rsplit("#", 1)[-1] if range_ is not None else "xsd:string"
+            )
+            self.relation_proposer(
+                name, definition, self.current_run_id,
+                str(domain).rsplit("#", 1)[-1] if domain is not None else "Paper",
+                range_name,
+            )
         self._emit(
             "Inferring schema",
             f"{len(inferred.classes)} classes · {len(inferred.properties)} properties",
@@ -338,12 +406,18 @@ class Baseline20:
             # Small evidence batches keep the structured response focused and
             # avoid a single long generation blocking the whole run.
             batch_size = 2
+            batch_count = (len(state["passages"]) + batch_size - 1) // batch_size
             for start in range(0, len(state["passages"]), max(1, batch_size)):
+                batch_no = start // batch_size + 1
+                self._emit(
+                    "Extracting passages",
+                    f"batch {batch_no}/{batch_count} · {min(batch_size, len(state['passages']) - start)} passages",
+                )
                 extraction, batch_reports = self.extraction.extract_edc(
                     self._research_question(state), state["inferred"], state["passages"][start : start + batch_size]
                 )
                 extracted.extend(extraction.triples)
-                reports.append({"batch": start // max(1, batch_size) + 1, "passages": len(state["passages"][start : start + batch_size]), "edc": batch_reports})
+                reports.append({"batch": batch_no, "passages": len(state["passages"][start : start + batch_size]), "edc": batch_reports})
         elif self.enhanced:
             extracted, reports = self.extraction.extract_batches(
                 self._research_question(state), state["inferred"], state["passages"]
@@ -398,7 +472,9 @@ class Baseline20:
                     name, definition = replacement
                     self.extraction.register_local_relation(name, definition)
                     if self.relation_proposer:
-                        self.relation_proposer(name, definition, self.current_run_id)
+                        self.relation_proposer(
+                            name, definition, self.current_run_id, "Paper", "xsd:string"
+                        )
                     added_relations.add(name)
                     item = item.model_copy(update={"predicate": name})
             normalized.append(item)

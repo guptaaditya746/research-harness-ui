@@ -110,6 +110,50 @@ def test_baseline_runs_four_nodes_and_writes_complete_artifact_set(tmp_path: Pat
     assert [(call["tool"], call["result_count"]) for call in calls] == [("facts", 1)]
 
 
+def test_proposed_schema_relation_reaches_graph_and_registry(tmp_path: Path) -> None:
+    question = "Which task does Video Prediction Policy address?"
+
+    class SchemaModel:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {
+                "label": "Addressed task", "gloss": "Paper and task",
+                "classes": ["Paper", "Task"], "properties": ["studiesTask"],
+                "class_definitions": [{"name": "Task", "definition": "A research task."}],
+                "property_definitions": [{"name": "studiesTask", "definition": "Paper studies a task.",
+                                          "domain": "Paper", "range": "Task"}],
+            }
+
+    class AnswerModel:
+        def __init__(self):
+            self.replies = iter([
+                {"triples": [{"subject": "p4", "predicate": "studiesTask",
+                              "object": "robot learning", "source_id": "p4-abstract",
+                              "evidence": "for robot learning"}]},
+                {"sparql": "PREFIX hrn: <https://harness.local/schema#>\n"
+                           "SELECT ?paper ?task WHERE { ?paper hrn:studiesTask ?task . }",
+                 "answer": "Video Prediction Policy addresses robot learning [p4-abstract].",
+                 "cited_source_ids": ["p4-abstract"]},
+            ])
+
+        def complete_json(self, system: str, user: str) -> dict:
+            return next(self.replies)
+
+    proposed = []
+    runner = Baseline20(
+        corpus(tmp_path),
+        ExtractionEngine(AnswerModel(), hand_written_subschema(), schema_model=SchemaModel()),
+        planner=StubPlanner({question: plan("research")}),
+        relation_proposer=lambda *args: proposed.append(args),
+    )
+
+    result = runner.run(question, run_id="r-proposed-task")
+
+    assert result["run"].status == "answered"
+    assert result["run"].readings[0].triples[0].p == "studiesTask"
+    assert proposed == [("studiesTask", "Paper studies a task.", "r-proposed-task", "Paper", "Task")]
+    assert b"studiesTask" in result["artifacts"]["subschema.ttl"]
+
+
 def test_baseline_no_hits_is_a_completed_semantic_no_evidence_run(tmp_path: Path) -> None:
     runner = Baseline20(
         corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema())
@@ -120,6 +164,51 @@ def test_baseline_no_hits_is_a_completed_semantic_no_evidence_run(tmp_path: Path
     assert "No evidence was found" in (result["run"].reason or "")
     assert result["run"].search_coverage["coverage_complete"] is False
     assert set(result["artifacts"]) | {"run.json"} == set(required_artifacts("baseline"))
+
+
+def test_agent_seed_passage_survives_question_ranking(tmp_path: Path) -> None:
+    runner = Baseline20(
+        corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()),
+        enhanced=True, seed_passage_ids=["p4-abstract"],
+    )
+    state = runner._retrieve({
+        "question": "Unfindable zxqvterm", "plan": QueryPlan(operation="research"),
+        "paper_ids": [], "concept": None,
+    })
+
+    assert [passage["passage_id"] for passage in state["passages"]] == ["p4-abstract"]
+
+
+def test_agentic_passage_cap_keeps_agent_evidence_and_diverse_papers(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    for index in range(20):
+        paper_id = f"p{index + 10}"
+        paper = {"paper_id": paper_id, "title": f"Task paper {index}", "year": 2025}
+        passage = {
+            "passage_id": f"{paper_id}-abstract", "paper_id": paper_id,
+            "section_path": "Abstract", "para_idx": 0,
+            "text": f"NLP tasks and approaches occur in this paper; classification approach {index}.",
+        }
+        store.papers.append(paper)
+        store.by_paper[paper_id] = paper
+        store.passages.append(passage)
+        store.by_passage[passage["passage_id"]] = passage
+    runner = Baseline20(
+        store, ExtractionEngine(RecordedModel(), hand_written_subschema()),
+        enhanced=True, max_passages=6, seed_passage_ids=["p4-abstract"],
+    )
+    runner.started = __import__("time").monotonic()
+
+    state = runner._retrieve({
+        "question": "Which NLP tasks and approaches occur?",
+        "plan": QueryPlan(operation="research"), "paper_ids": [], "concept": None,
+    })
+
+    passages = state["passages"]
+    assert len(passages) == 6
+    assert passages[0]["passage_id"] == "p4-abstract"
+    assert len({row["paper_id"] for row in passages}) == 6
+    assert state["retrieval"]["selected"] == 6
 
 
 def test_enhanced_baseline_seeds_structural_facts_and_batches_extraction(tmp_path: Path) -> None:

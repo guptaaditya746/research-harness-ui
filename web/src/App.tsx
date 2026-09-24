@@ -8,11 +8,11 @@ type Scene = 'idle' | 'running' | 'readings' | 'agentic_result' | 'baseline_resu
 type TripleView = 'statements' | 'graph' | 'turtle';
 type GoldCandidate = { id: string; run_id: string; question: string; gold_triples: Triple[]; gold_claims?: ClaimSubgraph[]; notes: string; status: string };
 type PaperLabel = { paper_id: string; dblp_iri?: string | null; title: string };
-type LibraryQuestion = { question: string; id?: string | null; category: string; type?: string | null; expected?: string | null; source: string };
+type LibraryQuestion = { question: string; id?: string | null; category: string; type?: string | null; theme?: string | null; expected?: string | null; source: string };
 type RunPath = 'agentic' | 'baseline' | 'baseline-enhanced';
 type Aggregate = { mean: number | null; min: number | null; max: number | null };
-type BenchmarkPath = { path: string; completed: number; failed: number; precision: Aggregate; recall: Aggregate; f1: Aggregate; claim_precision: Aggregate; claim_recall: Aggregate; claim_f1: Aggregate; repetitions: string[] };
-type BenchmarkQuestion = { id: string; question: string; category: string; gold_version: string; paths: BenchmarkPath[] };
+type BenchmarkPath = { path: string; completed: number; failed: number; precision: Aggregate; recall: Aggregate; f1: Aggregate; claim_precision: Aggregate; claim_recall: Aggregate; claim_f1: Aggregate; model_calls?: number; tool_calls?: number; wall_clock_s?: number; repetitions: string[] };
+type BenchmarkQuestion = { id: string; question: string; category: string; theme?: string; difficulty?: number | null; expected_status?: string; gold_version: string; paths: BenchmarkPath[] };
 const screenRun: Record<string, string> = { readings: 'r-0413', agentic_result: 'r-0412', baseline_result: 'r-0411', failed: 'r-0410' };
 const api = '/api';
 
@@ -166,10 +166,22 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
 
 const categoryOrder = ['metadata', 'citation', 'aggregation', 'synthesis', 'ambiguity', 'gold', 'recent'];
 const categoryLabel: Record<string, string> = { metadata: 'Metadata', citation: 'Citations', aggregation: 'Aggregation', synthesis: 'Synthesis over full text', ambiguity: 'Ambiguous — agent interprets', gold: 'Gold candidates', recent: 'Recent runs' };
+const starterQuestions = [
+  { type: 'Themes', question: 'What research themes recur across this corpus, and how are they connected?' },
+  { type: 'Task trends', question: 'Which NLP tasks appear most often, and what kinds of approaches are used for them?' },
+  { type: 'Methods', question: 'How do papers in this corpus use retrieval and evidence to support their results?' },
+  { type: 'Benchmarks', question: 'Which datasets and benchmarks recur across the corpus, and what do they measure?' },
+  { type: 'Evaluation', question: 'How do these studies evaluate their systems: with automatic metrics, human judgments, or real-world tests?' },
+  { type: 'Language coverage', question: 'Which languages are represented in the corpus, and where are the clearest coverage gaps?' },
+  { type: 'Safety', question: 'What safety and reliability risks are studied across the corpus, and how are they tested?' },
+  { type: 'Limitations', question: 'What limitations or open problems recur across multiple papers?' },
+  { type: 'Tradeoffs', question: 'What tradeoffs between performance, robustness, and compute cost do the papers report?' },
+  { type: 'Citation connections', question: 'Which research areas are most connected in the corpus citation network, and what links them?' },
+];
 
 function QuestionLibrary({ items, filter, setFilter, onPick, onRun, onCompare }: { items: LibraryQuestion[]; filter: string; setFilter: (value: string) => void; onPick: (text: string) => void; onRun: (kind: RunPath, text: string) => void; onCompare: (text: string) => void }) {
   const needle = filter.trim().toLowerCase();
-  const visible = items.filter(item => !needle || item.question.toLowerCase().includes(needle) || (item.type || '').toLowerCase().includes(needle));
+  const visible = items.filter(item => !needle || item.question.toLowerCase().includes(needle) || (item.type || '').toLowerCase().includes(needle) || (item.theme || '').toLowerCase().includes(needle));
   const groups = [...new Set(visible.map(item => item.category))].sort((a, b) => (categoryOrder.indexOf(a) + 1 || 99) - (categoryOrder.indexOf(b) + 1 || 99));
   return <section id="question-library" className="library" aria-label="Question library">
     <input className="input library-filter" autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter questions" aria-label="Filter questions" />
@@ -177,7 +189,7 @@ function QuestionLibrary({ items, filter, setFilter, onPick, onRun, onCompare }:
     {groups.map(group => <div key={group} className="library-group"><div className="section-title">{categoryLabel[group] || group}</div>
       {visible.filter(item => item.category === group).map(item => <div key={`${item.source}-${item.id ?? item.question}`} className="library-row">
         <button className="text-button library-text" title="Put this question in the box to edit it" onClick={() => onPick(item.question)}>{item.question}</button>
-        <span className="library-meta muted micro">{item.type?.replaceAll('_', ' ')}</span>
+        <span className="library-meta muted micro">{item.theme || item.type?.replaceAll('_', ' ')}</span>
         <span className="library-run" aria-label={`Run: ${item.question}`}>
           <button className="text-button micro" onClick={() => onRun('baseline', item.question)}>Fast</button>
           <button className="text-button micro" onClick={() => onRun('baseline-enhanced', item.question)}>Adaptive</button>
@@ -216,11 +228,11 @@ export default function App() {
   const [library, setLibrary] = useState<LibraryQuestion[]>([]);
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [libraryFilter, setLibraryFilter] = useState('');
-  // Exactly one set of live streams belongs to the screen; older ones are closed.
-  const streams = useRef<EventSource[]>([]);
+  // Exactly one set of live streams and status probes belongs to the screen.
+  const streamDisposers = useRef<(() => void)[]>([]);
   const watched = useRef<string>('');
   const compareIds = useRef<string[]>([]);
-  const closeStreams = () => { streams.current.forEach(stream => stream.close()); streams.current = []; };
+  const closeStreams = () => { streamDisposers.current.forEach(dispose => dispose()); streamDisposers.current = []; };
   useEffect(() => closeStreams, []);
   const active = useMemo(() => runs.find(r => r.id === activeId), [runs, activeId]);
   const reading = active?.readings[pick] || active?.readings[0];
@@ -275,17 +287,50 @@ export default function App() {
   };
   const watch = (id: string, onDone: (run: Run) => void) => {
     const events = new EventSource(`${api}/runs/${id}/events`);
-    streams.current.push(events);
     let finished = false;
-    const finish = async () => {
-      if (finished) return; finished = true; events.close();
-      const run = await settle(id);
-      if (run) onDone(run);
-      else if (watched.current === id || watched.current === '*') { setNotice(`Lost contact with run ${id}. Check that the API is running, then open it from Runs.`); setScene('failed'); }
+    let disposed = false;
+    let probing = false;
+    let unreachableSince = 0;
+    let poller = 0;
+    const dispose = () => { disposed = true; events.close(); window.clearInterval(poller); };
+    streamDisposers.current.push(dispose);
+    const complete = (run: Run) => {
+      if (finished || disposed) return;
+      finished = true; dispose(); onDone(run);
     };
-    events.addEventListener('trace', event => { if (watched.current === id || watched.current === '*') { setLiveTrace(rows => [...rows, JSON.parse((event as MessageEvent).data)]); setLastRowAt(Date.now()); } });
-    events.addEventListener('done', finish);
-    events.onerror = () => { if (events.readyState === EventSource.CLOSED) finish(); };
+    const lost = () => {
+      if (finished || disposed) return;
+      finished = true; dispose();
+      if (watched.current === id || watched.current === '*') {
+        setNotice(`Lost contact with run ${id}. Check the API, then reopen it from Runs.`);
+        setScene('failed');
+      }
+    };
+    const probe = async () => {
+      if (finished || disposed || probing) return;
+      probing = true;
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => controller.abort(), 4000);
+      const response = await fetch(`${api}/runs/${id}`, { signal: controller.signal }).catch(() => null);
+      window.clearTimeout(timeout);
+      probing = false;
+      if (finished || disposed) return;
+      if (response?.ok) { complete(await response.json() as Run); return; }
+      // A pending run is 404 until persisted. Proxy errors mean the API is
+      // unavailable, so they must not reset the connection-loss timer.
+      if (response?.status === 404) { unreachableSince = 0; return; }
+      if (!unreachableSince) unreachableSince = Date.now();
+      if (Date.now() - unreachableSince >= 30_000) lost();
+    };
+    poller = window.setInterval(() => { void probe(); }, 5000);
+    const finish = async () => {
+      if (finished || disposed) return;
+      const run = await settle(id);
+      if (run) complete(run); else lost();
+    };
+    events.addEventListener('trace', event => { if (!disposed && (watched.current === id || watched.current === '*')) { setLiveTrace(rows => [...rows, JSON.parse((event as MessageEvent).data)]); setLastRowAt(Date.now()); } });
+    events.addEventListener('done', () => { void finish(); });
+    events.onerror = () => { void probe(); };
   };
   const follow = (id: string) => {
     watched.current = id;
@@ -359,10 +404,11 @@ export default function App() {
       </div></>}
       {scene === 'runs' && <><h2>Runs</h2><p className="muted" style={{ maxWidth: '56ch', marginBottom: 40 }}>Every run keeps its artifacts: the concept plans it considered, the reading it settled on, the subschema and query it ran, the triples and the passages behind them.</p>{runs.map(run => <details className="run-row" data-run-id={run.id} key={run.id}><summary><span className="muted micro">{when(run.startedAt)}</span><span style={{ flex: '1 1 240px', fontSize: 15.5 }}>{run.question}</span><span className="muted micro">{pathName(run.path)} · {run.budget} · {run.durationS} s</span></summary><div style={{ display: 'grid', gap: 10, marginTop: 14 }}><div>{run.status}{run.reason ? ` — ${run.reason}` : ''}</div><div><span className="muted">Reading&nbsp;&nbsp;</span>{run.concept?.label || run.readings[run.chosenReading ?? 0]?.label || 'No reading chosen'}</div><div style={{ display: 'flex', gap: '10px 22px', flexWrap: 'wrap' }}>{run.artifacts.map(name => <button key={name} className="text-button micro" style={{ color: openArtifact === `${run.id}/${name}` ? 'var(--color-text)' : undefined }} onClick={() => setOpenArtifact(openArtifact === `${run.id}/${name}` ? '' : `${run.id}/${name}`)}>{name}</button>)}</div>{openArtifact.startsWith(`${run.id}/`) && <pre className="code">{artifactBody}</pre>}<div><button className="text-button" style={{ fontSize: 13 }} onClick={() => openRun(run)}>Open run</button><span className="muted micro" style={{ marginLeft: 24 }}>{run.rating ? `Rated ${run.rating}` : 'Not rated'} · {run.id}</span></div></div></details>)}</>}
       {scene === 'gold' && <><h2>Gold candidates</h2><p className="muted">Review claim subgraphs and their provenance before approving a dataset row. Triples remain diagnostic. JSON is checked when you save.</p>{candidates.length === 0 && <p className="muted">No candidates yet. Rate a run, then promote it from the result sidebar.</p>}{candidates.map(candidate => { const claimsKey = `${candidate.id}:claims`; const triplesKey = `${candidate.id}:triples`; return <details className="run-row" key={candidate.id}><summary><span>{candidate.question}</span><span className="muted micro">{candidate.status}</span></summary><div className="muted micro">Gold claims</div><textarea className="input code" aria-label={`Claims for ${candidate.question}`} value={drafts[claimsKey] ?? JSON.stringify(candidate.gold_claims || [], null, 2)} onChange={event => { const value = event.target.value; setDrafts(previous => ({ ...previous, [claimsKey]: value })); }} /><div className="muted micro">Diagnostic triples</div><textarea className="input code" aria-label={`Triples for ${candidate.question}`} value={drafts[triplesKey] ?? JSON.stringify(candidate.gold_triples || [], null, 2)} onChange={event => { const value = event.target.value; setDrafts(previous => ({ ...previous, [triplesKey]: value })); }} /><button className="btn btn-secondary" onClick={() => saveGold(candidate)}>Save and approve</button>{goldErrors[candidate.id] && <p className="muted micro" role="status">{goldErrors[candidate.id]}</p>}</details>; })}</>}
-      {scene === 'benchmark' && <><h2>Benchmark</h2><p className="muted">Approved claim subgraphs aggregated across evaluation repetitions. Edge scores remain diagnostic. Agentic repetitions research the agent's top-ranked concept.</p><button className="btn btn-secondary" onClick={loadBenchmark}>Refresh</button>{benchmarkRows.length === 0 && <p className="muted" style={{ marginTop: 20 }}>No approved gold questions yet. Approve a candidate on the Gold page first.</p>}<table className="table"><thead><tr><th>Question</th><th>Category</th><th>Fast</th><th>Adaptive</th><th>Agentic</th></tr></thead><tbody>{benchmarkRows.map(row => <tr key={row.id}><td><details><summary>{row.question}</summary><div className="muted micro">Gold {row.gold_version}</div><button className="text-button micro" onClick={() => runBenchmark(row)}>Run benchmark · 3× per path</button>{row.paths.map(path => <div key={path.path} className="micro">{path.path}: {path.completed}/{path.completed + path.failed} runs · edge F1 {path.f1.mean?.toFixed(2) || '—'} · repetitions {path.repetitions.join(', ')}</div>)}</details></td><td>{row.category}</td>{['baseline', 'adaptive-baseline', 'agentic'].map(pathName => { const path = row.paths.find(item => item.path === pathName || (pathName === 'adaptive-baseline' && item.path === 'baseline-enhanced')); return <td key={pathName}>{path ? path.completed ? `Claim F1 ${path.claim_f1.mean?.toFixed(2) ?? '—'} · P ${path.claim_precision.mean?.toFixed(2) ?? '—'} · R ${path.claim_recall.mean?.toFixed(2) ?? '—'}` : `${path.failed} failed` : '—'}</td>; })}</tr>)}</tbody></table></>}
+      {scene === 'benchmark' && <><h2>Benchmark</h2><p className="muted">Triple precision, recall and F1 against reviewed gold, averaged over repetitions. Each run’s evaluation mode records the agentic path’s top concept.</p><button className="btn btn-secondary" onClick={loadBenchmark}>Refresh</button>{benchmarkRows.length === 0 && <p className="muted" style={{ marginTop: 20 }}>No approved gold questions yet. Approve a candidate on the Gold page first.</p>}<table className="table"><thead><tr><th>Question</th><th>Theme</th><th>Difficulty</th><th>Fast</th><th>Adaptive</th><th>Agentic</th></tr></thead><tbody>{benchmarkRows.map(row => <tr key={row.id}><td><details><summary>{row.question}</summary><div className="muted micro">Gold {row.gold_version}</div><button className="text-button micro" onClick={() => runBenchmark(row)}>Run benchmark · 3× per path</button>{row.paths.map(path => <div key={path.path} className="micro">{path.path}: {path.completed}/{path.completed + path.failed} runs · triple F1 {path.f1.mean?.toFixed(2) || '—'} · model calls {path.model_calls ?? '—'} · tool calls {path.tool_calls ?? '—'} · wall {path.wall_clock_s?.toFixed(1) ?? '—'} s · {path.repetitions.join(', ')}</div>)}</details></td><td>{row.theme ?? row.category}</td><td>{row.difficulty ?? '—'}</td>{['baseline', 'adaptive-baseline', 'agentic'].map(pathName => { const path = row.paths.find(item => item.path === pathName || (pathName === 'adaptive-baseline' && item.path === 'baseline-enhanced')); return <td key={pathName}>{path ? path.completed ? <><div>P {path.precision.mean?.toFixed(2) ?? '—'} · R {path.recall.mean?.toFixed(2) ?? '—'} · F1 {path.f1.mean?.toFixed(2) ?? '—'}</div><div className="muted micro">{path.completed}/{path.completed + path.failed} runs · {path.wall_clock_s?.toFixed(1) ?? '—'} s</div></> : `${path.failed} failed` : '—'}</td>; })}</tr>)}</tbody></table></>}
       {notice && <p className="notice" role="alert">{notice}</p>}
       {!['corpus', 'settings', 'runs', 'gold', 'benchmark'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline')}>Fast</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline-enhanced')}>Adaptive</button><button className="btn btn-primary" disabled={busy || !question.trim()} onClick={() => runFixture('agentic')}>Agentic</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runCompare()}>Compare all</button><button className="text-button micro" aria-expanded={libraryOpen} aria-controls="question-library" disabled={busy} onClick={() => setLibraryOpen(open => !open)}>{libraryOpen ? 'Close question library' : `Question library (${library.length})`}</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
         {libraryOpen && !busy && <QuestionLibrary items={library} filter={libraryFilter} setFilter={setLibraryFilter} onPick={text => { setQuestion(text); setLibraryOpen(false); }} onRun={(kind, text) => runFixture(kind, text)} onCompare={text => runCompare(text)} />}
+        {scene === 'idle' && !libraryOpen && <section className="starter-section" aria-label="Corpus-wide suggested questions"><div className="starter-heading"><span className="section-title">Explore the corpus</span><span className="muted micro">Ten starting points across themes, methods, evidence, and trends. Select one, then choose a run mode above.</span></div><div className="starter-grid">{starterQuestions.map(item => <button key={item.type} className="starter-question" onClick={() => setQuestion(item.question)}><span className="starter-type">{item.type}</span><span>{item.question}</span><span className="starter-arrow" aria-hidden="true">↗</span></button>)}</div></section>}
         {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'corpus_absent' || r.status === 'no_evidence_found' || r.status === 'incomplete').filter((run, index, all) => all.findIndex(other => other.question === run.question) === index).slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
         {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Adaptive baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'Concept · shared evidence graph · MCP verification' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction · evidence review' : 'Fixed pipeline · no verification pass'}</span></div><Progress rows={liveTrace} waitingOn={waitingOn} waitedS={waitedS} phase={phase} />{liveTrace.map((step, i) => <div className={`log-row${step.action.startsWith('Model call') ? ' log-model' : ''}${step.action === 'Model call failed' ? ' log-failed' : ''}`} key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}{waitingOn && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Waiting {waitedS}s</span><span className="muted micro">{waitingOn}</span></div>}{busy && !waitingOn && lastRow && waitedS >= 10 && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Working {waitedS}s</span><span className="muted micro">since “{lastRow.action}”</span></div>}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={stopRun}>Stop run</button></section>}
         {scene === 'readings' && active && <section style={{ marginTop: 60 }}><p style={{ maxWidth: '56ch' }}>The agent proposed {active.readings.length} interpretations of this question. Choose one to research.</p><p className="muted" style={{ fontSize: 13.5, marginBottom: 34 }}>Each interpretation scopes retrieval and extraction differently; the question itself stays unchanged.</p>{active.readings.map((r, i) => { const concept = active.concepts[i]; return <button key={i} className="reading-row" disabled={picking} onClick={() => chooseReading(i)}><span className="muted micro">{i + 1}</span><span style={{ display: 'grid', gap: 4 }}><strong style={{ fontSize: 16.5 }}>{r.label}</strong><span className="muted" style={{ fontSize: 13.5 }}>{r.gloss}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{[r.classes.join(' · '), r.properties.join(' · '), concept?.evidenceHits != null ? `${concept.evidenceHits} matching corpus passages` : ''].filter(Boolean).join('  |  ')}</span></span></button>; })}<button className="text-button" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setScene('idle'); }}>None of these — rephrase the question</button></section>}

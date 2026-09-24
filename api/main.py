@@ -64,8 +64,11 @@ class RunCancelled(BaseException):
 
 def run_deadline_seconds(path: str, budget: str) -> float:
     """Hard wall-clock limit for one run, independent of per-call timeouts."""
-    default = {"fast": 300.0, "slow": 900.0}[budget]
-    return float(os.getenv(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default))
+    default = 300.0 if path == "agentic" and budget == "slow" else {
+        "fast": 300.0, "slow": 900.0,
+    }[budget]
+    path_key = f"HARNESS_RUN_DEADLINE_{path.upper().replace('-', '_')}_{budget.upper()}_S"
+    return float(os.getenv(path_key, os.getenv(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default)))
 
 
 class RunRequest(BaseModel):
@@ -178,6 +181,7 @@ class RunRuntime:
         timeout_s: float | None = None,
         refinement_model: OpenAICompatibleModel | None = None,
         schema_model: OpenAICompatibleModel | None = None,
+        max_passages: int | None = None,
     ) -> Baseline20:
         schema = hand_written_subschema()
         # Qwen is shared by every path for claim construction. Its structured
@@ -185,19 +189,27 @@ class RunRuntime:
         # that limit turned successful research into provider failures.
         budget_timeout = float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "90"))
         model = OpenAICompatibleModel(model=model_name, timeout_s=timeout_s or budget_timeout)
+        edc_model = OpenAICompatibleModel(
+            model=os.getenv("HARNESS_MODEL_EDC") or model_name or os.getenv("HARNESS_MODEL_SMALL", "heavy-model"),
+            timeout_s=timeout_s or budget_timeout,
+        )
         return Baseline20(
             CorpusStore(Path(os.getenv("CORPUS_ROOT", ROOT / "corpus_data"))),
-            ExtractionEngine(model, schema, schema_model=schema_model),
+            ExtractionEngine(model, schema, schema_model=schema_model, edc_model=edc_model),
             planner=QueryPlanner(model),
             retrieve_k=int(os.getenv("BASELINE_RETRIEVE_K", "20")),
+            max_passages=(
+                max_passages if max_passages is not None else
+                int(os.getenv("HARNESS_ADAPTIVE_MAX_PASSAGES", "16")) if enhanced else None
+            ),
             enhanced=enhanced,
             edc=True,
             trace_sink=sink,
             refine=enhanced,
             refinement_model=refinement_model,
             claim_lookup=self.claims.search,
-            relation_proposer=lambda name, definition, run_id: self.relations.propose(
-                name, definition, run_id=run_id, domain="Paper", range_="Resource"
+            relation_proposer=lambda name, definition, run_id, domain, range_: self.relations.propose(
+                name, definition, run_id=run_id, domain=domain, range_=range_
             ),
         )
 
@@ -370,6 +382,7 @@ class RunRuntime:
         baseline = self._runner(
             sink, True, model_name=baseline_model, timeout_s=agent_timeout,
             refinement_model=refinement_model, schema_model=high_model,
+            max_passages=int(os.getenv("HARNESS_AGENTIC_MAX_PASSAGES", "12")),
         )
         runner = AgenticResearch(
             baseline, sink, agent_model=agent_model, high_model=high_model,
@@ -704,6 +717,17 @@ def _score_aggregate(scores: list[dict], metric: str) -> dict[str, float | None]
     }
 
 
+def _run_cost(run: Run) -> dict[str, float | int]:
+    """Return observable per-run costs; tool counts come from the saved call log."""
+    model_calls = sum(row.action == "Model call started" for row in run.trace)
+    try:
+        tool_log = runtime.artifacts.read(run.id, "tool_calls.jsonl")
+        tool_calls = sum(bool(line.strip()) for line in tool_log.splitlines())
+    except (OSError, ValueError):
+        tool_calls = 0
+    return {"model_calls": model_calls, "tool_calls": tool_calls, "wall_clock_s": run.duration_s}
+
+
 @app.get("/benchmark")
 def benchmark(category: str | None = None) -> dict:
     """Return approved benchmark questions with aggregated path scores."""
@@ -736,6 +760,7 @@ def benchmark(category: str | None = None) -> dict:
                 for result in eligible for reading in result["readings"]
                 if reading["index"] == result["chosen_reading"] and reading["claim_score"] is not None
             ]
+            costs = [_run_cost(run) for run in matching]
             if not matching:
                 continue
             path_rows.append(
@@ -750,6 +775,9 @@ def benchmark(category: str | None = None) -> dict:
                     "claim_precision": _score_aggregate(claim_scores, "precision"),
                     "claim_recall": _score_aggregate(claim_scores, "recall"),
                     "claim_f1": _score_aggregate(claim_scores, "f1"),
+                    "model_calls": mean([item["model_calls"] for item in costs]),
+                    "tool_calls": mean([item["tool_calls"] for item in costs]),
+                    "wall_clock_s": mean([item["wall_clock_s"] for item in costs]),
                 }
             )
         question_rows.append(
@@ -757,6 +785,9 @@ def benchmark(category: str | None = None) -> dict:
                 "id": candidate.get("id"),
                 "question": candidate.get("question"),
                 "category": candidate.get("category", "uncategorized"),
+                "theme": candidate.get("theme"),
+                "difficulty": candidate.get("difficulty"),
+                "expected_status": candidate.get("expected_status", "answered"),
                 "gold_version": candidate.get("gold_version"),
                 "corpus_fingerprint": candidate.get("corpus_fingerprint"),
                 "ontology_hash": candidate.get("ontology_hash"),
@@ -842,7 +873,9 @@ def papers() -> list[dict]:
 
 def _question_sets() -> list[Path]:
     root = Path(os.getenv("DATASETS_ROOT", ROOT / "datasets"))
-    configured = os.getenv("HARNESS_QUESTION_SETS", "question_matrix_20.json")
+    configured = os.getenv(
+        "HARNESS_QUESTION_SETS", "question_matrix_20.json,question_library_2025.json,corpus_10.json"
+    )
     paths = []
     for name in configured.split(","):
         name = name.strip()
@@ -874,7 +907,8 @@ def questions() -> dict[str, list[dict]]:
         for row in rows if isinstance(rows, list) else rows.get("questions", []):
             if isinstance(row, dict):
                 add(row.get("question"), id=row.get("id"), category=row.get("category", "curated"),
-                    type=row.get("type"), expected=row.get("expected"), source=path.stem)
+                    type=row.get("type"), theme=row.get("theme"),
+                    expected=row.get("expected"), source=path.stem)
     for row in runtime.gold.list():
         add(row.get("question"), id=row.get("id"), category="gold", type=row.get("status"),
             source="gold")

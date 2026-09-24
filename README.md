@@ -4,8 +4,8 @@ The harness includes the fixture contract, live baseline and enhanced retrieval,
 agentic research, corpus tools, artifact evaluation, and the React UI. Runs use
 the same corpus and provenance checks across all paths.
 
-For a live session, follow [docs/DEMO.md](docs/DEMO.md): `make dev` starts the MCP corpus
-server, API and UI; `make preflight` checks every dependency; `make eval-planner` measures
+For a live session, follow [docs/DEMO.md](docs/DEMO.md): `make demo` starts the MCP corpus
+server, API and UI without API auto-reload; `make preflight` checks every dependency; `make eval-planner` measures
 question understanding on the live model.
 
 ## Setup
@@ -27,10 +27,12 @@ For the forwarded services shown in this workspace, the relevant ports are
 `127.0.0.1:35432` (Postgres). Langfuse credentials and the project URL belong
 in `.env` and should never be committed.
 
-## Run M0
+## Run the fixture preview (M0)
 
 ```sh
-uv run --python 3.12 uvicorn main:app --app-dir api --host 127.0.0.1 --port 8000
+uv run --python 3.12 uvicorn main:app --app-dir api --host 127.0.0.1 --port 8000 \
+  --timeout-graceful-shutdown 2 --reload --reload-dir api --reload-dir packages \
+  --env-file .env --reload-include .env
 cd web && corepack pnpm dev
 ```
 
@@ -39,29 +41,162 @@ Open `http://127.0.0.1:5173`. To inspect a given fixture state directly, use
 `failed`, `runs`, `corpus`, or `settings`. The evaluation sidebar is part of both
 result screens.
 
-### Browser access from a Slurm node
-
-The repository includes an `omen-tunnels` version with a reverse `harness-ui`
-route. Install the same script at `~/.local/bin/omen-tunnels` on the laptop and
-the compute node. Start all routes on each machine:
-
-```sh
-# Laptop, once after login or reboot
-omen-tunnels laptop start all
-
-# Inside the Slurm allocation
-omen-tunnels compute start all
-make dev
-```
-
-Open `http://127.0.0.1:25173` on the laptop. The route carries browser traffic
-to Vite on compute port 5173; Vite proxies API requests to compute port 8000.
-No separate `ssh -L` command is needed. Stop and restart both tunnel commands
-after changing their selected service list.
-
 M0 is a fixture preview: run buttons open a running log and a fixture result.
 They do not call a model. The question text stays in the client unchanged
 through scene changes.
+
+## Live run on gammaweb08
+
+This is the live Qwen + Granite + corpus MCP + API + UI stack. It runs on
+gammaweb08 inside an active Slurm allocation. The harness does not use Docker.
+Commands are labeled with the machine and terminal where they belong.
+
+### One-time: install the tunnel helper
+
+The repository's `scripts/omen-tunnels` must be installed on both the laptop
+and gammaweb08. On each machine, from the repository root of a checkout, run:
+
+```sh
+mkdir -p ~/.local/bin
+install -m 755 scripts/omen-tunnels ~/.local/bin/omen-tunnels
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+If `~/.local/bin` is not already on `PATH`, add the export line to that
+machine's shell startup file. Use `omen-tunnels list` to see services and
+ports. The tunnel commands can then run from any directory. The application
+code stays in the gammaweb08 checkout; the laptop only needs the tunnel helper
+and a browser, not a Docker image or local app build.
+
+### Terminal 1 on gammaweb08: models and LiteLLM gateway
+
+Run from the LLM setup repository. Source the harness `.env` for its API key,
+then explicitly route the gateway's heavy/lite aliases to the local backends.
+
+```sh
+cd ~/thesis/thesis-kumar-gupta/final_thesis_implementation/llm_setup
+./scripts/vllm-model show qwen3-30b-a3b-instruct-fp8
+./scripts/vllm-model show granite41-8b
+set -a
+source ~/thesis/final-final-frontend/UI/files/harness/.env
+set +a
+export VLLM_HEAVY_API_BASE=http://127.0.0.1:8002/v1
+export VLLM_LITE_API_BASE=http://127.0.0.1:8003/v1
+export VLLM_API_BASE=http://127.0.0.1:8002/v1
+
+./scripts/vllm-model status
+```
+
+The profile names belong to the separate `llm_setup` registry, not this
+repository; both profiles must exist there before `start-pair` can use them.
+
+If both backends are stopped, start the pair (this also starts LiteLLM). If
+both already show `RUNNING`, skip this command:
+
+```sh
+cd ~/thesis/thesis-kumar-gupta/final_thesis_implementation/llm_setup
+./scripts/vllm-model start-pair qwen3-30b-a3b-instruct-fp8 granite41-8b
+```
+
+After startup, test both aliases:
+
+```sh
+cd ~/thesis/thesis-kumar-gupta/final_thesis_implementation/llm_setup
+./scripts/vllm-model chat --model heavy-model "Reply only OK"
+./scripts/vllm-model chat --model lite-model "Reply only OK"
+curl -fsS http://127.0.0.1:4000/health/liveliness
+```
+
+If only one backend is running, or you need to replace the pair, run
+`./scripts/vllm-model stop-pair` first, then start it again. After confirming
+both are running, check health with `./scripts/vllm-model health`. If changing
+gateway URLs while LiteLLM is already running, reload just the gateway with
+`./scripts/vllm-model gateway stop` followed by
+`./scripts/vllm-model gateway start`. At the end of the session,
+`./scripts/vllm-model shutdown` stops manager-owned model and gateway
+processes. Heavy is Qwen on port 8002; lite is Granite on port 8003; LiteLLM is
+on port 4000. The first start can take a long time if model weights must be
+downloaded; leave it running and do not launch another `start-pair` while it
+is waiting for readiness.
+
+### Terminal 2 on the laptop: laptop tunnel hops
+
+Run after logging in to the laptop. This opens the laptop-side Omen and Webis
+gateway routes, including the browser route:
+
+```sh
+omen-tunnels laptop status
+omen-tunnels laptop start all
+```
+
+If status shows a different service set already running, run
+`omen-tunnels laptop stop` before `start all`.
+
+### Terminal 3 on gammaweb08: compute tunnel hop
+
+Run inside the active Slurm allocation on gammaweb08:
+
+```sh
+omen-tunnels compute status
+omen-tunnels compute start all
+```
+
+If status shows a different service set already running, run
+`omen-tunnels compute stop` before `start all`.
+
+`omen-tunnels` only manages SSH forwarding; it does not allocate compute,
+launch models, or start Docker. The `harness-ui` route forwards laptop port
+25173 through gateway port 45173 to Vite on compute port 5173. If other
+services are not needed, use `harness-ui` instead of `all` in both start
+commands.
+
+### Terminal 4 on gammaweb08: corpus MCP, API, and UI
+
+Run from the harness repository. `make demo` starts all three services in this
+terminal without API auto-reload, so a file change cannot interrupt an active
+presentation run. Press Ctrl-C here to stop them. Use `make dev` when editing
+code and automatic reload is useful.
+
+```sh
+cd ~/thesis/final-final-frontend/UI/files/harness
+set -a
+source .env
+set +a
+make demo
+```
+
+The `.env` should contain these endpoint and role settings:
+
+```dotenv
+LITELLM_BASE_URL=http://127.0.0.1:4000/v1
+MCP_CORPUS_URL=http://127.0.0.1:8765/mcp
+HARNESS_MODEL_AGENT=lite-model
+HARNESS_MODEL_SMALL=heavy-model
+HARNESS_MODEL_HIGH=heavy-model
+HARNESS_MODEL_JUDGE=heavy-model
+```
+
+### Terminal 5 on gammaweb08: preflight
+
+While `make dev` is running, use a second harness terminal:
+
+```sh
+cd ~/thesis/final-final-frontend/UI/files/harness
+make preflight
+ss -ltn | rg ':8765'
+curl -I http://127.0.0.1:8000/docs
+```
+
+Open `http://127.0.0.1:25173` in the laptop browser. Vite proxies API calls to
+compute port 8000, so no separate `ssh -L` command is needed.
+
+### Shutdown
+
+1. On gammaweb08, press Ctrl-C in the `make dev` terminal.
+2. On gammaweb08, run `omen-tunnels compute stop`.
+3. On the laptop, run `omen-tunnels laptop stop`.
+4. When finished with inference, run `./scripts/vllm-model shutdown` in the
+   LLM setup terminal to release the GPU models and LiteLLM gateway.
 
 ## Commands
 
@@ -149,8 +284,12 @@ stable across ingest runs. A missing DBLP IRI is recorded as `null`, never
 guessed. This is the user-approved M1 identifier rule; the original plan's
 all-DBLP requirement has been superseded.
 
-The current sample ingest contains 37 DBLP-verified papers, 2,683 passages,
-2,384 references, structural facts, outlines, and a BM25S index. Fixture-based
+The current corpus contains 337 DBLP-verified papers: the original 37 plus 150
+ACL 2025 long papers and 150 EMNLP 2025 main papers. It has 30,688 passages,
+18,027 references, structural facts, outlines, and a BM25S index. The 2025
+papers were selected evenly across the official ACL Anthology proceedings;
+`scripts/stage_acl_2025.py` records their source manifest, and
+`scripts/validate_acl_2025_corpus.py` checks the completed ingest. Fixture-based
 TEI parsing, citation resolution, BM25 retrieval, search DSL, and MCP
 registration are tested with `uv run pytest -q packages/corpus/tests`.
 
@@ -185,9 +324,12 @@ run. The supervisor discovers the registered corpus tools and lets retrieval,
 structure, and verification roles call them over one session. Complete tool-call
 records are persisted as `tool_calls.jsonl`; compact events are streamed and
 written to `trace.json`; Langfuse receives one child observation per tool call.
-The API does not impose a corpus-wide result or triple cap. MCP's page size is
-50, and the supervisor can request additional pages when a tool reports more
-results.
+MCP can page through the corpus with a page size of 50. For live response time,
+Adaptive sends at most 16 passages and Agentic at most 12 passages into open
+extraction by default; agent-selected passages take priority. The retrieval
+artifact records how many lower-priority passages were deferred. These limits
+can be changed with `HARNESS_ADAPTIVE_MAX_PASSAGES` and
+`HARNESS_AGENTIC_MAX_PASSAGES`.
 
 ## M2 semantic core
 

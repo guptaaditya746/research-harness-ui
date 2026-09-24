@@ -104,7 +104,7 @@ def test_busy_high_model_preserves_triples_and_marks_agentic_result_degraded(mon
     assert b'"status": "deferred"' in result["artifacts"]["tool_calls.jsonl"]
 
 
-def test_agent_receives_preliminary_grounded_context(monkeypatch) -> None:
+def test_agent_receives_selected_concept_before_baseline_answer(monkeypatch) -> None:
     monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
     captured = {}
 
@@ -118,10 +118,98 @@ def test_agent_receives_preliminary_grounded_context(monkeypatch) -> None:
     )
 
     assert result["run"].status == "answered"
-    assert captured["preliminary_triples"] == [
-        {"subject": "p4", "predicate": "title", "object": "Video Prediction Policy", "source_id": "p4-metadata"}
-    ]
-    assert "Video Prediction Policy" in captured["preliminary_answer"]
+    assert captured["selected_concept"]["label"] == "Introducing paper"
+    assert captured["preliminary_claims"] == []
+    assert captured["preliminary_answer"] is None
+
+
+def test_mcp_search_precedes_answer_verification_and_seeds_evidence(monkeypatch) -> None:
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+    order = []
+
+    class VerifierSpy:
+        calls = 0
+
+        def complete_json(self, system, user):
+            self.calls += 1
+            return {"supported_ids": [], "unsupported_ids": [], "notes": "unused"}
+
+    verifier = VerifierSpy()
+
+    class RejectedBaseline(StubBaseline):
+        def __init__(self):
+            self.seed_passage_ids = []
+            self.refinement_model = verifier
+
+        def run(self, question, budget, run_id, concept=None):
+            order.append(("baseline", list(self.seed_passage_ids)))
+            result = super().run(question, budget, run_id, concept=concept)
+            result["run"] = result["run"].model_copy(update={
+                "status": "incomplete", "reason": "schema_rejected", "readings": [],
+                "chosen_reading": None,
+            })
+            return result
+
+    def run_agent(self, model, question, grounded_context):
+        order.append(("mcp", grounded_context["preliminary_answer"]))
+        self.sink({
+            "call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+            "arguments": {"query": "recurring themes"}, "status": "ok",
+            "duration_ms": 3.0, "result_count": 1,
+            "result": {"items": [{"passage_id": "p4-intro", "text": "Evidence."}]},
+        })
+        return json.dumps({
+            "verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"],
+            "reasoning_summary": "found evidence",
+        })
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    result = AgenticResearch(RejectedBaseline(), agent_model=HighModel()).run(
+        "What research themes recur?", "slow", "r-early", concept=CONCEPT,
+    )
+
+    assert order == [("mcp", None), ("baseline", ["p4-intro"])]
+    assert result["run"].status == "incomplete"
+    checks = {check.name: check for check in result["run"].checks}
+    assert checks["agent research (MCP)"].status == "pass"
+    assert checks["independent verification"].status == "skipped"
+    assert verifier.calls == 0
+    assert b'"passage_id": "p4-intro"' in result["artifacts"]["tool_calls.jsonl"]
+
+
+def test_unstructured_agent_decision_still_supplies_observed_passages(monkeypatch) -> None:
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+
+    class SeededBaseline(StubBaseline):
+        def __init__(self):
+            self.seed_passage_ids = []
+            self.seen_seeds = []
+
+        def run(self, question, budget, run_id, concept=None):
+            self.seen_seeds = list(self.seed_passage_ids)
+            return super().run(question, budget, run_id, concept=concept)
+
+    def run_agent(self, model, question, grounded_context):
+        self.sink({
+            "call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+            "arguments": {"query": "NLP task"}, "status": "ok", "duration_ms": 3.0,
+            "result_count": 2,
+            "result": {"items": [
+                {"passage_id": "p4-intro", "paper_id": "p4", "text": "Relevant task."},
+                {"passage_id": "p4-method", "paper_id": "p4", "text": "Relevant approach."},
+            ]},
+        })
+        return "The corpus includes several NLP tasks."
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    baseline = SeededBaseline()
+    result = AgenticResearch(baseline, agent_model=HighModel()).run(
+        "Which NLP tasks appear most often?", "slow", "r-unstructured", concept=CONCEPT,
+    )
+
+    assert baseline.seen_seeds == ["p4-intro", "p4-method"]
+    assert result["run"].execution_status == "degraded"
+    assert result["run"].reason == "agentic_degraded: agent_final_not_structured"
 
 
 def test_mcp_result_text_is_unwrapped_for_model_context() -> None:

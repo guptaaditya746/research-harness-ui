@@ -69,6 +69,7 @@ class AgenticResearch:
         agent_final = ""
         agent_decision: dict = {}
         shown_ids: set[str] = set()
+        shown_claim_ids: set[str] = set()
         agent_checks: list[Check] = []
         independent: dict | None = None
 
@@ -119,15 +120,15 @@ class AgenticResearch:
             trace.append(row)
             self.trace_sink(row)
 
-        # Run the shared baseline first. MCP enriches the result when the high
-        # quality model has capacity; a transport failure preserves its triples.
-        result = self.baseline.run(question, budget, run_id, concept=concept_input)
-        base_run = result["run"]
-        if not heavy_busy and not clarification_needed and base_run.status == "answered":
+        # Search through MCP before the shared pipeline verifies its answer.
+        # Otherwise a rejected draft prevents the agent from gathering the
+        # very evidence that could make the answer supportable.
+        if not heavy_busy and not clarification_needed:
             mcp = MCPToolClient(tool_sink, agent="supervisor")
             try:
-                grounded_context = self._grounded_context(base_run, concept_input)
-                shown_ids = self._evidence_ids(grounded_context) | {
+                grounded_context = self._grounded_context(None, concept_input)
+                shown_ids = self._evidence_ids(grounded_context)
+                shown_claim_ids = {
                     str(claim["id"]) for claim in grounded_context.get("preliminary_claims", [])
                 }
                 agent_final = mcp.run_agent(self.agent_model, question, grounded_context)
@@ -155,15 +156,97 @@ class AgenticResearch:
                 )
                 trace.append(row)
                 self.trace_sink(row)
-        if base_run.status == "answered" and not clarification_needed and not heavy_busy and not agent_decision and not mcp_error:
+        if not clarification_needed and not heavy_busy and not agent_decision and not mcp_error:
             mcp_error = "agent_returned_no_research_decision"
         corpus_calls = [item for item in tool_calls if item["tool"] not in NON_CORPUS_RECORDS]
         # Only IDs the agent actually saw in this session (tool results and the
         # preliminary result shown to it) count as evidence; existing somewhere
         # in the corpus is not enough.
         observed = shown_ids.union(*(self._evidence_ids(item.get("result")) for item in corpus_calls))
+        if mcp_error and corpus_calls:
+            # A failed controller decision stays visible as degraded. Recover
+            # a small set of actual passage handles from successful tool calls
+            # so a timeout or malformed final answer does not waste research
+            # already gathered before schema inference.
+            recovered: list[str] = []
+
+            def passage_ids(value: object) -> list[str]:
+                if isinstance(value, dict):
+                    found = [str(value["passage_id"])] if value.get("passage_id") else []
+                    return found + [handle for child in value.values() for handle in passage_ids(child)]
+                if isinstance(value, list):
+                    return [handle for child in value for handle in passage_ids(child)]
+                return []
+
+            for call in corpus_calls:
+                if call.get("status") != "ok" or call.get("tool") not in {
+                    "search_evidence", "read_evidence", "rank_evidence", "passages",
+                }:
+                    continue
+                recovered.extend(passage_ids(call.get("result"))[:2])
+                recovered = list(dict.fromkeys(recovered))[:12]
+                if len(recovered) == 12:
+                    break
+            if recovered:
+                agent_decision = {
+                    "verified_claim_ids": [],
+                    "additional_evidence_ids": recovered,
+                    "reasoning_summary": "Recovered observed MCP passages after the controller failed.",
+                }
+                agent_checks.append(Check(
+                    name="agent passage recovery", status="warn",
+                    detail=f"{len(recovered)} observed passage IDs recovered from MCP tool results",
+                ))
+        supplied_ids = agent_decision.get("additional_evidence_ids")
+        evidence_limit = max(1, int(os.getenv("HARNESS_AGENTIC_MAX_MCP_SEEDS", "6")))
+        selected_ids = (
+            [str(item) for item in supplied_ids if str(item) in observed]
+            if isinstance(supplied_ids, list) else []
+        )
+        selected_ids = list(dict.fromkeys(selected_ids))
+        corpus_passages = getattr(getattr(self.baseline, "corpus", None), "by_passage", None)
+        if corpus_passages is not None:
+            selected_ids = [item for item in selected_ids if item in corpus_passages]
+            diverse = []
+            seen_papers = set()
+            for source_id in selected_ids:
+                paper_id = str(corpus_passages[source_id]["paper_id"])
+                if paper_id not in seen_papers:
+                    diverse.append(source_id)
+                    seen_papers.add(paper_id)
+            selected_ids = list(dict.fromkeys([*diverse, *selected_ids]))
+        deferred_ids = max(0, len(selected_ids) - evidence_limit)
+        selected_ids = selected_ids[:evidence_limit]
+        if deferred_ids:
+            agent_checks.append(Check(
+                name="agent evidence budget", status="info",
+                detail=f"{len(selected_ids)} MCP passages selected; {deferred_ids} deferred for response time",
+            ))
+        agent_checks.append(Check(
+            name="agent passage seeds",
+            status="pass" if selected_ids else "skipped",
+            detail=f"{len(selected_ids)} MCP passage IDs supplied before retrieval",
+        ))
+        previous_seed_ids = list(getattr(self.baseline, "seed_passage_ids", []))
+        if hasattr(self.baseline, "seed_passage_ids"):
+            self.baseline.seed_passage_ids = list(dict.fromkeys([*previous_seed_ids, *selected_ids]))
+        baseline_started_s = monotonic() - started
+        original_trace_sink = getattr(self.baseline, "trace_sink", None)
+        if callable(original_trace_sink):
+            self.baseline.trace_sink = lambda row: original_trace_sink(
+                row.model_copy(update={"at_s": round(row.at_s + baseline_started_s, 3)})
+            )
+        try:
+            result = self.baseline.run(question, budget, run_id, concept=concept_input)
+        finally:
+            if hasattr(self.baseline, "seed_passage_ids"):
+                self.baseline.seed_passage_ids = previous_seed_ids
+            if callable(original_trace_sink):
+                self.baseline.trace_sink = original_trace_sink
+        base_run = result["run"]
+        used_for_verification: list[str] = []
         if agent_decision and not mcp_error:
-            available = {claim.id for reading in base_run.readings for claim in reading.claims}
+            available = shown_claim_ids
             verified = agent_decision.get("verified_claim_ids")
             evidence_ids = agent_decision.get("additional_evidence_ids")
             if not isinstance(verified, list) or not isinstance(evidence_ids, list):
@@ -182,6 +265,13 @@ class AgenticResearch:
                 ))
                 unobserved = [str(item) for item in evidence_ids if str(item) not in observed]
                 evidence_ids = [item for item in evidence_ids if str(item) in observed]
+                if len(evidence_ids) > evidence_limit:
+                    agent_checks.append(Check(
+                        name="verification evidence budget", status="info",
+                        detail=f"checking {evidence_limit} of {len(evidence_ids)} observed IDs",
+                    ))
+                    evidence_ids = evidence_ids[:evidence_limit]
+                used_for_verification = [str(item) for item in evidence_ids]
                 agent_checks.append(Check(
                     name="agent evidence IDs",
                     status=("skipped" if not unobserved and not evidence_ids else
@@ -191,7 +281,12 @@ class AgenticResearch:
                             f"{len(unobserved)} IDs were never returned by a tool and were rejected: "
                             + ", ".join(unobserved[:5])),
                 ))
-                if verified or evidence_ids:
+                if base_run.status == "incomplete":
+                    agent_checks.append(Check(
+                        name="independent verification", status="skipped",
+                        detail="shared research stopped before an answer could be verified",
+                    ))
+                elif verified or evidence_ids:
                     # A second opinion from a fresh context: does the cited evidence
                     # actually support what the agent decided? Advisory, never a gate.
                     independent, check = self._independent_verification(
@@ -208,12 +303,10 @@ class AgenticResearch:
                     # The answer was computed from verified corpus facts; the
                     # agent's review is recorded but cannot drop correct facts.
                     pass
-                elif evidence_ids and hasattr(self.baseline, "seed_passage_ids"):
-                    # The agent found further evidence: rerun the shared
-                    # pipeline seeded with it, under the same concept.
-                    self.baseline.seed_passage_ids = list(dict.fromkeys(evidence_ids))
-                    result = self.baseline.run(question, budget, run_id, concept=concept_input)
-                    base_run = result["run"]
+                elif evidence_ids:
+                    # The observed passage IDs were already supplied to the
+                    # shared pipeline before its first retrieval pass.
+                    pass
                 elif verified and base_run.chosen_reading is not None:
                     reading = base_run.readings[base_run.chosen_reading]
                     selected = [claim for claim in reading.claims if claim.id in verified]
@@ -258,7 +351,11 @@ class AgenticResearch:
 
         plans = [str(agent_decision.get("reasoning_summary"))] if agent_decision.get("reasoning_summary") else []
         plans.extend(f"MCP: {record['tool']}" for record in tool_calls if record.get("tool") != "mcp_session")
-        trace = sorted(list(base_run.trace) + trace, key=lambda row: row.at_s)
+        baseline_trace = [
+            row.model_copy(update={"at_s": round(row.at_s + baseline_started_s, 3)})
+            for row in base_run.trace
+        ]
+        trace = sorted(baseline_trace + trace, key=lambda row: row.at_s)
         at_s = (trace[-1].at_s if trace else 0.0) + 0.01
         for plan in plans:
             row = TraceRow(atS=at_s, action="Agent planner lens", returned=plan)
@@ -273,9 +370,6 @@ class AgenticResearch:
         # not use tools" and "the agent's decision failed validation" read differently.
         if heavy_busy:
             research = Check(name="agent research (MCP)", status="skipped", detail=mcp_error or "heavy model busy")
-        elif base_run.status != "answered":
-            research = Check(name="agent research (MCP)", status="skipped",
-                             detail=f"the shared pipeline ended {base_run.status} before agent review")
         elif mcp_error and mcp_error.startswith("MCP agent workflow failed"):
             research = Check(name="agent research (MCP)", status="fail", detail=mcp_error)
         else:
@@ -313,10 +407,11 @@ class AgenticResearch:
                 "status": status,
                 "chosen_reading": chosen,
                 "producing_path": "baseline_fallback" if mcp_error or base_run.status == "incomplete" else "agentic",
-                "execution_status": "degraded" if mcp_error else "failed" if base_run.status == "incomplete" else "completed",
+                "execution_status": "failed" if base_run.status == "incomplete" else
+                                    "degraded" if mcp_error else "completed",
                 "reason": (
-                    f"agentic_degraded: {mcp_error}" if mcp_error
-                    else base_run.reason if base_run.status in {"incomplete", "corpus_absent", "no_evidence_found"}
+                    base_run.reason if base_run.status in {"incomplete", "corpus_absent", "no_evidence_found"}
+                    else f"agentic_degraded: {mcp_error}" if mcp_error
                     else None
                 ),
             }
@@ -350,8 +445,8 @@ class AgenticResearch:
         })
         shared_ledger["execution_metadata"] = {
             "controller": "agentic",
-            "producing_path": "baseline_fallback" if mcp_error else "agentic",
-            "execution_status": "degraded" if mcp_error else "completed",
+            "producing_path": run.producing_path,
+            "execution_status": run.execution_status,
             "skills_loaded": [item["result"] for item in tool_calls if item["tool"] == "load_skill"],
         }
         artifacts["ledger.json"] = json.dumps(shared_ledger, indent=2).encode()
@@ -375,6 +470,8 @@ class AgenticResearch:
             },
             "agent_evidence_ids": {
                 "supplied": [str(item) for item in decision.get("additional_evidence_ids") or []],
+                "used_for_retrieval": selected_ids,
+                "used_for_verification": used_for_verification,
                 "observed_in_session": sorted(
                     str(item) for item in decision.get("additional_evidence_ids") or [] if str(item) in observed),
                 "rejected_unobserved": sorted(
@@ -394,8 +491,8 @@ class AgenticResearch:
         artifacts["agent_draft.md"] = agent_final.encode()
         return {"run": run, "artifacts": artifacts}
 
-    def _grounded_context(self, base_run: Run, concept: dict | None) -> dict:
-        """What the agent needs to verify the preliminary answer, without duplication.
+    def _grounded_context(self, base_run: Run | None, concept: dict | None) -> dict:
+        """What the agent knows before research, with optional preliminary claims.
 
         Claims carry their own fields, so triples are only sent when there are
         no claims. Paper handles are limited to papers the preliminary result
@@ -403,7 +500,7 @@ class AgenticResearch:
         """
         reading = (
             base_run.readings[base_run.chosen_reading]
-            if base_run.chosen_reading is not None and base_run.readings else None
+            if base_run is not None and base_run.chosen_reading is not None and base_run.readings else None
         )
         claims = list(reading.claims) if reading else []
         answer_ids = set(reading.answer_claim_ids) if reading else set()
@@ -418,7 +515,9 @@ class AgenticResearch:
             papers.append({"paper_id": paper_id, "title": title})
         context: dict = {
             "preliminary_answer": reading.answer if reading else None,
-            "answer_source": getattr(self.baseline, "last_route", None) or "research",
+            "answer_source": (
+                getattr(self.baseline, "last_route", None) if base_run is not None else None
+            ) or "research",
             "selected_concept": concept,
             "papers": papers,
             "preliminary_claims": [

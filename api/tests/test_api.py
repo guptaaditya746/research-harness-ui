@@ -1,3 +1,4 @@
+import json
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -368,3 +369,22 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
         ("Which paper introduced Video Prediction Policy?", "metadata"),
         ("Who wrote FOCUS?", "gold"),
     ]
+
+
+def test_default_question_library_includes_existing_and_corpus_ten_sets(monkeypatch) -> None:
+    monkeypatch.delenv("HARNESS_QUESTION_SETS", raising=False)
+    monkeypatch.delenv("DATASETS_ROOT", raising=False)
+    paths = main._question_sets()
+    assert [path.name for path in paths] == [
+        "question_matrix_20.json", "question_library_2025.json", "corpus_10.json",
+    ]
+    nlp_rows = json.loads(paths[1].read_text())
+    assert len(nlp_rows) == 30
+    assert len({row["question"] for row in nlp_rows}) == 30
+    assert any(row["anchor"].startswith("2025.acl-long.") for row in nlp_rows)
+    assert any(row["anchor"].startswith("2025.emnlp-main.") for row in nlp_rows)
+    assert {row["category"] for row in nlp_rows} >= {"metadata", "aggregation", "synthesis"}
+    corpus_rows = json.loads(paths[2].read_text())
+    assert len(corpus_rows) == 10
+    assert [row["id"] for row in corpus_rows] == [f"q{number:02d}" for number in range(1, 11)]
+    assert all(row["expected"] == "answer" for row in corpus_rows)

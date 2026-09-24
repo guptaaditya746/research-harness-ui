@@ -1,0 +1,12 @@
+[
+  {"id":"q01","theme":"Themes","type":"corpus_themes","category":"synthesis","question":"What research themes recur across this corpus, and how are they connected?","expected":"answer"},
+  {"id":"q02","theme":"Task trends","type":"corpus_task_trends","category":"synthesis","question":"Which NLP tasks appear most often, and what kinds of approaches are used for them?","expected":"answer"},
+  {"id":"q03","theme":"Methods","type":"corpus_methods","category":"synthesis","question":"How do papers in this corpus use retrieval and evidence to support their results?","expected":"answer"},
+  {"id":"q04","theme":"Benchmarks","type":"corpus_benchmarks","category":"synthesis","question":"Which datasets and benchmarks recur across the corpus, and what do they measure?","expected":"answer"},
+  {"id":"q05","theme":"Evaluation","type":"corpus_evaluation","category":"synthesis","question":"How do these studies evaluate their systems: with automatic metrics, human judgments, or real-world tests?","expected":"answer"},
+  {"id":"q06","theme":"Language coverage","type":"corpus_language_coverage","category":"synthesis","question":"Which languages are represented in the corpus, and where are the clearest coverage gaps?","expected":"answer"},
+  {"id":"q07","theme":"Safety","type":"corpus_safety","category":"synthesis","question":"What safety and reliability risks are studied across the corpus, and how are they tested?","expected":"answer"},
+  {"id":"q08","theme":"Limitations","type":"corpus_limitations","category":"synthesis","question":"What limitations or open problems recur across multiple papers?","expected":"answer"},
+  {"id":"q09","theme":"Tradeoffs","type":"corpus_tradeoffs","category":"synthesis","question":"What tradeoffs between performance, robustness, and compute cost do the papers report?","expected":"answer"},
+  {"id":"q10","theme":"Citation connections","type":"corpus_citation_connections","category":"synthesis","question":"Which research areas are most connected in the corpus citation network, and what links them?","expected":"answer"}
+]

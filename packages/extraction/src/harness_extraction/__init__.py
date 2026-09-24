@@ -315,6 +315,8 @@ class SchemaInference(BaseModel):
     gloss: str
     classes: list[str]
     properties: list[str]
+    class_definitions: list[dict[str, Any]] = Field(default_factory=list)
+    property_definitions: list[dict[str, Any]] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -379,57 +381,132 @@ class ExtractionEngine:
     """One interface shared by baseline and the later agentic path."""
 
     def __init__(
-        self, model: ModelClient, schema: Subschema, schema_model: ModelClient | None = None
+        self,
+        model: ModelClient,
+        schema: Subschema,
+        schema_model: ModelClient | None = None,
+        edc_model: ModelClient | None = None,
     ) -> None:
         self.model = model
         self.schema_model = schema_model or model
+        self.edc_model = edc_model or model
         self.schema = schema
         self.class_names = {local_name(iri): iri for iri in schema.classes}
         self.property_names = {local_name(iri): iri for iri in schema.properties}
+        self._local_schema = False
 
-    def register_local_relation(self, name: str, definition: str) -> URIRef:
-        """Add a run-local hrn: relation so later schema checks accept it.
+    def _ensure_local_schema(self) -> None:
+        if self._local_schema:
+            return
+        graph = self.schema.graph.__class__()
+        for prefix, namespace in self.schema.graph.namespaces():
+            graph.bind(prefix, namespace)
+        for triple in self.schema.graph:
+            graph.add(triple)
+        self.schema = replace(self.schema, graph=graph)
+        self._local_schema = True
 
-        The relation links a paper to a literal value; the subschema is created
-        per run, so the addition never leaks into other runs.
-        """
+    def register_local_class(self, name: str, definition: str) -> URIRef:
+        """Introduce one query-local class without changing the seed ontology."""
+        if not re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,63}", name):
+            raise ValueError(f"invalid proposed class name: {name!r}")
+        if name in self.class_names:
+            return self.class_names[name]
+        self._ensure_local_schema()
+        iri = URIRef(HRN[name])
+        self.schema.graph.add((iri, RDF.type, RDFS.Class))
+        self.schema.graph.add((iri, RDFS.label, Literal(name)))
+        self.schema.graph.add((iri, RDFS.comment, Literal(definition)))
+        self.schema = replace(self.schema, classes=self.schema.classes | {iri})
+        self.class_names[name] = iri
+        return iri
+
+    def register_local_relation(
+        self, name: str, definition: str, *, domain_name: str = "Paper",
+        range_name: str = "xsd:string",
+    ) -> URIRef:
+        """Add a query-local relation with an explicit domain and range."""
+        if not re.fullmatch(r"[a-z][A-Za-z0-9_]{0,63}", name):
+            raise ValueError(f"invalid proposed relation name: {name!r}")
         iri = URIRef(HRN[name])
         if iri in self.schema.properties:
             return iri
+        self._ensure_local_schema()
         graph = self.schema.graph
         graph.add((iri, RDF.type, RDF.Property))
         graph.add((iri, RDFS.label, Literal(name)))
         graph.add((iri, RDFS.comment, Literal(definition)))
-        graph.add((iri, RDFS.domain, HRN.Paper))
-        graph.add((iri, RDFS.range, XSD.string))
+        graph.add((iri, RDFS.domain, self.class_names.get(domain_name, HRN.Paper)))
+        graph.add((iri, RDFS.range, self.class_names.get(range_name, XSD.string)))
         self.schema = replace(self.schema, properties=self.schema.properties | {iri})
         self.property_names[name] = iri
         return iri
 
     @labelled("schema inference")
     def infer_schema(self, question: str, passages: list[dict[str, Any]]) -> SchemaInference:
-        result = SchemaInference.model_validate(
-            self.schema_model.complete_json(
-                "Select only terms from the supplied ontology. Return strict JSON with label, gloss, classes, properties.",
-                json.dumps(
-                    {
-                        "question": question,
-                        "allowed_classes": sorted(self.class_names),
-                        "allowed_properties": sorted(self.property_names),
-                        "passages": [
-                            {"source_id": row["passage_id"], "text": row["text"][:1200]}
-                            for row in passages
-                        ],
-                    }
-                ),
-            )
-        )
-        unknown = set(result.classes) - self.class_names.keys()
-        unknown |= set(result.properties) - self.property_names.keys()
-        if unknown:
-            raise ValueError(f"schema terms outside the hand-written subschema: {sorted(unknown)}")
+        allowed_classes = sorted(self.class_names)
+        allowed_properties = sorted(self.property_names)
+        result = SchemaInference.model_validate(self.schema_model.complete_json(
+            "Use the supplied ontology as a seed. Reuse its classes and properties whenever "
+            "they express the question. When no seed term is suitable, invent a concise "
+            "UpperCamelCase class or lowerCamelCase property. Return strict JSON with label, "
+            "gloss, nonempty classes and properties. For invented terms, also return "
+            "class_definitions [{name, definition}] and property_definitions "
+            "[{name, definition, domain, range}], using class names for domain and range "
+            "or xsd:string for a literal range. Prefer reusable concept types over making "
+            "each named task, method, or benchmark its own class; those names are usually "
+            "instance values. Keep proposed terms grounded in the question and passages; "
+            "do not invent facts.",
+            json.dumps({
+                "question": question,
+                "allowed_classes": allowed_classes,
+                "allowed_properties": allowed_properties,
+                "passages": [
+                    {"source_id": row["passage_id"], "text": row["text"][:1200]}
+                    for row in passages
+                ],
+            }),
+        ))
         if not result.classes or not result.properties:
             raise ValueError("schema inference returned no classes or properties")
+        class_defs = {
+            item["name"]: item for item in result.class_definitions
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        property_defs = {
+            item["name"]: item for item in result.property_definitions
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        }
+        for name in result.classes:
+            if name not in self.class_names:
+                definition = str(class_defs.get(name, {}).get("definition") or
+                                 f"Run-local research concept {name} for: {question}")
+                self.register_local_class(name, definition)
+        for name in result.properties:
+            if name in self.property_names:
+                continue
+            spec = property_defs.get(name, {})
+            range_name = str(spec.get("range") or "")
+            if range_name not in self.class_names:
+                range_name = next(
+                    (class_name for class_name in sorted(result.classes, key=len, reverse=True)
+                     if name.casefold().endswith(class_name.casefold())),
+                    "xsd:string",
+                )
+            definition = str(spec.get("definition") or
+                             f"Run-local research relation {name} for: {question}")
+            self.register_local_relation(
+                name, definition, domain_name=str(spec.get("domain") or "Paper"),
+                range_name=range_name,
+            )
+        new_classes = set(result.classes) - set(allowed_classes)
+        new_properties = set(result.properties) - set(allowed_properties)
+        if new_classes or new_properties:
+            emit_model_event(
+                "Schema extension proposed",
+                f"classes: {', '.join(sorted(new_classes)) or 'none'}; "
+                f"properties: {', '.join(sorted(new_properties)) or 'none'}",
+            )
         return result
 
     @labelled("triple extraction")
@@ -480,7 +557,7 @@ class ExtractionEngine:
         """
         allowed_ids = {row["passage_id"] for row in passages}
         paper_by_source = {str(row["passage_id"]): str(row["paper_id"]) for row in passages}
-        payload = self.model.complete_json(
+        payload = self.edc_model.complete_json(
             "Extract evidence-backed atomic propositions relevant to the question. Use the supplied paper_id as subject for paper-level claims. Keep predicates open natural-language relations. "
             "Return strict JSON with triples; each triple must include source_id (a supplied passage_id), subject, predicate, object, and evidence.",
             json.dumps({
@@ -513,7 +590,7 @@ class ExtractionEngine:
         definitions: list[EDCDefinition] = []
         distinct = sorted({item.predicate.strip() for item in open_triples if item.predicate.strip()})
         if distinct:
-            defined = self.model.complete_json(
+            defined = self.edc_model.complete_json(
                 "Define each open predicate in subject-to-object terms. Return strict JSON with definitions, each containing relation and definition.",
                 json.dumps({"relations": distinct}),
             )
@@ -546,7 +623,7 @@ class ExtractionEngine:
                     "domain": local_name(domain) if isinstance(domain, URIRef) else None,
                     "range": local_name(range_) if isinstance(range_, URIRef) else None,
                 })
-            mapped = self.model.complete_json(
+            mapped = self.edc_model.complete_json(
                 "Map each open relation to one allowed ontology property only when the evidence supports the same subject-to-object claim. Return strict JSON with mappings: [{id, property, confidence}]. Use null property when none fits. Confidence must be between 0 and 1. Never add a fact or source.",
                 json.dumps({"question": question, "unresolved": unresolved,
                             "allowed_properties": property_catalog}, ensure_ascii=False),
@@ -706,7 +783,14 @@ class ExtractionEngine:
     ) -> AnswerResult:
         result = AnswerResult.model_validate(
             self.model.complete_json(
-                "Write a concise answer supported only by the triples. Produce executable SPARQL over prefix hrn: <https://harness.local/schema#>. Return strict JSON with sparql, answer, cited_source_ids.",
+                "Compose a concise answer supported only by the supplied triples. Return exactly one JSON object with only these three keys and field types: "
+                "sparql is a string containing executable SPARQL over prefix hrn: <https://harness.local/schema#>; "
+                "answer is one plain-language string; cited_source_ids is an array of source_id strings copied from the supplied triples. "
+                "The answer field must always be a string, never an array or object. If the answer has several themes or points, "
+                "write them as sentences within that single string rather than returning structured items. "
+                'Example shape: {"sparql":"SELECT ?s WHERE { ?s ?p ?o }",'
+                '"answer":"The evidence connects theme A with theme B.","cited_source_ids":["actual-source-id-from-input"]}. '
+                "Replace all example values with a query, answer, and source IDs grounded in the supplied triples; do not copy placeholders.",
                 json.dumps(
                     {
                         "question": question,

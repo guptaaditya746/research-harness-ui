@@ -1,4 +1,4 @@
-.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev test eval web-build preflight eval-planner
+.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev demo test eval web-build preflight eval-planner
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -19,6 +19,9 @@ ingest-slurm:
 
 dev:
 	./scripts/dev.sh
+
+demo:
+	HARNESS_DEV_RELOAD=0 ./scripts/dev.sh
 
 test:
 	uv run --python 3.12 pytest -q

@@ -108,6 +108,31 @@ def test_ingest_and_structural_citation(tmp_path: Path, monkeypatch) -> None:
     assert by_id["p2"]["identifier_source"] == "local"
 
 
+def test_manifest_metadata_overrides_parsed_bibliography(tmp_path: Path) -> None:
+    pdfs = tmp_path / "pdfs"
+    pdfs.mkdir()
+    (pdfs / "2025.acl-long.1.pdf").write_bytes(b"fixture-pdf")
+    (pdfs / "manifest.tsv").write_text(
+        "filename\ttitle\tdoi\tyear\tvenue\tauthors\tanthology_id\n"
+        '2025.acl-long.1.pdf\tOfficial Title\t10.18653/v1/2025.acl-long.1\t2025\tACL 2025\t["Ada Scholar", "B. Author"]\t2025.acl-long.1\n'
+    )
+    root = tmp_path / "corpus"
+    cache = root / ".cache" / "tei"
+    cache.mkdir(parents=True)
+    (cache / "2025.acl-long.1.grobid.tei.xml").write_bytes(
+        tei("Noisy Parsed Title", "10.1/old", "A passage about language models.")
+    )
+    ingest(pdfs, root, "http://unused", skip_grobid=True, skip_dblp=True)
+    paper = json.loads((root / "papers.jsonl").read_text().splitlines()[0])
+    assert paper["title"] == "Official Title"
+    assert paper["doi"] == "10.18653/v1/2025.acl-long.1"
+    assert paper["year"] == 2025
+    assert paper["venue"] == "ACL 2025"
+    assert paper["authors"] == ["Ada Scholar", "B. Author"]
+    assert paper["anthology_id"] == "2025.acl-long.1"
+    assert "A passage about language models" in (root / "passages.jsonl").read_text()
+
+
 def test_search_dsl() -> None:
     text = "World models predict future robot motion"
     assert matches('"world models" AND robot', text)

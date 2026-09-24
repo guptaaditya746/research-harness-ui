@@ -101,7 +101,7 @@ def decision_problems(
             + ", ".join(sorted(claim_ids)[:8]) + "): " + ", ".join(unknown[:8])
         )
     if needs_tools and corpus_calls == 0:
-        problems.append("no corpus tool was called; verify the preliminary claims with at least one tool call before deciding")
+        problems.append("no corpus tool was called; gather evidence with at least one tool call before deciding")
     return problems
 
 
@@ -190,8 +190,10 @@ class MCPToolClient:
                         "For questions over all papers (counts, rankings, earliest/latest, 'which "
                         "authors/papers') call aggregate_facts or metadata_table once instead of opening "
                         "papers one by one. Paper ids are local keys like p23. "
-                        "Preliminary claims are "
-                        "candidates, not authority. Verify or challenge them and follow additional "
+                        "When there are no preliminary claims, discover relevant evidence with the "
+                        "corpus tools and return verified_claim_ids as an empty list. Preliminary "
+                        "claims, when present, are candidates, not authority. Verify or challenge "
+                        "them and follow additional "
                         "evidence when it could materially change the answer. Stop when the answer "
                         "requirements are evidenced or a complete indexed absence procedure is "
                         "exhausted. Return only JSON with verified_claim_ids (list of preliminary "
@@ -433,10 +435,10 @@ class MCPToolClient:
     ) -> str:
         """Run an open-ended model/tool conversation over one MCP session."""
         try:
-            # The tool loop must outlast at least two model turns, otherwise a
-            # single slow turn discards everything gathered so far.
-            per_turn = float(getattr(model, "timeout_s", 120) or 120)
-            timeout_s = max(float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "240")), 2 * per_turn)
+            # The supervisor phase has its own deadline. A slow model turn
+            # must not consume the entire research run; observations already
+            # returned by tools can still seed the shared pipeline.
+            timeout_s = float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "90"))
             # Never outlive the run itself.
             timeout_s = bounded_timeout(timeout_s)
             return asyncio.run(asyncio.wait_for(

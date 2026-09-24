@@ -16,13 +16,19 @@ Check `.env` against `.env.example`. These settings matter for a live session:
 |---|---|---|
 | `HARNESS_INCLUDE_FIXTURES` | `false` | hides the four recorded runs from Runs and Recent |
 | `BUDGET_BASELINE_FAST_SECONDS` / `_SLOW_SECONDS` | `60` / `90` | per model call; Qwen structured calls often exceed 15 s |
-| `HARNESS_MCP_AGENT_TIMEOUT_S` | `240` | the agent's tool loop (never below two agent turns) |
-| `HARNESS_RUN_DEADLINE_FAST_S` / `_SLOW_S` | `300` / `900` | hard limit per run; the run ends as `deadline_exceeded` |
+| `HARNESS_MCP_AGENT_TIMEOUT_S` | `90` | time available for MCP research; observed passages can still seed retrieval if the controller times out |
+| `HARNESS_RUN_DEADLINE_FAST_S` / `_SLOW_S` | `300` / `900` | hard limit per run |
+| `HARNESS_RUN_DEADLINE_AGENTIC_SLOW_S` | `300` | agentic presentation run ends within five minutes |
+| `HARNESS_ADAPTIVE_MAX_PASSAGES` / `HARNESS_AGENTIC_MAX_PASSAGES` | `16` / `12` | bounds the number of open extraction batches |
+| `HARNESS_AGENTIC_MAX_MCP_SEEDS` | `6` | limits MCP passages entering extraction and heavy-model verification |
 | `HARNESS_AGENT_CONTEXT_TOKENS` | the Granite `max_model_len` | the agent's conversation is fitted to this window; if unset it is asked from LiteLLM or learned from the first length error |
 
-**Models.** Each run makes about 30 structured calls (planning, schema, extraction, review,
-enrichment) through `HARNESS_MODEL_SMALL`, and agentic concepts and review go through
-`HARNESS_MODEL_HIGH`. Point `HARNESS_MODEL_SMALL` at an instruct model. A thinking model
+**Models.** Each run makes structured calls through `HARNESS_MODEL_SMALL` and
+`HARNESS_MODEL_EDC` (open extraction, predicate definition, and relation mapping).
+`HARNESS_MODEL_EDC` defaults to `HARNESS_MODEL_SMALL`; set it to a smaller instruct
+alias when broad extraction would create too many slow calls. Schema inference and
+evidence review remain on `HARNESS_MODEL_HIGH`, and agentic concepts and MCP control
+use `HARNESS_MODEL_AGENT`. Point these roles at instruct models. A thinking model
 reasons for hundreds of tokens before every JSON reply, so runs take minutes and time out.
 If a thinking model has to be used, turn its thinking off for these calls with
 `HARNESS_MODEL_OPTIONS` (see `.env.example`). `make preflight` warns when a model reasons
@@ -33,8 +39,12 @@ Start the laptop tunnel and the stack:
 ```sh
 omen-tunnels laptop start all        # on the laptop
 omen-tunnels compute start all       # on the compute node
-make dev                             # MCP corpus server + API + UI
+make demo                            # MCP corpus server + API + UI, without API auto-reload
 ```
+
+Use `make dev` while editing code; it starts Uvicorn with auto-reload. For the
+presentation, stop that stack and use `make demo` so a file change cannot
+restart the API in the middle of a run. The UI still updates through Vite.
 
 In a second shell on the node, run both checks. Fix every `FAIL` before you present:
 
@@ -52,17 +62,21 @@ Open `http://127.0.0.1:25173` on the laptop.
 
 No typing is needed. Open **Question library** under the question box. Hover a question to
 run it with **Fast**, **Adaptive**, **Agentic** or **Compare**; click its text to put it in the box and
-edit it first. The library lists the question matrix (`HARNESS_QUESTION_SETS`, default
-`question_matrix_20.json`), gold candidates and your recent live runs. Filter by any word.
+edit it first. The library lists the question matrix and 2025 NLP question set
+(`HARNESS_QUESTION_SETS`, default
+`question_matrix_20.json,question_library_2025.json`), gold candidates and your
+recent live runs. Filter by any word.
 
-The corpus has 37 DBLP-verified papers. These questions come from
-`datasets/question_matrix_20.json`.
+The corpus has 337 DBLP-verified papers: the original 37, 150 ACL 2025 long
+papers, and 150 EMNLP 2025 main papers. The two suggested-question sets are
+`datasets/question_matrix_20.json` and `datasets/question_library_2025.json`.
 
 | Show | Path | Question | Expected |
 |---|---|---|---|
 | Question understanding | Fast | *Who authored FOCUS: object-centric world models for robotic manipulation?* | answered from verified author facts; trace starts with `Understanding question · paper_authors` |
 | Same meaning, different wording | Fast | *List the people who wrote FOCUS.* | same answer and same trace, because the plan routes the question, not the wording |
-| Honest absence | Fast | *Which papers cite the Video Prediction Policy paper?* | "No in-corpus match found": `corpus_absent` on the citation index, not a guess |
+| New ACL authors | Fast | *List the authors of FACT-AUDIT.* | answered from verified author facts and official 2025 ACL metadata |
+| New EMNLP authors | Fast | *List the authors of CondAmbigQA.* | answered from verified author facts and official 2025 EMNLP metadata |
 | Full-text research | Adaptive | *What improvement did Video Prediction Policy report on CALVIN ABC→D?* | 41.5 % result, cited to a passage, with the claim subgraph |
 | Agent concepts | Agentic | *Who is the best author in the corpus?* | the agent proposes 3–4 interpretations with corpus evidence counts; pick one |
 | Agentic research | Agentic | *What limitation of learning on physical robots does the DayDreamer paper report?* | pick a concept → MCP tool calls in the trace → verified answer |
@@ -80,9 +94,10 @@ What every answer screen shows, top to bottom:
   passages, and dashed boxes are results the harness *computed* (such as "3 distinct
   papers"); clicking one highlights exactly the facts it was computed from. Result claims
   connect a number to its metric, benchmark, paper and passage.
-- **Checks** — one line per stage: question understanding, retrieval, extraction, triple
-  provenance, then for agentic runs *agent research (MCP)*, *agent evidence IDs* and
-  *agentic execution*. "MCP found no matches", "extraction produced no supported triples"
+- **Checks** — one line per stage. In Agentic mode, *agent research (MCP)* runs after
+  concept selection and supplies passage IDs before retrieval, extraction and answer
+  verification. The checks also show *agent evidence IDs* and *agentic execution*.
+  "MCP found no matches", "extraction produced no supported triples"
   and "the agent's evidence IDs were never returned by a tool" therefore read differently.
 
 How the agent is kept honest and bounded (say this if asked about "agentic behaviour"):

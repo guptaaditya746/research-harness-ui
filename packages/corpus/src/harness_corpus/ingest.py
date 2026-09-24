@@ -195,11 +195,22 @@ def ingest(
                 paper, extracted, refs = from_docling(pdf, pid)
                 fallback.append(pid)
             row = metadata.get(pdf.name, {})
-            paper["title"] = paper["title"] or row.get("title", "")
-            paper["doi"] = paper["doi"] or row.get("doi", "").lower().removeprefix(
-                "https://doi.org/"
-            )
-            paper["year"] = paper["year"] or (int(row["year"]) if row.get("year") else None)
+            # A supplied proceedings manifest is authoritative for bibliographic
+            # metadata; GROBID remains the source of full-text passages.
+            if row:
+                paper["title"] = row.get("title") or paper["title"]
+                paper["doi"] = (row.get("doi") or paper["doi"]).lower().removeprefix(
+                    "https://doi.org/"
+                )
+                paper["year"] = int(row["year"]) if row.get("year") else paper["year"]
+                paper["venue"] = row.get("venue") or paper["venue"]
+                if row.get("authors"):
+                    authors = json.loads(row["authors"])
+                    if not isinstance(authors, list) or not all(isinstance(name, str) for name in authors):
+                        raise ValueError(f"invalid authors in manifest for {pdf.name}")
+                    paper["authors"] = authors
+                if row.get("anthology_id"):
+                    paper["anthology_id"] = row["anthology_id"]
             local_id = local_identifier(pdf)
             if local_id in local_ids:
                 raise ValueError(f"duplicate PDF content gives the same local identifier: {pdf}")

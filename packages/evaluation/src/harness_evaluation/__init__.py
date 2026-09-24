@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import re
+import importlib.util
+import json
+import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from harness_schema.models import ClaimSubgraph, Run, Triple
@@ -64,6 +69,8 @@ def _entity_key(value: object, *, predicate: str, position: str) -> str:
         return f"https://harness.local/resource/author/{slug}"
     if raw.startswith("https://"):
         parts = urlsplit(raw)
+        if parts.netloc.casefold() == "dblp.org":
+            return parts._replace(path=parts.path.rstrip("/").casefold()).geturl()
         return parts._replace(path=parts.path.rstrip("/")).geturl()
     return " ".join(raw.casefold().split())
 
@@ -77,11 +84,38 @@ def _predicate_key(value: object) -> str:
     return raw.rstrip("/")
 
 
-def canonical_triple_key(value: Triple | Mapping[str, object]) -> tuple[str, str, str]:
+@lru_cache(maxsize=1)
+def _shared_vocabulary() -> tuple[object, dict] | None:
+    normalizer_path = os.getenv("LABELLING_NORMALIZATION_FILE")
+    vocabulary_path = os.getenv("LABELLING_VOCABULARY_FILE")
+    if not normalizer_path or not vocabulary_path:
+        return None
+    module_spec = importlib.util.spec_from_file_location("labelling_shared_normalization", normalizer_path)
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError(f"cannot load shared normalization module: {normalizer_path}")
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    return module, json.loads(Path(vocabulary_path).read_text())
+
+
+def canonical_triple_key(
+    value: Triple | Mapping[str, object], question_id: str | None = None,
+) -> tuple[str, str, str]:
     if isinstance(value, Triple):
         subject, predicate, object_ = value.s, value.p, value.o
     else:
         subject, predicate, object_ = value.get("s", ""), value.get("p", ""), value.get("o", "")
+    shared = _shared_vocabulary()
+    if question_id and shared:
+        module, vocabulary = shared
+        if question_id in vocabulary.get("question_texts", {}):
+            if vocabulary.get("status") != "frozen":
+                raise RuntimeError("freeze the corpus_10 answer vocabulary before scoring")
+            return module.canonical_triple_key(
+                {"s": subject, "p": predicate, "o": object_}, question_id, vocabulary
+            )
+    elif question_id and os.getenv("LABELLING_VOCABULARY_FILE"):
+        raise RuntimeError("shared corpus_10 normalization could not be loaded")
     predicate_key = _predicate_key(predicate)
     return (
         _entity_key(subject, predicate=predicate_key, position="subject"),
@@ -90,10 +124,14 @@ def canonical_triple_key(value: Triple | Mapping[str, object]) -> tuple[str, str
     )
 
 
-def score_triples(predicted: Iterable[Triple | Mapping[str, object]], gold: Iterable[Triple | Mapping[str, object]]) -> TripleScore:
+def score_triples(
+    predicted: Iterable[Triple | Mapping[str, object]],
+    gold: Iterable[Triple | Mapping[str, object]],
+    *, question_id: str | None = None,
+) -> TripleScore:
     """Score unique triples, making duplicate extraction harmless."""
-    predicted_set = {canonical_triple_key(item) for item in predicted}
-    gold_set = {canonical_triple_key(item) for item in gold}
+    predicted_set = {canonical_triple_key(item, question_id) for item in predicted}
+    gold_set = {canonical_triple_key(item, question_id) for item in gold}
     return TripleScore(len(predicted_set), len(gold_set), len(predicted_set & gold_set))
 
 
@@ -158,15 +196,20 @@ def score_claims(
 def evaluate_run(
     run: Run, gold_triples: Iterable[Triple | Mapping[str, object]],
     gold_claims: Iterable[ClaimSubgraph | Mapping[str, object]] | None = None,
+    *, question_id: str | None = None,
 ) -> dict:
     """Evaluate every reading and the selected reading without mutating the run."""
     gold = list(gold_triples)
     claim_gold = list(gold_claims) if gold_claims is not None else None
-    gold_keys = {canonical_triple_key(item) for item in gold}
+    shared = _shared_vocabulary()
+    if question_id is None and shared:
+        module, vocabulary = shared
+        question_id = module.question_id_for_text(run.question, vocabulary)
+    gold_keys = {canonical_triple_key(item, question_id) for item in gold}
     rows = []
     for index, reading in enumerate(run.readings):
-        score = score_triples(reading.triples, gold)
-        predicted_keys = {canonical_triple_key(item) for item in reading.triples}
+        score = score_triples(reading.triples, gold, question_id=question_id)
+        predicted_keys = {canonical_triple_key(item, question_id) for item in reading.triples}
         supported = sum(bool(item.source.strip() and item.evidence.strip()) for item in reading.triples)
         answer_sources = set(re.findall(r"\[([^\]]+)\]", reading.answer))
         declared_sources = {part.strip() for group in answer_sources for part in group.split(",")}
