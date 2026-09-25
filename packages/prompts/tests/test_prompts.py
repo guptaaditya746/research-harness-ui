@@ -40,7 +40,7 @@ def test_v1_matches_the_prompt_sent_before_templating(name: str) -> None:
 
 def test_both_sets_define_the_same_prompts() -> None:
     assert set(names("v1")) == set(names("v2"))
-    assert len(names("v1")) == 18
+    assert len(names("v1")) == 19
 
 
 @pytest.mark.parametrize("name", names("v2"))

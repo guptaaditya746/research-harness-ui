@@ -3,14 +3,18 @@
 One run, after the user has picked a concept reading:
 
 1. ``_check_heavy_load``: defer when the agent itself runs on a saturated Heavy.
-2. ``_mcp_research``: the agent (Lite) researches with the corpus MCP tools and
-   returns a JSON decision naming the evidence it found.
-3. ``_select_seeds``: keep only evidence ids the agent actually observed, recover
-   passages when the decision failed, and cap them (``HARNESS_AGENTIC_MAX_MCP_SEEDS``).
-4. ``_run_shared_pipeline``: the baseline pipeline (Heavy) runs with those seeds.
-5. ``_review_decision``: validate the decision, run the independent verifier and,
+2. ``_mcp_research``: the agent (Lite) researches with the corpus MCP tools, records
+   findings (``record_finding``) and returns a JSON decision naming the evidence it found.
+3. ``_collect_findings``: evidence the session observed and the agent's validated findings.
+4. ``_read_papers``: parallel paper readers (``readers``) add findings for the papers with
+   the most evidence (``HARNESS_SUBAGENT_READERS``).
+5. ``_select_seeds``: one passage per finding first, then other observed evidence, capped
+   (``HARNESS_AGENTIC_MAX_MCP_SEEDS``); recover passages when the decision failed.
+6. ``_run_shared_pipeline``: the baseline pipeline (Heavy) runs with those seeds and the
+   findings as unverified notes.
+7. ``_review_decision``: validate the decision, run the independent verifier and,
    when the agent only confirmed preliminary claims, narrow the answer to them.
-6. ``_assemble``: checks, run record and artifacts.
+8. ``_assemble``: checks, run record and artifacts.
 
 Everything the steps share lives on one ``_Session`` object.
 """
@@ -32,10 +36,11 @@ from .evidence import evidence_ids
 from .load import heavy_queue_depth
 from .mcp import MCPToolClient, MCPUnavailable, validate_findings
 from .proposal import ConceptProposalStep
+from .readers import choose_papers, run_readers
 from .verification import independent_verification
 
 # Bookkeeping records in tool_calls that are not corpus research.
-NON_CORPUS_RECORDS = {"load_skill", "context_checkpoint", "mcp_session", "record_finding"}
+NON_CORPUS_RECORDS = {"load_skill", "context_checkpoint", "mcp_session", "record_finding", "paper_reader"}
 
 _TOOL_ACTIONS = {
     "search_evidence": "Searching corpus evidence",
@@ -46,6 +51,7 @@ _TOOL_ACTIONS = {
     "evidence_for_claim": "Verifying claim context",
     "load_skill": "Loading research skill",
     "record_finding": "Recording a finding",
+    "paper_reader": "Reading a paper in parallel",
     "context_checkpoint": "Context checkpoint",
 }
 
@@ -128,6 +134,9 @@ class AgenticResearch(ConceptProposalStep):
             self._mcp_research(session)
         if not session.heavy_busy and not session.agent_decision and not session.mcp_error:
             session.mcp_error = "agent_returned_no_research_decision"
+        self._collect_findings(session)
+        if not session.heavy_busy:
+            self._read_papers(session)
         self._select_seeds(session)
         self._run_shared_pipeline(session)
         self._review_decision(session)
@@ -218,7 +227,7 @@ class AgenticResearch(ConceptProposalStep):
             self._trace(session, TraceRow(atS=session.elapsed(), action="MCP unavailable",
                                           returned=str(exc)))
 
-    def _select_seeds(self, session: _Session) -> None:
+    def _collect_findings(self, session: _Session) -> None:
         session.corpus_calls = [item for item in session.tool_calls
                                 if item["tool"] not in NON_CORPUS_RECORDS]
         # Only IDs the agent actually saw in this session (tool results and the
@@ -230,10 +239,55 @@ class AgenticResearch(ConceptProposalStep):
             raw = [*session.notes, *(session.agent_decision.get("findings") or []
                                      if isinstance(session.agent_decision.get("findings"), list) else [])]
             findings, _ = validate_findings(raw, session.observed)
-            unique: dict[str, dict] = {}
-            for finding in findings:
-                unique.setdefault(" ".join(finding["statement"].casefold().split()), finding)
-            session.findings = list(unique.values())
+            session.findings = self._unique_findings(findings)
+
+    @staticmethod
+    def _unique_findings(findings: list[dict]) -> list[dict]:
+        unique: dict[str, dict] = {}
+        for finding in findings:
+            unique.setdefault(" ".join(finding["statement"].casefold().split()), finding)
+        return list(unique.values())
+
+    def _read_papers(self, session: _Session) -> None:
+        """Parallel paper readers on the agent model (see ``readers``)."""
+        config = settings()
+        corpus = getattr(self.baseline, "corpus", None)
+        if (config.subagent_readers <= 0 or config.agent_handoff != "findings" or corpus is None
+                or not callable(getattr(self.agent_model, "complete_json", None))):
+            return
+        weighted = [(value, 3) for finding in session.findings for value in finding["evidence_ids"]]
+        supplied = session.agent_decision.get("additional_evidence_ids")
+        weighted += [(str(value), 2) for value in supplied or [] if isinstance(supplied, list)
+                     and str(value) in session.observed]
+        weighted += [(value, 1) for value in session.observed]
+        papers = choose_papers(corpus, session.question, weighted, config.subagent_readers)
+        if not papers:
+            return
+        started = session.elapsed()
+        results = run_readers(self.agent_model, corpus, session.question, session.concept_input, papers,
+                              max(1, config.subagent_passages))
+        added: list[dict] = []
+        for result in results:
+            # The passages a reader was shown count as observed in this session.
+            session.observed.update(result.passage_ids)
+            added.extend({**finding, "source": f"reader:{result.paper_id}"} for finding in result.findings)
+            self._tool_sink(session, {
+                "call_id": f"reader-{result.paper_id}", "agent": f"reader:{result.paper_id}",
+                "tool": "paper_reader", "arguments": {"paper_id": result.paper_id},
+                "result": {"passage_ids": result.passage_ids, "findings": result.findings},
+                "result_count": len(result.findings), "duration_ms": result.duration_ms,
+                "status": "error" if result.error else "ok", **({"error": result.error} if result.error else {}),
+                "purpose": "Read one paper's top passages in parallel and report findings.",
+                "expected_evidence_type": "research_note",
+            })
+        session.findings = self._unique_findings([*session.findings, *added])
+        session.agent_checks.append(Check(
+            name="paper readers", status="pass" if added else "info",
+            detail=f"{len(papers)} papers read in parallel in {session.elapsed() - started:.1f}s; "
+                   f"{len(added)} findings",
+        ))
+
+    def _select_seeds(self, session: _Session) -> None:
         if session.mcp_error and session.corpus_calls:
             self._recover_passages(session)
         supplied_ids = session.agent_decision.get("additional_evidence_ids")

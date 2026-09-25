@@ -104,6 +104,9 @@ class Settings(BaseSettings):
     agent_max_tool_calls: int = Field(12, validation_alias=_env("HARNESS_AGENT_MAX_TOOL_CALLS"))
     agent_keep_results: int = Field(3, validation_alias=_env("HARNESS_AGENT_KEEP_RESULTS"))
     agent_summary_compaction: bool = Field(True, validation_alias=_env("HARNESS_AGENT_SUMMARY_COMPACTION"))
+    # Parallel paper readers after the supervisor's research (Phase 3d); 0 = off.
+    subagent_readers: int = Field(3, validation_alias=_env("HARNESS_SUBAGENT_READERS"))
+    subagent_passages: int = Field(6, validation_alias=_env("HARNESS_SUBAGENT_PASSAGES"))
     agent_first_tool_choice: Literal["auto", "required"] = Field(
         "required", validation_alias=_env("HARNESS_AGENT_FIRST_TOOL_CHOICE"))
     mcp_agent_timeout_s: float = Field(90, validation_alias=_env("HARNESS_MCP_AGENT_TIMEOUT_S"))
