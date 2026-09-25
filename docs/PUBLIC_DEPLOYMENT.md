@@ -2,6 +2,12 @@
 
 No Pages deployment or Tunnel is created by this change. A public hostname and Tunnel require prior approval under university/cluster policy.
 
+## Temporary no-domain preview
+
+For an interactive temporary preview without a custom domain, create a free Turnstile widget in Cloudflare first, then run `./scripts/public-preview.sh` from the repository root on the Slurm node. The script prompts for the site key and (hidden) secret if they are not already exported, creates a fresh local identity salt, builds the public frontend, and starts MCP, the private API, and the public gateway. The public gateway serves both the static UI and its narrow API on `127.0.0.1:8787`; private API and MCP remain on loopback. Press Ctrl-C to stop the processes.
+
+Point a Cloudflare Quick Tunnel at **only** `http://127.0.0.1:8787`. Open the generated `trycloudflare.com` URL to use the site. Quick Tunnel URLs are temporary and change after restart. Quick Tunnels are for testing, do not provide an uptime guarantee, and do not support SSE; this UI polls run state as a fallback. No Cloudflare login or custom domain is needed for a Quick Tunnel. Do not use the development Turnstile bypass for an internet-facing preview.
+
 ## Build and launch
 
 From repository root, install workspace dependencies, then build the public bundle:

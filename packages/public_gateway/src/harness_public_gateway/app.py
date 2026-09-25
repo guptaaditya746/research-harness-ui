@@ -21,6 +21,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
@@ -961,6 +962,30 @@ def create_app(
                 await asyncio.sleep(1)
 
         return StreamingResponse(stream(), media_type="text/event-stream")
+
+    # Optional same-origin preview mode: the Tunnel targets this gateway only,
+    # which serves the public bundle and its narrowly scoped API together.
+    # Private API/MCP ports remain loopback-only and are never mounted here.
+    if os.getenv("PUBLIC_SERVE_FRONTEND", "false").lower() == "true":
+        frontend = Path(__file__).resolve().parents[4] / "web" / "dist"
+        if not (frontend / "index.html").is_file():
+            raise RuntimeError("public frontend build is missing")
+        app.mount("/", StaticFiles(directory=frontend, html=True), name="public-frontend")
+
+        @app.middleware("http")
+        async def public_security_headers(request: Request, call_next):
+            response = await call_next(request)
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self' https://challenges.cloudflare.com; "
+                "frame-src https://challenges.cloudflare.com; connect-src 'self' "
+                "https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; "
+                "img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'self'; "
+                "form-action 'self'; frame-ancestors 'none'"
+            )
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+            return response
 
     return app
 
