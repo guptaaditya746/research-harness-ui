@@ -91,6 +91,8 @@ class Settings(BaseSettings):
     retrieval_mode: Literal["lexical", "hybrid"] = Field("lexical", validation_alias=_env("HARNESS_RETRIEVAL_MODE"))
     agentic_max_passages: int = Field(12, validation_alias=_env("HARNESS_AGENTIC_MAX_PASSAGES"))
     agentic_max_mcp_seeds: int = Field(6, validation_alias=_env("HARNESS_AGENTIC_MAX_MCP_SEEDS"))
+    # What the agent hands to the pipeline: its findings (statements + evidence ids) or only ids.
+    agent_handoff: Literal["findings", "ids"] = Field("findings", validation_alias=_env("HARNESS_AGENT_HANDOFF"))
 
     # ─── Agent loop ──────────────────────────────────────────────────────────
     agent_context_tokens: int | None = Field(

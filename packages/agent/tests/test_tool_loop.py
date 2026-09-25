@@ -92,6 +92,7 @@ def run_loop(monkeypatch, script: list[dict]) -> tuple[str, FakeSession, list[di
     records: list[dict] = []
     model = SimpleNamespace(model="granite", base_url="http://model", api_key="k", timeout_s=30)
     client = MCPToolClient(records.append)
+    run_loop.client = client
     answer = client.run_agent(model, "Which paper introduced VPP?", {
         "answer_source": "research",
         "preliminary_claims": [{"id": "c1", "kind": "MetadataClaim", "paper_id": "p4", "fields": {}, "source_ids": ["p4-metadata"]}],
@@ -154,3 +155,42 @@ def test_a_stop_inside_the_mcp_session_reaches_the_runtime() -> None:
     group = BaseExceptionGroup("task group", [ValueError("x"), BaseExceptionGroup("inner", [stop])])
     assert _first_non_exception(group) is stop
     assert _first_non_exception(ExceptionGroup("only errors", [ValueError("x")])) is None
+
+
+def test_findings_are_kept_by_the_client_and_invented_ids_removed(monkeypatch) -> None:
+    decision = {"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"], "reasoning_summary": "done",
+                "findings": [{"statement": "VPP is introduced in p4.", "evidence_ids": ["p4-intro"]}]}
+    answer, session, records = run_loop(monkeypatch, [
+        tool_call("search_evidence", {"query": "VPP"}),
+        tool_call("record_finding", {"statement": "VPP is introduced in p4.",
+                                     "evidence_ids": ["p4-intro", "p99-invented"]}, "call-2"),
+        tool_call("record_finding", {"statement": "Nothing to cite.", "evidence_ids": ["p77"]}, "call-3"),
+        final(decision),
+    ])
+    assert json.loads(answer) == decision
+    assert [name for name, _ in session.calls] == ["search_evidence"]      # answered locally, not by MCP
+    assert run_loop.client.notes == [{"id": "F1", "statement": "VPP is introduced in p4.",
+                                      "evidence_ids": ["p4-intro"]}]
+    finding_records = [record for record in records if record["tool"] == "record_finding"]
+    assert [record["status"] for record in finding_records] == ["ok", "error"]
+    assert finding_records[0]["result"]["dropped_ids"] == ["p99-invented"]
+    assert "record_finding" in [tool["function"]["name"] for tool in ScriptedModelClient.bodies[-1]["tools"]]
+
+
+def test_findings_citing_unseen_ids_are_sent_back(monkeypatch) -> None:
+    from harness_agent.mcp import decision_problems
+
+    problems = decision_problems(
+        json.dumps({"verified_claim_ids": [], "additional_evidence_ids": [], "reasoning_summary": "x",
+                    "findings": [{"statement": "s", "evidence_ids": ["p99"]}]}),
+        observed={"p4-intro"}, claim_ids=set(), corpus_calls=1, needs_tools=True)
+    assert problems == ["finding 1 cites no id returned by a tool in this session"]
+
+
+def test_ids_only_handoff_offers_no_scratchpad(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_AGENT_HANDOFF", "ids")
+    ScriptedModelClient.bodies = []
+    run_loop(monkeypatch, [tool_call("search_evidence", {"query": "VPP"}),
+                           final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"],
+                                  "reasoning_summary": "ok"})])
+    assert "record_finding" not in [tool["function"]["name"] for tool in ScriptedModelClient.bodies[0]["tools"]]

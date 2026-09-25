@@ -35,6 +35,7 @@ def _intent(name: str) -> tuple[str, str]:
         "facts": "canonical_metadata", "citations": "citation_fact", "search": "passage",
         "passages": "passage", "tables": "table_cell", "rank_evidence": "ranked_passage",
         "prior_triples": "claim_subgraph", "related": "related_entity",
+        "record_finding": "research_note",
     }.get(name, "corpus_evidence")
     return (f"Collect {evidence_type.replace('_', ' ')} relevant to the active research question.", evidence_type)
 
@@ -66,6 +67,46 @@ def _tool_payload(result: Any) -> Any:
 
 
 DECISION_KEYS = ("verified_claim_ids", "additional_evidence_ids", "reasoning_summary")
+FINDING_TOOL = "record_finding"
+# A tool the client answers itself (no MCP round trip): the agent's scratchpad.
+FINDING_TOOL_SPEC = {
+    "type": "function",
+    "function": {
+        "name": FINDING_TOOL,
+        "description": (
+            "Save one finding to your research notes: a short statement of what the evidence shows and the "
+            "evidence ids (returned by tools in this session) that support it. Notes are kept when older tool "
+            "results are removed from the conversation, and they are handed to the answer pipeline. Record a "
+            "finding as soon as you have read the evidence for it."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "statement": {"type": "string", "description": "One or two sentences, specific (names, numbers)."},
+                "evidence_ids": {"type": "array", "items": {"type": "string"},
+                                 "description": "Passage, fact or reference ids a tool returned."},
+            },
+            "required": ["statement", "evidence_ids"],
+        },
+    },
+}
+
+
+def validate_findings(raw: object, observed: set[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Findings with at least one observed id (unobserved ids removed), and the problems found."""
+    findings: list[dict[str, Any]] = []
+    problems: list[str] = []
+    for index, item in enumerate(raw if isinstance(raw, list) else []):
+        if not isinstance(item, dict) or not str(item.get("statement") or "").strip():
+            problems.append(f"finding {index + 1} needs a statement")
+            continue
+        ids = [str(value) for value in item.get("evidence_ids") or [] if isinstance(value, str | int)]
+        kept = [value for value in ids if value in observed]
+        if not kept:
+            problems.append(f"finding {index + 1} cites no id returned by a tool in this session")
+            continue
+        findings.append({"statement": str(item["statement"]).strip()[:400], "evidence_ids": kept[:8]})
+    return findings, problems
 
 
 def decision_problems(
@@ -103,6 +144,11 @@ def decision_problems(
         )
     if needs_tools and corpus_calls == 0:
         problems.append("no corpus tool was called; gather evidence with at least one tool call before deciding")
+    if "findings" in decision:
+        if not isinstance(decision["findings"], list):
+            problems.append("findings must be a list of {statement, evidence_ids} (use [] when empty)")
+        else:
+            problems.extend(validate_findings(decision["findings"], observed)[1])
     return problems
 
 
@@ -141,6 +187,8 @@ class MCPToolClient:
         self.sink = sink or (lambda _: None)
         self.agent = agent
         self._counter = 0
+        # The agent's findings, kept even when the loop ends early (timeout, Stop).
+        self.notes: list[dict[str, Any]] = []
 
     async def _call_async(self, name: str, arguments: dict[str, Any]) -> Any:
         async with streamablehttp_client(
@@ -188,6 +236,9 @@ class MCPToolClient:
                 for item in listed.tools
             ]
             ledger = ResearchLedger(question=question)
+            ledger.notes = self.notes
+            if settings().agent_handoff == "findings":
+                tools.append(FINDING_TOOL_SPEC)
             loaded_skills = relevant(question)
             for skill in loaded_skills:
                 self._counter += 1
@@ -205,6 +256,7 @@ class MCPToolClient:
                 loaded_skills="; ".join(
                     f"{skill.name}@{skill.version}: {skill.instructions}" for skill in loaded_skills),
                 skills=loaded_skills,
+                findings_tool=settings().agent_handoff == "findings",
             )
             self.prompt_ref = supervisor.ref
             fixed: list[dict[str, Any]] = [
@@ -214,7 +266,7 @@ class MCPToolClient:
             conversation = Conversation(fixed, grounded=grounded_context or None)
             # Priority order: the evidence tools the supervisor is told to prefer,
             # then the specialist tools, which are dropped first when space is short.
-            core_names = ["search_evidence", "read_evidence", "structured_facts", "aggregate_facts",
+            core_names = ["search_evidence", "read_evidence", FINDING_TOOL, "structured_facts", "aggregate_facts",
                           "metadata_table", "citations", "evidence_for_claim"]
             tools.sort(key=lambda tool: (
                 core_names.index(tool["function"]["name"])
@@ -374,9 +426,24 @@ class MCPToolClient:
                             status = "error"
                             error = result["error"]
                         else:
-                            repeat = ledger.repeat_of(name, arguments)
+                            repeat = ledger.repeat_of(name, arguments) if name != FINDING_TOOL else None
                         if error:
                             pass
+                        elif name == FINDING_TOOL:
+                            observed_now = shown_ids | ledger.evidence_ids
+                            kept, finding_problems = validate_findings([arguments], observed_now)
+                            if kept:
+                                note = ledger.add_note(kept[0]["statement"], kept[0]["evidence_ids"])
+                                dropped = [str(v) for v in arguments.get("evidence_ids") or []
+                                           if str(v) not in observed_now]
+                                result = {"recorded": note["id"], "notes_so_far": len(ledger.notes)}
+                                if dropped:
+                                    result["dropped_ids"] = dropped
+                                    result["note"] = "ids never returned by a tool were removed"
+                            else:
+                                result = {"error": "; ".join(finding_problems) or "invalid finding"}
+                                status = "error"
+                                error = result["error"]
                         elif repeat is not None:
                             # The same call again returns the same data; answer
                             # from the ledger and say so, instead of looping.
@@ -422,7 +489,7 @@ class MCPToolClient:
                             else "returned" if record["result_count"] is None
                             else f"{record['result_count']} results"
                         ) + f" · {record['duration_ms']:.0f} ms")
-                        if status != "repeat":
+                        if status != "repeat" and name != FINDING_TOOL:
                             ledger.record(name, result, record["purpose"], arguments=arguments,
                                           call_id=record["call_id"])
                         tool_messages.append({
@@ -556,4 +623,4 @@ def tool_preview(result: Any) -> str:
     return text if len(text) <= 500 else text[:500] + "…"
 
 
-__all__ = ["MCPToolClient", "MCPUnavailable", "tool_preview"]
+__all__ = ["FINDING_TOOL", "MCPToolClient", "MCPUnavailable", "tool_preview", "validate_findings"]

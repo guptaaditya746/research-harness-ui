@@ -83,6 +83,14 @@ class ResearchLedger:
     per_paper_calls: dict[str, set[str]] = field(default_factory=lambda: defaultdict(set))
     hinted: bool = False
     repeats: int = 0
+    # The agent's own notes (record_finding): statements with the evidence ids behind them.
+    notes: list[dict[str, Any]] = field(default_factory=list)
+
+    def add_note(self, statement: str, evidence_ids: list[str]) -> dict[str, Any]:
+        note = {"id": f"F{len(self.notes) + 1}", "statement": statement.strip()[:400],
+                "evidence_ids": list(dict.fromkeys(evidence_ids))[:8]}
+        self.notes.append(note)
+        return note
 
     def record(self, tool: str, result: Any, purpose: str, *,
                arguments: dict[str, Any] | None = None, call_id: str | None = None) -> None:
@@ -163,6 +171,7 @@ class ResearchLedger:
         return json.dumps({
             "question": self.question,
             "tool_calls_so_far": self.tool_calls,
+            "your_findings": self.notes,
             "found": self.digests[-DIGESTS_KEPT:],
             "unresolved": self.unresolved,
             "evidence_ids": sorted(self.evidence_ids),

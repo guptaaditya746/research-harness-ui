@@ -77,6 +77,8 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         self.claim_lookup = claim_lookup
         self.relation_proposer = relation_proposer
         self.seed_passage_ids = seed_passage_ids or []
+        # Findings the agentic path hands over (statements + evidence ids); see _research_question.
+        self.agent_findings: list[dict[str, Any]] = []
         self.max_passages = max_passages
         self.started = 0.0
         self.trace: list[TraceRow] = []
@@ -89,15 +91,26 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         self.graph = self._graph()
 
     @staticmethod
-    def _research_question(state: BaselineState) -> str:
-        """The question as given to models, with the chosen interpretation attached."""
+    def _research_question(state: BaselineState, *, notes: bool = False) -> str:
+        """The question as given to models, with the chosen interpretation attached.
+
+        With ``notes``, the agent's findings are appended as unverified research notes (schema
+        inference and answer composition use them; extraction does not, so every triple still
+        comes from a passage).
+        """
+        text = state["question"]
         concept = state.get("concept")
-        if not concept:
-            return state["question"]
-        return (
-            f"{state['question']}\n\nResearch interpretation chosen by the user: "
-            f"{concept.get('label', '')}: {concept.get('gloss', '')}"
-        )
+        if concept:
+            text += (
+                "\n\nResearch interpretation chosen by the user: "
+                f"{concept.get('label', '')}: {concept.get('gloss', '')}"
+            )
+        findings = state.get("agent_findings") or []
+        if notes and findings:
+            text += "\n\nResearch notes from the agent (unverified; use a note only where the passages support it):\n" + (
+                "\n".join(f"- {item['statement']} [{', '.join(item['evidence_ids'])}]" for item in findings)
+            )
+        return text
 
     def _check(self, name: str, status: str, detail: str = "") -> None:
         """Record one stage's outcome (pass/warn/fail/skipped) for the run's checks."""
@@ -198,7 +211,7 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
             else:
                 state = self.graph.invoke({
                     "question": question, "concept": self.concept, "plan": plan,
-                    "paper_ids": papers, "computed": [],
+                    "paper_ids": papers, "computed": [], "agent_findings": list(self.agent_findings),
                 })
             self.stage = "triple provenance"
             run, artifacts = self._success(run_id, started_at, question, budget, state)

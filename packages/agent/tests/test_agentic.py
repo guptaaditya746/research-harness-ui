@@ -249,7 +249,7 @@ def test_agent_evidence_ids_must_have_been_observed_in_the_session(monkeypatch) 
     assert verification["agent_evidence_ids"] == {
         "supplied": ["p4-intro", "p99-invented"], "observed_in_session": ["p4-intro"],
         "rejected_unobserved": ["p99-invented"],
-        "used_for_retrieval": ["p4-intro"], "used_for_verification": ["p4-intro"],
+        "used_for_retrieval": ["p4-intro"], "used_for_verification": ["p4-intro"], "findings": [],
     }
     assert verification["triple_provenance"]["verified"] is True
     assert verification["agentic_execution"]["reason"] is None
@@ -385,3 +385,47 @@ def test_research_starts_from_the_reading_s_supporting_passages() -> None:
     assert context["concept_evidence"] == [
         {"passage_id": "p1-a", "paper_id": "p1", "excerpt": "SafeRAG tests attack tasks such as silver noise."}]
     assert "p1-a" in runner._evidence_ids(context)
+
+
+class CorpusWithPassages:
+    def __init__(self, ids: list[str]) -> None:
+        self.by_passage = {pid: {"passage_id": pid, "paper_id": pid.split("-")[0], "text": pid} for pid in ids}
+
+    def paper_title(self, paper_id: str) -> str:
+        return paper_id
+
+
+def test_findings_reach_the_pipeline_one_passage_per_finding_first(monkeypatch) -> None:
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+    monkeypatch.setenv("HARNESS_AGENTIC_MAX_MCP_SEEDS", "3")
+    ids = ["p1-a", "p1-b", "p1-c", "p2-a", "p3-a"]
+
+    class FindingBaseline(StubBaseline):
+        def __init__(self):
+            self.seed_passage_ids = []
+            self.agent_findings = []
+            self.corpus = CorpusWithPassages(ids)
+
+        def run(self, question, budget, run_id, concept=None):
+            self.seen = (list(self.seed_passage_ids), list(self.agent_findings))
+            return super().run(question, budget, run_id, concept=concept)
+
+    def run_agent(self, model, question, grounded_context):
+        self.sink({"call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+                   "arguments": {"query": "q"}, "status": "ok", "duration_ms": 1.0, "result_count": 5,
+                   "result": {"items": [{"passage_id": pid} for pid in ids]}})
+        # Recorded during research with the scratchpad tool, then one more in the final decision.
+        self.notes.append({"id": "F1", "statement": "SafeRAG tests four attacks.", "evidence_ids": ["p1-b", "p1-c"]})
+        return json.dumps({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a", "p2-a"],
+                           "reasoning_summary": "found",
+                           "findings": [{"statement": "HydraRAG verifies sources.", "evidence_ids": ["p3-a", "p9-x"]}]})
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    baseline = FindingBaseline()
+    result = AgenticResearch(baseline, agent_model=HighModel()).run("Compare them.", "slow", "r-f", concept=CONCEPT)
+    seeds, findings = baseline.seen
+    assert seeds == ["p1-b", "p3-a", "p2-a"]            # one per finding first, then another paper
+    assert [item["evidence_ids"] for item in findings] == [["p1-b", "p1-c"], ["p3-a"]]
+    assert baseline.agent_findings == [] and baseline.seed_passage_ids == []   # restored after the run
+    ledger = json.loads(result["artifacts"]["research_ledger.json"])
+    assert [item["statement"] for item in ledger["findings"]] == ["SafeRAG tests four attacks.", "HydraRAG verifies sources."]

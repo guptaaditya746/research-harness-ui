@@ -30,12 +30,12 @@ from harness_schema.models import Check, ConceptChoice, Run, TraceRow, required_
 
 from .evidence import evidence_ids
 from .load import heavy_queue_depth
-from .mcp import MCPToolClient, MCPUnavailable
+from .mcp import MCPToolClient, MCPUnavailable, validate_findings
 from .proposal import ConceptProposalStep
 from .verification import independent_verification
 
 # Bookkeeping records in tool_calls that are not corpus research.
-NON_CORPUS_RECORDS = {"load_skill", "context_checkpoint", "mcp_session"}
+NON_CORPUS_RECORDS = {"load_skill", "context_checkpoint", "mcp_session", "record_finding"}
 
 _TOOL_ACTIONS = {
     "search_evidence": "Searching corpus evidence",
@@ -45,6 +45,7 @@ _TOOL_ACTIONS = {
     "tables": "Inspecting table evidence",
     "evidence_for_claim": "Verifying claim context",
     "load_skill": "Loading research skill",
+    "record_finding": "Recording a finding",
     "context_checkpoint": "Context checkpoint",
 }
 
@@ -72,6 +73,8 @@ class _Session:
     corpus_calls: list[dict] = field(default_factory=list)
     observed: set[str] = field(default_factory=set)
     selected_ids: list[str] = field(default_factory=list)
+    notes: list[dict] = field(default_factory=list)
+    findings: list[dict] = field(default_factory=list)
     evidence_limit: int = 6
     used_for_verification: list[str] = field(default_factory=list)
     baseline_started_s: float = 0.0
@@ -190,6 +193,8 @@ class AgenticResearch(ConceptProposalStep):
 
     def _mcp_research(self, session: _Session) -> None:
         mcp = MCPToolClient(lambda record: self._tool_sink(session, record), agent="supervisor")
+        # The same list the tool loop appends to: findings survive a timeout or a failed decision.
+        session.notes = mcp.notes
         try:
             grounded_context = self._grounded_context(None, session.concept_input)
             session.shown_ids = self._evidence_ids(grounded_context)
@@ -221,6 +226,14 @@ class AgenticResearch(ConceptProposalStep):
         # in the corpus is not enough.
         session.observed = session.shown_ids.union(
             *(self._evidence_ids(item.get("result")) for item in session.corpus_calls))
+        if settings().agent_handoff == "findings":
+            raw = [*session.notes, *(session.agent_decision.get("findings") or []
+                                     if isinstance(session.agent_decision.get("findings"), list) else [])]
+            findings, _ = validate_findings(raw, session.observed)
+            unique: dict[str, dict] = {}
+            for finding in findings:
+                unique.setdefault(" ".join(finding["statement"].casefold().split()), finding)
+            session.findings = list(unique.values())
         if session.mcp_error and session.corpus_calls:
             self._recover_passages(session)
         supplied_ids = session.agent_decision.get("additional_evidence_ids")
@@ -229,18 +242,22 @@ class AgenticResearch(ConceptProposalStep):
             [str(item) for item in supplied_ids if str(item) in session.observed]
             if isinstance(supplied_ids, list) else []
         )
-        selected_ids = list(dict.fromkeys(selected_ids))
+        # One passage per finding first, so every finding reaches the pipeline, then the rest.
+        finding_first = [finding["evidence_ids"][0] for finding in session.findings]
+        finding_rest = [value for finding in session.findings for value in finding["evidence_ids"][1:]]
+        selected_ids = list(dict.fromkeys([*finding_first, *finding_rest, *selected_ids]))
         corpus_passages = getattr(getattr(self.baseline, "corpus", None), "by_passage", None)
         if corpus_passages is not None:
             selected_ids = [item for item in selected_ids if item in corpus_passages]
+            priority = [item for item in dict.fromkeys(finding_first) if item in corpus_passages]
             diverse = []
-            seen_papers = set()
+            seen_papers = {str(corpus_passages[source_id]["paper_id"]) for source_id in priority}
             for source_id in selected_ids:
                 paper_id = str(corpus_passages[source_id]["paper_id"])
                 if paper_id not in seen_papers:
                     diverse.append(source_id)
                     seen_papers.add(paper_id)
-            selected_ids = list(dict.fromkeys([*diverse, *selected_ids]))
+            selected_ids = list(dict.fromkeys([*priority, *diverse, *selected_ids]))
         deferred_ids = max(0, len(selected_ids) - session.evidence_limit)
         session.selected_ids = selected_ids[:session.evidence_limit]
         if deferred_ids:
@@ -251,7 +268,8 @@ class AgenticResearch(ConceptProposalStep):
         session.agent_checks.append(Check(
             name="agent passage seeds",
             status="pass" if session.selected_ids else "skipped",
-            detail=f"{len(session.selected_ids)} MCP passage IDs supplied before retrieval",
+            detail=f"{len(session.selected_ids)} MCP passage IDs supplied before retrieval"
+            + (f"; {len(session.findings)} findings handed over" if session.findings else ""),
         ))
 
     def _recover_passages(self, session: _Session) -> None:
@@ -261,7 +279,8 @@ class AgenticResearch(ConceptProposalStep):
         so a timeout or malformed final answer does not waste research already
         gathered before schema inference.
         """
-        recovered: list[str] = []
+        # Evidence the agent already wrote findings about comes first.
+        recovered: list[str] = [value for finding in session.findings for value in finding["evidence_ids"]][:12]
 
         def passage_ids(value: object) -> list[str]:
             if isinstance(value, dict):
@@ -293,8 +312,11 @@ class AgenticResearch(ConceptProposalStep):
 
     def _run_shared_pipeline(self, session: _Session) -> None:
         previous_seed_ids = list(getattr(self.baseline, "seed_passage_ids", []))
+        previous_findings = list(getattr(self.baseline, "agent_findings", []))
         if hasattr(self.baseline, "seed_passage_ids"):
             self.baseline.seed_passage_ids = list(dict.fromkeys([*previous_seed_ids, *session.selected_ids]))
+        if hasattr(self.baseline, "agent_findings"):
+            self.baseline.agent_findings = list(session.findings)
         session.baseline_started_s = monotonic() - session.started
         original_trace_sink = getattr(self.baseline, "trace_sink", None)
         if callable(original_trace_sink):
@@ -308,6 +330,8 @@ class AgenticResearch(ConceptProposalStep):
         finally:
             if hasattr(self.baseline, "seed_passage_ids"):
                 self.baseline.seed_passage_ids = previous_seed_ids
+            if hasattr(self.baseline, "agent_findings"):
+                self.baseline.agent_findings = previous_findings
             if callable(original_trace_sink):
                 self.baseline.trace_sink = original_trace_sink
         session.base_run = session.result["run"]
@@ -320,6 +344,14 @@ class AgenticResearch(ConceptProposalStep):
             return
         verified = decision.get("verified_claim_ids")
         supplied = decision.get("additional_evidence_ids")
+        if isinstance(supplied, list) and session.findings:
+            # Findings cite evidence too; the verifier checks those ids as well.
+            supplied = list(dict.fromkeys([*supplied, *(value for finding in session.findings
+                                                        for value in finding["evidence_ids"])]))
+            notes = "; ".join(f"{finding['statement']} [{', '.join(finding['evidence_ids'])}]"
+                              for finding in session.findings)
+            decision = {**decision, "reasoning_summary": f"{decision.get('reasoning_summary') or ''} "
+                                                         f"Findings: {notes}".strip()}
         if not isinstance(verified, list) or not isinstance(supplied, list):
             session.mcp_error = "invalid_agent_decision_shape"
             session.agent_checks.append(Check(
@@ -522,6 +554,7 @@ class AgenticResearch(ConceptProposalStep):
                 for item in tool_calls if item["tool"] not in {"context_checkpoint"}
             ],
             "evidence_ids": agent_evidence,
+            "findings": session.findings,
         }, indent=2).encode()
         artifacts["context_checkpoints.json"] = json.dumps([
             item.get("result") for item in tool_calls if item["tool"] == "context_checkpoint"
@@ -556,6 +589,7 @@ class AgenticResearch(ConceptProposalStep):
             "agent_evidence_ids": {
                 "supplied": supplied,
                 "used_for_retrieval": session.selected_ids,
+                "findings": session.findings,
                 "used_for_verification": session.used_for_verification,
                 "observed_in_session": sorted(item for item in supplied if item in session.observed),
                 "rejected_unobserved": sorted(item for item in supplied if item not in session.observed),

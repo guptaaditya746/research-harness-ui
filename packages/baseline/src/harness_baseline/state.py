@@ -24,6 +24,7 @@ TraceSink = Callable[[TraceRow], None]
 class BaselineState(TypedDict, total=False):
     question: str
     concept: dict[str, Any] | None
+    agent_findings: list[dict[str, Any]]
     plan: QueryPlan
     paper_ids: list[str]
     computed: list[dict[str, Any]]

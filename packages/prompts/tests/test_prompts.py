@@ -19,6 +19,7 @@ def _variables(name: str) -> dict:
     return {
         "agent/concept_proposal": {"minimum": 3, "maximum": 4},
         "agent/research_supervisor": {
+            "findings_tool": True,
             "skills_catalog": catalog(),
             "loaded_skills": "; ".join(f"{s.name}@{s.version}: {s.instructions}" for s in loaded),
             "skills": list(loaded),

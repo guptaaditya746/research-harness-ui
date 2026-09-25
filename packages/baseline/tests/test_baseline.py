@@ -622,3 +622,11 @@ def test_reading_support_passages_become_retrieval_candidates(tmp_path: Path) ->
     result = runner._retrieve({"question": "Unfindable zxqvterm", "plan": QueryPlan(operation="research"),
                                "paper_ids": [], "concept": concept})
     assert [passage["passage_id"] for passage in result["passages"]] == ["p4-abstract"]
+
+
+def test_agent_findings_are_unverified_notes_for_schema_and_answer_only() -> None:
+    state = {"question": "Compare SafeRAG and HydraRAG.", "concept": None,
+             "agent_findings": [{"statement": "SafeRAG is a benchmark.", "evidence_ids": ["p1-a"]}]}
+    assert Baseline20._research_question(state) == "Compare SafeRAG and HydraRAG."
+    with_notes = Baseline20._research_question(state, notes=True)
+    assert "unverified" in with_notes and "- SafeRAG is a benchmark. [p1-a]" in with_notes
