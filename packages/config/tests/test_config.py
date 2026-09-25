@@ -21,7 +21,7 @@ def _aliases() -> set[str]:
 
 
 def test_every_env_example_variable_is_a_setting() -> None:
-    variables = re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", (ROOT / ".env.example").read_text(), re.M)
+    variables = re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", (ROOT / ".env.example").read_text(), re.MULTILINE)
     unknown = [
         name for name in variables
         if name not in _aliases() and not PUBLIC_GATEWAY.match(name)
@@ -63,3 +63,20 @@ def test_model_options_are_read_per_alias(monkeypatch) -> None:
     assert settings().model_options("lite-model") == {}
     monkeypatch.setenv("HARNESS_MODEL_OPTIONS", "not json")
     assert settings().model_options("heavy-model") == {}
+
+
+def test_blank_fixture_flag_keeps_the_default_and_bad_values_name_the_variable(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setenv("HARNESS_INCLUDE_FIXTURES", "")
+    assert settings().include_fixtures is True
+    monkeypatch.setenv("HARNESS_AGENT_REFLECTIONS", "many")
+    with pytest.raises(ValueError, match="HARNESS_AGENT_REFLECTIONS"):
+        settings()
+
+
+def test_settings_are_reused_until_the_environment_changes(monkeypatch) -> None:
+    first = settings()
+    assert settings() is first
+    monkeypatch.setenv("HARNESS_MODEL_JUDGE", "other")
+    assert settings() is not first and settings().model_judge == "other"

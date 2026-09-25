@@ -16,11 +16,13 @@ has no field here.
 from __future__ import annotations
 
 import json
+import os
+import threading
 from pathlib import Path
 from typing import Any
 
 from dotenv import find_dotenv, load_dotenv
-from pydantic import AliasChoices, Field, field_validator
+from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 load_dotenv(find_dotenv(usecwd=True), override=False)
@@ -34,7 +36,7 @@ def _env(name: str, *more: str) -> Any:
 class Settings(BaseSettings):
     """Harness settings. Field names are Python-friendly; aliases are the variables."""
 
-    model_config = SettingsConfigDict(extra="ignore", case_sensitive=True, populate_by_name=True)
+    model_config = SettingsConfigDict(extra="ignore", case_sensitive=True, env_ignore_empty=True, frozen=True)
 
     # ─── Models (aliases served by LiteLLM, see thesis-llm-setup) ────────────
     model_small: str = Field("heavy-model", validation_alias=_env("HARNESS_MODEL_SMALL"))
@@ -134,11 +136,19 @@ class Settings(BaseSettings):
         """``VAR=`` in .env means "not set", not an empty string or zero."""
         return None if isinstance(value, str) and not value.strip() else value
 
-    @field_validator("include_fixtures", "model_stream", mode="before")
+    @field_validator("include_fixtures", mode="before")
     @classmethod
-    def _flag(cls, value: Any) -> Any:
+    def _on_unless_disabled(cls, value: Any) -> Any:
+        """On unless explicitly 0/false/no (the API's historical rule)."""
         if isinstance(value, str):
-            return value.strip().casefold() not in {"0", "false", "no", "off", ""}
+            return value.strip().casefold() not in {"0", "false", "no"}
+        return value
+
+    @field_validator("model_stream", mode="before")
+    @classmethod
+    def _off_unless_enabled(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip().casefold() in {"1", "true", "yes", "on"}
         return value
 
     def model_options(self, alias: str) -> dict[str, Any]:
@@ -160,16 +170,37 @@ class Settings(BaseSettings):
         HARNESS_RUN_DEADLINE_<BUDGET>_S, then the built-in default. Read
         dynamically because the variable name depends on the path.
         """
-        import os
-
         default = 300.0 if (path == "agentic" and budget == "slow") else {"fast": 300.0, "slow": 900.0}[budget]
         path_key = f"HARNESS_RUN_DEADLINE_{path.upper().replace('-', '_')}_{budget.upper()}_S"
         return float(os.environ.get(path_key, os.environ.get(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default)))
 
 
+_CACHE: tuple[dict[str, str], Settings] | None = None
+_CACHE_LOCK = threading.Lock()
+
+
 def settings() -> Settings:
-    """The current settings, read from the process environment."""
-    return Settings()
+    """The current settings, read from the process environment.
+
+    Rebuilt whenever the environment changes (so ``monkeypatch.setenv`` and
+    runtime changes take effect), otherwise reused: building ``Settings``
+    costs about a millisecond, comparing the environment a few microseconds.
+    An invalid value raises ``ValueError`` naming the variable.
+    """
+    global _CACHE
+    environment = dict(os.environ)
+    cached = _CACHE
+    if cached is not None and cached[0] == environment:
+        return cached[1]
+    try:
+        current = Settings()
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{error['loc'][0] if error['loc'] else '?'}: {error['msg']}" for error in exc.errors())
+        raise ValueError(f"invalid harness setting ({problems}); check .env and .env.example") from None
+    with _CACHE_LOCK:
+        _CACHE = (environment, current)
+    return current
 
 
 # Variables that are read outside this class on purpose.

@@ -1,9 +1,0 @@
-pyproject.toml
-src/harness_public_gateway/__init__.py
-src/harness_public_gateway/app.py
-src/harness_public_gateway.egg-info/PKG-INFO
-src/harness_public_gateway.egg-info/SOURCES.txt
-src/harness_public_gateway.egg-info/dependency_links.txt
-src/harness_public_gateway.egg-info/requires.txt
-src/harness_public_gateway.egg-info/top_level.txt
-tests/test_public_gateway.py

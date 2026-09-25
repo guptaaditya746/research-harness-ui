@@ -14,3 +14,4 @@ test-results/
 slurm/logs/*.out
 slurm/logs/*.err
 slurm/logs/grobid-service-*.log
+*.egg-info/
