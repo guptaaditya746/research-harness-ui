@@ -173,6 +173,14 @@ compute port 8000, so no separate `ssh -L` command is needed.
 
 ## Commands
 
+Coding agents and new contributors: read `AGENTS.md` first (repository map, layers,
+conventions), then `docs/ARCHITECTURE.md`.
+
+`make check` runs ruff, the package layer contracts and all Python tests; run it
+before every commit. `make runs` summarises recent runs (`show`, `compare`,
+`stats`; see `docs/RUN_ANALYSIS.md`). Prompts live in `packages/prompts`
+(`docs/PROMPTS.md`) and settings in `packages/config` (`.env.example`).
+
 `make fixtures` regenerates `web/src/generated/run.ts`, JSON Schema and the
 fixture runs from Pydantic models. `make test` runs Python tests, the TypeScript
 build, and Playwright screen checks. `make up` starts GROBID, `make ingest`
