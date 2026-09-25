@@ -477,8 +477,13 @@ class CorpusStore:
         return sorted((row for row in scored if row[1] > 0), key=lambda row: (-row[1], row[0]))
 
     def embed_query(self, query: str) -> np.ndarray | None:
-        """The query's embedding, or None when the dense index or the embedding service is unavailable."""
-        if not self.dense.available:
+        """The query's embedding, or None when dense retrieval is off or unavailable.
+
+        Dense retrieval is on only with ``HARNESS_RETRIEVAL_MODE=hybrid`` and a current index, so one
+        setting switches every ranked search (pipeline, concept evidence, ``search_evidence``, paper
+        readers) between BM25 alone and BM25 + dense.
+        """
+        if settings().retrieval_mode != "hybrid" or not self.dense.available:
             return None
         return _cached_query_embedding(query, str(self.dense.meta.get("model") or settings().model_embedding))
 
@@ -497,11 +502,15 @@ class CorpusStore:
                 timeout=30,
             )
             response.raise_for_status()
-            order = [head[int(item["index"])] for item in response.json()["results"]]
-        except (httpx.HTTPError, KeyError, ValueError, IndexError) as exc:
+            results = response.json()["results"]
+            if all("relevance_score" in item for item in results):
+                results = sorted(results, key=lambda item: -float(item["relevance_score"]))
+            order = list(dict.fromkeys(head[int(item["index"])] for item in results))
+        except (httpx.HTTPError, KeyError, ValueError, IndexError, TypeError) as exc:
             LOGGER.warning("Reranker %s unavailable (%s); keeping the fused order", model, exc)
             return None
-        return order + [pid for pid in ranked if pid not in set(order)]
+        placed = set(order)
+        return order + [pid for pid in ranked if pid not in placed]
 
     def hybrid_rank(
         self, query: str, scope: dict | None = None, passage_ids: list[str] | None = None,
@@ -522,7 +531,12 @@ class CorpusStore:
         }
         bm25 = [pid for pid, _ in self._bm25_order(query, allowed)[:FUSION_DEPTH]]
         vector = self.embed_query(query) if allowed else None
-        dense = [pid for pid, _ in self.dense.search(vector, allowed, FUSION_DEPTH)] if vector is not None else []
+        dense: list[str] = []
+        if vector is not None:
+            try:
+                dense = [pid for pid, _ in self.dense.search(vector, allowed, FUSION_DEPTH)]
+            except (ValueError, OSError) as exc:  # e.g. the embedding model changed dimension
+                LOGGER.warning("Dense search failed (%s); using BM25 only", exc)
         fused = rrf([ranking for ranking in (bm25, dense) if ranking])
         order = [pid for pid, _ in fused]
         reranked = self._rerank(query, order)
@@ -836,10 +850,24 @@ class CorpusStore:
         return paged(rows, offset, limit)
 
 
+EMBED_RETRY_S = 60.0   # after a failed query embedding, BM25 only for this long (no 20 s wait per query)
+_embedding_down_until: dict[tuple[str, str], float] = {}
+
+
 @lru_cache(maxsize=512)
+def _embed_query_cached(query: str, model: str, base_url: str) -> np.ndarray:
+    """Successful embeddings only: a failure raises, and lru_cache does not keep exceptions."""
+    del base_url  # part of the cache key only
+    return embed_texts([QUERY_INSTRUCTION + query], model=model, timeout_s=20)[0]
+
+
 def _cached_query_embedding(query: str, model: str) -> np.ndarray | None:
+    base_url = settings().litellm_base_url
+    if time.monotonic() < _embedding_down_until.get((model, base_url), 0.0):
+        return None
     try:
-        return embed_texts([QUERY_INSTRUCTION + query], model=model, timeout_s=20)[0]
-    except (httpx.HTTPError, KeyError, ValueError, IndexError) as exc:
-        LOGGER.warning("Query embedding with %s failed (%s); using BM25 only", model, exc)
+        return _embed_query_cached(query, model, base_url)
+    except (httpx.HTTPError, KeyError, ValueError, IndexError, TypeError) as exc:
+        _embedding_down_until[(model, base_url)] = time.monotonic() + EMBED_RETRY_S
+        LOGGER.warning("Query embedding with %s failed (%s); BM25 only for %.0f s", model, exc, EMBED_RETRY_S)
         return None

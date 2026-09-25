@@ -10,8 +10,11 @@
 - ``legacy``: propose from the question alone and count exact-phrase matches (which often
   found 0 passages for multi-word terms: the "0 related paragraphs" bug).
 
-``HARNESS_HIDE_UNGROUNDED_READINGS`` (default true) drops readings without any supporting
-passage, unless none has support.
+``HARNESS_HIDE_UNGROUNDED_READINGS`` (default true, ``retrieve_first`` only) drops readings without
+any supporting passage, unless none has support. Hiding runs after the minimum-count check, so
+fewer than three readings can be shown: better than readings the corpus cannot answer.
+``evidence_hits`` counts supporting passages among the top ``GROUNDING_DEPTH`` ranked ones plus the
+cited ones, not all matches in the corpus.
 """
 
 from __future__ import annotations
@@ -109,9 +112,13 @@ def _content_tokens(text: str) -> list[str]:
 
 
 def _supports(tokens: list[str], words: set[str]) -> bool:
-    """Every token appears as a word or as the stem of one ("attack" matches "attacks", "attacked")."""
+    """Every token appears as a word, a plural or singular of one ("llm" matches "llms", "tools"
+    matches "tool"), or, for longer words, the stem of one ("attack" matches "attacked")."""
     def present(token: str) -> bool:
-        if token in words:
+        variants = {token, token + "s", token + "es"}
+        if token.endswith("s") and len(token) >= 4:
+            variants.add(token[:-1])
+        if variants & words:
             return True
         stem = token[: max(4, len(token) - 2)]
         return len(token) >= 5 and any(word.startswith(stem) for word in words)
@@ -235,7 +242,8 @@ def propose_grounded(
                 _ground(concept, corpus)
         concepts.sort(key=lambda item: item.evidence_hits == 0)
         hidden: list[str] = []
-        if config.hide_ungrounded_readings and any(item.evidence_hits for item in concepts):
+        # Hiding needs ranked grounding; legacy mode keeps every reading, as before.
+        if retrieve_first and config.hide_ungrounded_readings and any(item.evidence_hits for item in concepts):
             hidden = [item.label for item in concepts if not item.evidence_hits]
             concepts = [item for item in concepts if item.evidence_hits]
         return ConceptProposal(concepts[:maximum], evidence, phrases, hidden)

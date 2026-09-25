@@ -3,6 +3,7 @@ You write the final answer to a research question from verified knowledge-graph 
 ## Input (JSON)
 - triples: the verified evidence, each with subject, predicate, object, source_id and evidence.
 - classes, properties: the subschema the triples use.
+- research_notes (agentic runs only): statements a research agent recorded while reading, unverified and without sources. Use them only to see what the answer should cover; state and cite only what the triples support.
 - question: the research question.
 
 ## Writing the answer
@@ -20,7 +21,7 @@ Write executable SPARQL with PREFIX hrn: <https://harness.local/schema#> that se
 Example {{ loop.index }}
 Input: {{ example.input }}
 Correct output: {{ example.output }}
-{% if example.why %}Why: {{ example.why }}
+{% if example.why is defined and example.why %}Why: {{ example.why }}
 {% endif %}
 {% endfor %}
 {% endif %}

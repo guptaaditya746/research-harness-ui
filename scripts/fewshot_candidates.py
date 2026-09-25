@@ -40,6 +40,20 @@ def _ids(value: str | None) -> set[str] | None:
     return {part.strip() for part in value.split(",") if part.strip()}
 
 
+def _library(datasets: Path) -> dict[str, str]:
+    """Question ids -> texts from the harness question libraries, to name older gold rows."""
+    texts: dict[str, str] = {}
+    for path in sorted(datasets.glob("question_*.json")):
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        for row in rows if isinstance(rows, list) else []:
+            if isinstance(row, dict) and row.get("id") and row.get("question"):
+                texts.setdefault(str(row["id"]), str(row["question"]))
+    return texts
+
+
 def main(
     dev: Annotated[str | None, typer.Option(help="Development question ids: a,b,c or @file.")] = None,
     include_okay: Annotated[bool, typer.Option("--include-okay", help="Also list missed non-vital triples.")] = False,
@@ -55,7 +69,11 @@ def main(
                       "from questions you will not report results on.[/yellow]")
     runs = load_runs(settings().artifact_root or ROOT / "artifacts")
     result = fewshot_candidates(candidates, runs, relations=load_relations(), judge=CachedJudge(),
-                                question_ids=question_ids, include_okay=include_okay)
+                                question_ids=question_ids, include_okay=include_okay,
+                                question_texts=_library(datasets))
+    if result["unmatched_ids"]:
+        console.print(f"[yellow]No approved gold row for: {', '.join(result['unmatched_ids'])} "
+                      "(ids are the rows' question_id, the question library id or the row id).[/yellow]")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n")
     console.print(f"{len(result['questions'])} questions, {result['scored_runs']} scored runs; full list: {out}")

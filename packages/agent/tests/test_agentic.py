@@ -71,12 +71,14 @@ def test_agent_always_proposes_three_to_four_concepts_before_research() -> None:
     assert run.status == "awaiting_reading"
     assert run.path == "agentic"
     assert run.chosen_reading is None
-    # The reading without any supporting passage is hidden (HARNESS_HIDE_UNGROUNDED_READINGS).
-    assert [r.label for r in run.readings] == ["Introducing paper", "Benchmark results", "Citation influence"]
+    # This corpus has no ranked retrieval, so grounding is the legacy phrase count: the reading
+    # without support is shown last, not hidden (hiding needs ranked grounding).
+    assert [r.label for r in run.readings] == ["Introducing paper", "Benchmark results", "Citation influence",
+                                               "Quantum angle"]
     assert all(r.classes == ["Paper"] for r in run.readings)
     plans = json.loads(result["artifacts"]["plans.json"])
     assert plans[0]["evidence_hits"] == 4
-    assert json.loads(result["artifacts"]["disagreement.json"])["hidden_ungrounded"] == ["Quantum angle"]
+    assert json.loads(result["artifacts"]["disagreement.json"])["hidden_ungrounded"] == []
     assert set(result["artifacts"]) == set(required_artifacts("agentic")) - {"run.json"}
 
 
@@ -429,3 +431,63 @@ def test_findings_reach_the_pipeline_one_passage_per_finding_first(monkeypatch) 
     assert baseline.agent_findings == [] and baseline.seed_passage_ids == []   # restored after the run
     ledger = json.loads(result["artifacts"]["research_ledger.json"])
     assert [item["statement"] for item in ledger["findings"]] == ["SafeRAG tests four attacks.", "HydraRAG verifies sources."]
+
+
+def test_grounding_tolerates_plurals_of_short_words() -> None:
+    from harness_agent.concepts import _content_tokens, _supports
+
+    words = {"llms", "act", "as", "autonomous", "agents", "with", "tools"}
+    assert _supports(_content_tokens("LLM agents"), words)
+    assert _supports(_content_tokens("tool use"), words | {"uses"})
+    assert not _supports(_content_tokens("tool planning"), words)
+
+
+def test_legacy_grounding_keeps_every_reading(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_CONCEPT_GROUNDING", "legacy")
+
+    class BothCorpus(RankedCorpus, SearchCorpus):
+        """Ranked retrieval is available, but legacy mode must not use it or hide readings."""
+
+    baseline = StubBaseline()
+    baseline.corpus = BothCorpus()
+    model = ConceptModel([{"concepts": [concept("Quantum angle", "quantum"), concept("Introducing paper"),
+                                        concept("Benchmark results")]}])
+    run = AgenticResearch(baseline, agent_model=model).run("Q?", "slow", "r-legacy")["run"]
+    assert "Quantum angle" in [r.label for r in run.readings]
+    assert baseline.corpus.queries == []
+
+
+def test_reader_findings_do_not_push_out_the_supervisor_evidence(monkeypatch) -> None:
+    from time import monotonic
+
+    from harness_agent.research import _Session
+
+    monkeypatch.setenv("HARNESS_AGENTIC_MAX_MCP_SEEDS", "6")
+    ids = [f"p{paper}-{index}" for paper in (1, 5, 7) for index in range(8)]
+    baseline = StubBaseline()
+    baseline.corpus = CorpusWithPassages(ids)
+    runner = AgenticResearch(baseline, agent_model=HighModel())
+    session = _Session(question="q", budget="slow", run_id="r", concept=None, concept_input={}, started=monotonic())
+    session.observed = set(ids)
+    session.agent_decision = {"additional_evidence_ids": ["p5-7", "p1-7"]}
+    session.findings = [{"statement": f"reader finding {paper}-{index}", "evidence_ids": [f"p{paper}-{index}"],
+                         "source": f"reader:p{paper}"} for paper in (5, 1, 7) for index in range(4)]
+    runner._select_seeds(session)
+    assert session.selected_ids[:2] == ["p5-7", "p1-7"]           # the supervisor's choice stays first
+    assert "p7-0" in session.selected_ids                          # one passage from the third reader paper
+    assert len({pid.split("-")[0] for pid in session.selected_ids}) == 3
+
+
+def test_scalar_ids_in_the_decision_do_not_fail_the_run(monkeypatch) -> None:
+    from time import monotonic
+
+    from harness_agent.research import _Session
+
+    baseline = StubBaseline()
+    baseline.corpus = CorpusWithPassages(["p1-a", "p2-a"])
+    runner = AgenticResearch(baseline, agent_model=HighModel())
+    session = _Session(question="q", budget="slow", run_id="r", concept=None, concept_input={}, started=monotonic())
+    session.observed = {"p1-a", "p2-a"}
+    session.agent_decision = {"additional_evidence_ids": 7}
+    runner._select_seeds(session)
+    assert session.selected_ids == []

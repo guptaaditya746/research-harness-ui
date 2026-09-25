@@ -15,7 +15,13 @@ from __future__ import annotations
 
 import httpx  # noqa: F401 - tests patch harness_extraction.httpx.Client
 
-from .call_control import bounded_timeout, call_budget, call_interrupted, run_interruptible
+from .call_control import (
+    bounded_timeout,
+    call_budget,
+    call_interrupted,
+    phase_budget,
+    run_interruptible,
+)
 from .engine import ExtractionEngine, local_name
 from .errors import ModelFailure
 from .events import (
@@ -68,6 +74,7 @@ __all__ = [
     "model_events",
     "model_options",
     "model_purpose",
+    "phase_budget",
     "run_interruptible",
     "strip_reasoning",
     "using_prompt",

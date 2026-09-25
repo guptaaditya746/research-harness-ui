@@ -37,8 +37,14 @@ def _store(tmp_path: Path, *, with_dense: bool) -> CorpusStore:
         np.save(folder / "embeddings.npy", matrix.astype(np.float16))
         (folder / "passage_ids.json").write_text(json.dumps(list(PASSAGES)))
         (folder / "meta.json").write_text(json.dumps({"model": "test-embed", "passages_sha256": passages_digest(tmp_path)}))
-    store_module._cached_query_embedding.cache_clear()
+    store_module._embed_query_cached.cache_clear()
+    store_module._embedding_down_until.clear()
     return CorpusStore(tmp_path)
+
+
+@pytest.fixture
+def hybrid(monkeypatch):
+    monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", "hybrid")
 
 
 def test_natural_language_query_needs_no_boolean_match(tmp_path) -> None:
@@ -50,7 +56,7 @@ def test_natural_language_query_needs_no_boolean_match(tmp_path) -> None:
     assert ranked["items"][0]["dense_rank"] is None
 
 
-def test_dense_ranking_is_fused_with_bm25(tmp_path, monkeypatch) -> None:
+def test_dense_ranking_is_fused_with_bm25(tmp_path, monkeypatch, hybrid) -> None:
     store = _store(tmp_path, with_dense=True)
     monkeypatch.setattr(store_module, "embed_texts",
                         lambda texts, **_: np.asarray([[0.0, 1.0, 0.0]], dtype=np.float32))
@@ -63,15 +69,48 @@ def test_dense_ranking_is_fused_with_bm25(tmp_path, monkeypatch) -> None:
     assert {row["paper_id"] for row in scoped["items"]} == {"p1"}
 
 
-def test_embedding_failure_falls_back_to_bm25(tmp_path, monkeypatch) -> None:
+def test_embedding_failure_falls_back_to_bm25_and_recovers(tmp_path, monkeypatch, hybrid) -> None:
     store = _store(tmp_path, with_dense=True)
+    calls = []
 
     def broken(texts, **_):
         import httpx
+        calls.append(texts)
         raise httpx.ConnectError("embedding server down")
 
     monkeypatch.setattr(store_module, "embed_texts", broken)
     assert store.hybrid_rank("SafeRAG security", limit=2)["retrieval"] == "bm25"
+    # Backing off: the next query does not wait for the service again.
+    assert store.hybrid_rank("attack tasks", limit=2)["retrieval"] == "bm25" and len(calls) == 1
+    # The failure was not cached: once the service is back (and the pause is over), the same query is dense.
+    store_module._embedding_down_until.clear()
+    monkeypatch.setattr(store_module, "embed_texts", lambda texts, **_: np.asarray([[1.0, 0.0, 0.0]], dtype=np.float32))
+    assert store.hybrid_rank("SafeRAG security", limit=2)["retrieval"] == "bm25+dense"
+
+
+def test_dense_is_off_in_lexical_mode(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", "lexical")
+    store = _store(tmp_path, with_dense=True)
+    monkeypatch.setattr(store_module, "embed_texts", lambda *a, **k: pytest.fail("embedded in lexical mode"))
+    assert store.hybrid_rank("cross-source verification of evidence", limit=2)["retrieval"] == "bm25"
+
+
+def test_dimension_mismatch_falls_back_to_bm25(tmp_path, monkeypatch, hybrid) -> None:
+    store = _store(tmp_path, with_dense=True)
+    monkeypatch.setattr(store_module, "embed_texts", lambda texts, **_: np.ones((1, 5), dtype=np.float32))
+    assert store.hybrid_rank("SafeRAG security", limit=2)["retrieval"] == "bm25"
+
+
+def test_dense_scores_are_float32_and_ties_keep_row_order(tmp_path) -> None:
+    _store(tmp_path, with_dense=True)
+    index = DenseIndex(tmp_path)
+    query = np.asarray([0.6, 0.8, 0.0], dtype=np.float32)
+    full = index.search(query)
+    scoped = index.search(query, allowed={"p2-b", "p1-b", "p1-a", "p2-a"})
+    assert full == scoped
+    assert all(isinstance(score, float) for _, score in full)
+    tie = index.search(np.asarray([0.0, 0.0, 0.0], dtype=np.float32))
+    assert [pid for pid, _ in tie] == list(PASSAGES)
 
 
 def test_stale_dense_index_is_ignored(tmp_path) -> None:
@@ -103,6 +142,13 @@ def test_rrf_and_build(tmp_path, monkeypatch) -> None:
                         lambda texts, **_: np.asarray([TOPIC[pid] for pid in PASSAGES], dtype=np.float32))
     meta = dense_module.build_dense_index(tmp_path)
     assert meta["count"] == 4 and DenseIndex(tmp_path).available
+    # A rebuild replaces the files instead of rewriting them: an index loaded before keeps working.
+    loaded = DenseIndex(tmp_path)
+    monkeypatch.setattr(dense_module, "embed_texts",
+                        lambda texts, **_: np.asarray([[0, 0, 1]] * len(texts), dtype=np.float32))
+    dense_module.build_dense_index(tmp_path)
+    assert loaded.search(np.asarray([1.0, 0.0, 0.0], dtype=np.float32))[0][0] == "p1-a"
+    assert not list((tmp_path / "index" / "dense").glob(".*.tmp"))
 
 
 def test_search_evidence_tool_uses_ranked_retrieval(tmp_path) -> None:

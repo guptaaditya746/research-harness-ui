@@ -30,7 +30,9 @@ class ResearchSteps:
     def _infer_schema(self, state: BaselineState) -> dict[str, Any]:
         self.stage = "schema inference"
         seed_properties = set(self.extraction.property_names)
-        inferred = self.extraction.infer_schema(self._research_question(state, notes=True), state["passages"])
+        notes = self._research_notes(state)
+        inferred = self.extraction.infer_schema(self._research_question(state), state["passages"],
+                                                **({"notes": notes} if notes else {}))
         for name in inferred.properties:
             if name in seed_properties or self.relation_proposer is None:
                 continue
@@ -216,9 +218,10 @@ class ResearchSteps:
                     cited_source_ids=sorted({item.source_id for item in selected}),
                 )
                 return {"answer": answer, "extracted": selected}
+        notes = self._research_notes(state)
         answer = self.extraction.answer(
-            self._research_question(state, notes=True), state["inferred"], state["extracted"],
-            verify=self.refine, verifier=self.refinement_model,
+            self._research_question(state), state["inferred"], state["extracted"],
+            verify=self.refine, verifier=self.refinement_model, **({"notes": notes} if notes else {}),
         )
         try:
             checked_query = sparql_check(answer.sparql, self.extraction.schema)

@@ -77,7 +77,7 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         self.claim_lookup = claim_lookup
         self.relation_proposer = relation_proposer
         self.seed_passage_ids = seed_passage_ids or []
-        # Findings the agentic path hands over (statements + evidence ids); see _research_question.
+        # Findings the agentic path hands over (statements + evidence ids); see _research_notes.
         self.agent_findings: list[dict[str, Any]] = []
         self.max_passages = max_passages
         self.started = 0.0
@@ -91,13 +91,8 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         self.graph = self._graph()
 
     @staticmethod
-    def _research_question(state: BaselineState, *, notes: bool = False) -> str:
-        """The question as given to models, with the chosen interpretation attached.
-
-        With ``notes``, the agent's findings are appended as unverified research notes (schema
-        inference and answer composition use them; extraction does not, so every triple still
-        comes from a passage).
-        """
+    def _research_question(state: BaselineState) -> str:
+        """The question as given to models, with the chosen interpretation attached."""
         text = state["question"]
         concept = state.get("concept")
         if concept:
@@ -105,12 +100,16 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
                 "\n\nResearch interpretation chosen by the user: "
                 f"{concept.get('label', '')}: {concept.get('gloss', '')}"
             )
-        findings = state.get("agent_findings") or []
-        if notes and findings:
-            text += "\n\nResearch notes from the agent (unverified; use a note only where the passages support it):\n" + (
-                "\n".join(f"- {item['statement']} [{', '.join(item['evidence_ids'])}]" for item in findings)
-            )
         return text
+
+    @staticmethod
+    def _research_notes(state: BaselineState) -> list[str]:
+        """The agent's findings as unverified notes for schema inference and answer composition.
+
+        Statements only: the ids are left out so the answer cannot cite a passage no triple uses.
+        Extraction and review never see them, so every triple still comes from a passage.
+        """
+        return [str(item["statement"]) for item in state.get("agent_findings") or [] if item.get("statement")]
 
     def _check(self, name: str, status: str, detail: str = "") -> None:
         """Record one stage's outcome (pass/warn/fail/skipped) for the run's checks."""

@@ -93,7 +93,8 @@ def test_examples_are_shown_and_change_the_hash(name: str, monkeypatch: pytest.M
     plain = render(name, prompt_set="v2", **_variables(name))
     assert "Examples from earlier errors" not in plain.system
     examples = [{"input": "passage p1-2: \"we evaluate on CALVIN\"", "output": "{\"triples\": []}",
-                 "why": "the benchmark was missed"}]
+                 "why": "the benchmark was missed"},
+                {"input": "an example without a reason", "output": "{}"}]
     raw = json.dumps(examples)
     monkeypatch.setattr(harness_prompts, "_examples",
                         lambda prompt_set, prompt: (raw, examples) if prompt == name else ("", []))

@@ -68,9 +68,10 @@ class RetrievalStep:
             })
         # Passages that grounded the chosen reading are candidates too (they are ranked like
         # any other candidate, not forced in).
+        # When the question names papers, only their passages qualify.
         for source_id in concept.get("sample_sources") or []:
             passage = self.corpus.by_passage.get(str(source_id))
-            if passage is not None:
+            if passage is not None and (not mentioned_papers or str(passage["paper_id"]) in mentioned_papers):
                 found.setdefault(str(source_id), passage)
         reused_claims = self.claim_lookup(question) if self.claim_lookup else []
         for claim in reused_claims:
@@ -125,6 +126,10 @@ class RetrievalStep:
         relative_threshold = 0.70
         if hybrid:
             ranked = self.corpus.hybrid_rank(focus, passage_ids=list(found), limit=max(1, len(found)))["items"]
+            if focus != question and not ranked:
+                # As in lexical mode: removing the paper's own name left nothing that ranks.
+                focus = question
+                ranked = self.corpus.hybrid_rank(focus, passage_ids=list(found), limit=max(1, len(found)))["items"]
             top = ranked[: self.retrieve_k]
             top_ids = {str(row["passage_id"]) for row in top}
             if limitation_question:

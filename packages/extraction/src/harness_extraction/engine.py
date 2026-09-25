@@ -99,20 +99,25 @@ class ExtractionEngine:
         return iri
 
     @labelled("schema inference")
-    def infer_schema(self, question: str, passages: list[dict[str, Any]]) -> SchemaInference:
+    def infer_schema(self, question: str, passages: list[dict[str, Any]],
+                     notes: list[str] | None = None) -> SchemaInference:
+        """``notes``: the agent's unverified findings (agentic runs), sent as their own field so they
+        never become part of a definition or the question text."""
         allowed_classes = sorted(self.class_names)
         allowed_properties = sorted(self.property_names)
+        payload: dict[str, Any] = {
+            "question": question,
+            "allowed_classes": allowed_classes,
+            "allowed_properties": allowed_properties,
+            "passages": [
+                {"source_id": row["passage_id"], "text": row["text"][:1200]}
+                for row in passages
+            ],
+        }
+        if notes:
+            payload["research_notes"] = list(notes)
         result = SchemaInference.model_validate(complete(self.schema_model, render(
-            "extraction/schema_inference",
-            {
-                "question": question,
-                "allowed_classes": allowed_classes,
-                "allowed_properties": allowed_properties,
-                "passages": [
-                    {"source_id": row["passage_id"], "text": row["text"][:1200]}
-                    for row in passages
-                ],
-            },
+            "extraction/schema_inference", payload,
         )))
         if not result.classes or not result.properties:
             raise ValueError("schema inference returned no classes or properties")
@@ -416,15 +421,19 @@ class ExtractionEngine:
         triples: list[ExtractedTriple],
         verify: bool = False,
         verifier: ModelClient | None = None,
+        notes: list[str] | None = None,
     ) -> AnswerResult:
+        """``notes`` (agentic runs) go to composition only; the verifier sees the plain question."""
+        payload: dict[str, Any] = {
+            "question": question,
+            "classes": inferred.classes,
+            "properties": inferred.properties,
+            "triples": [triple.model_dump() for triple in triples],
+        }
+        if notes:
+            payload["research_notes"] = list(notes)
         result = AnswerResult.model_validate(complete(self.model, render(
-            "extraction/answer_composition",
-            {
-                "question": question,
-                "classes": inferred.classes,
-                "properties": inferred.properties,
-                "triples": [triple.model_dump() for triple in triples],
-            },
+            "extraction/answer_composition", payload,
         )))
         sources = {triple.source_id for triple in triples}
         if not set(result.cited_source_ids) <= sources:

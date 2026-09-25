@@ -65,3 +65,12 @@ def test_development_ids_restrict_the_questions_and_okay_triples_are_optional() 
                                 question_ids={"nlp27"}, include_okay=True)
     assert result["questions"] == ["nlp27"] and result["split"] == "development ids given"
     assert sorted(row["triple"]["o"] for row in result["candidates"][EXTRACT_PROMPT]) == ["Benchmark", "soft ad"]
+
+
+def test_older_gold_rows_are_named_by_the_question_library() -> None:
+    row = {**OTHER_ROW, "id": "gold-746fc49e48"}
+    del row["question_id"]
+    runs = [run("r4", "baseline", "Q5", [])]
+    result = fewshot_candidates([row], runs, relations=PredicateRelations(), question_ids={"nlp05", "nlp99"},
+                                question_texts={"nlp05": " q5 "})
+    assert result["questions"] == ["nlp05"] and result["unmatched_ids"] == ["nlp99"]

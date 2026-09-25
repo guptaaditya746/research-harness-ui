@@ -22,7 +22,7 @@ You extract open propositions from scientific paper passages: short subject–re
 Example {{ loop.index }}
 Input: {{ example.input }}
 Correct output: {{ example.output }}
-{% if example.why %}Why: {{ example.why }}
+{% if example.why is defined and example.why %}Why: {{ example.why }}
 {% endif %}
 {% endfor %}
 {% endif %}

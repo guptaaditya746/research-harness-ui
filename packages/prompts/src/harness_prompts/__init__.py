@@ -46,7 +46,7 @@ _DOCUMENT_KEYS = (
     "passages", "candidates", "triples", "claims", "cited_claims", "cited_evidence",
     "unresolved", "relations", "evidence_not_found_in_session",
 )
-_LAST_KEYS = ("research_interpretation", "agent_decision", "draft_answer", "question")
+_LAST_KEYS = ("research_interpretation", "research_notes", "agent_decision", "draft_answer", "question")
 
 
 @dataclass(frozen=True)
@@ -84,8 +84,10 @@ def _examples(prompt_set: str, name: str) -> tuple[str, list[dict[str, Any]]]:
     except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
         return "", []
     examples = json.loads(raw)
-    if not isinstance(examples, list) or not all(isinstance(item, dict) for item in examples):
-        raise ValueError(f"examples for {name!r} in set {prompt_set!r} must be a list of objects")
+    if not isinstance(examples, list) or not all(
+            isinstance(item, dict) and {"input", "output"} <= set(item) for item in examples):
+        raise ValueError(f"examples for {name!r} in set {prompt_set!r} must be a list of objects "
+                         "with input and output (why is optional)")
     return raw, examples
 
 

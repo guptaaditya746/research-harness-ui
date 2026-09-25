@@ -17,7 +17,7 @@ You are one of several readers working in parallel for a research harness over s
 Example {{ loop.index }}
 Input: {{ example.input }}
 Correct output: {{ example.output }}
-{% if example.why %}Why: {{ example.why }}
+{% if example.why is defined and example.why %}Why: {{ example.why }}
 {% endif %}
 {% endfor %}
 {% endif %}

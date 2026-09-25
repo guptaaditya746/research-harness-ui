@@ -173,7 +173,7 @@ def test_findings_are_kept_by_the_client_and_invented_ids_removed(monkeypatch) -
                                       "evidence_ids": ["p4-intro"]}]
     finding_records = [record for record in records if record["tool"] == "record_finding"]
     assert [record["status"] for record in finding_records] == ["ok", "error"]
-    assert finding_records[0]["result"]["dropped_ids"] == ["p99-invented"]
+    assert finding_records[0]["result"]["removed"] == ["p99-invented"]
     assert "record_finding" in [tool["function"]["name"] for tool in ScriptedModelClient.bodies[-1]["tools"]]
 
 
@@ -217,14 +217,17 @@ def test_curated_toolset_hides_duplicate_tools(monkeypatch) -> None:
     run_loop(monkeypatch, [tool_call("search_evidence", {"query": "VPP"}),
                            final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"],
                                   "reasoning_summary": "ok"})])
-    offered = [tool["function"]["name"] for tool in ScriptedModelClient.bodies[0]["tools"]]
-    assert offered == ["search_evidence", "read_evidence", "record_finding"]
+    first, second = ([tool["function"]["name"] for tool in body["tools"]] for body in ScriptedModelClient.bodies)
+    # The forced first turn ("required") offers corpus tools only; the scratchpad comes after.
+    assert ScriptedModelClient.bodies[0]["tool_choice"] == "required"
+    assert first == ["search_evidence", "read_evidence"]
+    assert second == ["search_evidence", "read_evidence", "record_finding"]
     monkeypatch.setenv("HARNESS_AGENT_TOOLSET", "all")
     ScriptedModelClient.bodies = []
     run_loop(monkeypatch, [tool_call("search_evidence", {"query": "VPP"}),
                            final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"],
                                   "reasoning_summary": "ok"})])
-    assert len(ScriptedModelClient.bodies[0]["tools"]) == 6
+    assert len(ScriptedModelClient.bodies[1]["tools"]) == 6
 
 
 def test_tool_budget_leaves_only_the_scratchpad_and_asks_for_the_decision(monkeypatch) -> None:
@@ -268,3 +271,103 @@ def test_near_the_limit_older_exchanges_become_a_summary(monkeypatch) -> None:
     assert model.summary_requests[0]["question"] == "Which attacks?"
     last_messages = ScriptedModelClient.sent[-1]
     assert any("Summary of the archived research: searched three times" in str(m.get("content")) for m in last_messages)
+
+
+def test_scalar_evidence_ids_are_accepted_or_refused_without_crashing(monkeypatch) -> None:
+    decision = {"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"], "reasoning_summary": "done",
+                "findings": [{"statement": "VPP is introduced in p4.", "evidence_ids": "p4-intro"}]}
+    answer, _session, records = run_loop(monkeypatch, [
+        tool_call("search_evidence", {"query": "VPP"}),
+        tool_call("record_finding", {"statement": "VPP is introduced in p4.", "evidence_ids": "p4-intro"}, "call-2"),
+        tool_call("record_finding", {"statement": "A number.", "evidence_ids": 7}, "call-3"),
+        final(decision),
+    ])
+    assert json.loads(answer) == decision
+    statuses = [record["status"] for record in records if record["tool"] == "record_finding"]
+    assert statuses == ["ok", "error"]
+    assert run_loop.client.notes[0]["evidence_ids"] == ["p4-intro"]
+
+
+def test_calls_to_tools_not_offered_are_refused_without_mcp(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_AGENT_MAX_TOOL_CALLS", "1")
+    _, session, records = run_loop(monkeypatch, [
+        tool_call("search_evidence", {"query": "VPP"}),
+        tool_call("search_evidence", {"query": "VPP again"}, "call-2"),
+        tool_call("rank_evidence", {"query": "VPP"}, "call-3"),
+        final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"], "reasoning_summary": "ok"}),
+    ])
+    assert [name for name, _ in session.calls] == ["search_evidence"]
+    refused = [record for record in records if record["status"] == "unavailable"]
+    assert [record["tool"] for record in refused] == ["search_evidence", "rank_evidence"]
+    assert "budget" in refused[0]["error"]
+
+
+def _summary_run(monkeypatch, keep: str, calls: int) -> tuple[SummaryModel, list[dict]]:
+    _session_with(monkeypatch, ["search_evidence"], text="long passage " * 400)
+    monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", "6000")
+    monkeypatch.setenv("HARNESS_AGENT_KEEP_RESULTS", keep)
+    session = FakeSession()
+
+    @asynccontextmanager
+    async def fake_transport(*args, **kwargs):
+        yield (None, None, None)
+
+    monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
+    monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
+    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", ScriptedModelClient)
+    ScriptedModelClient.script = [tool_call("search_evidence", {"query": f"q{i}"}, f"call-{i}")
+                                  for i in range(calls)] + [
+        final({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "done"})]
+    ScriptedModelClient.sent = []
+    records: list[dict] = []
+    model = SummaryModel(model="granite", base_url="http://model", api_key="k", timeout_s=30)
+    MCPToolClient(records.append).run_agent(model, "Which attacks?", {"answer_source": "research"})
+    return model, records
+
+
+def test_a_new_summary_merges_the_earlier_one(monkeypatch) -> None:
+    model, _ = _summary_run(monkeypatch, "0", 8)
+    requests = getattr(model, "summary_requests", [])
+    assert len(requests) >= 2
+    assert requests[0]["earlier_summary"] is None
+    assert requests[1]["earlier_summary"].startswith("searched three times")
+
+
+def test_no_summary_when_older_exchanges_are_already_digests(monkeypatch) -> None:
+    # Near the limit (the kept full results are large), but archiving the masked older exchanges
+    # would free little: fitting handles it without a model call.
+    model, records = _summary_run(monkeypatch, "2", 7)
+    assert getattr(model, "summary_requests", []) == []
+    assert not [r for r in records if r["tool"] == "context_checkpoint" and r["arguments"].get("mode") == "summary"]
+
+
+def test_a_slow_summary_does_not_outlive_the_agent_phase(monkeypatch) -> None:
+    import time
+
+    import pytest
+    from harness_extraction import run_interruptible
+
+    class SlowSummaryModel(SummaryModel):
+        def complete_json(self, system: str, user: str) -> dict:
+            return run_interruptible(lambda: time.sleep(10) or {"summary": "late"})
+
+    _session_with(monkeypatch, ["search_evidence"], text="long passage " * 400)
+    monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", "6000")
+    monkeypatch.setenv("HARNESS_AGENT_KEEP_RESULTS", "0")
+    monkeypatch.setenv("HARNESS_MCP_AGENT_TIMEOUT_S", "2")
+    session = FakeSession()
+
+    @asynccontextmanager
+    async def fake_transport(*args, **kwargs):
+        yield (None, None, None)
+
+    monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
+    monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
+    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", ScriptedModelClient)
+    ScriptedModelClient.script = [tool_call("search_evidence", {"query": f"q{i}"}, f"call-{i}") for i in range(4)] + [
+        final({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "done"})]
+    model = SlowSummaryModel(model="granite", base_url="http://model", api_key="k", timeout_s=30)
+    started = time.monotonic()
+    with pytest.raises(mcp_module.MCPUnavailable):
+        MCPToolClient(lambda record: None).run_agent(model, "Which attacks?", {"answer_source": "research"})
+    assert time.monotonic() - started < 7.5   # phase 2 s + grace 2 s, not the 10 s call

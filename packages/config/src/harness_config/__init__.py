@@ -87,7 +87,8 @@ class Settings(BaseSettings):
     heavy_queue_threshold: int = Field(8, validation_alias=_env("HARNESS_HEAVY_QUEUE_THRESHOLD"))
     baseline_retrieve_k: int = Field(20, validation_alias=_env("BASELINE_RETRIEVE_K"))
     adaptive_max_passages: int = Field(16, validation_alias=_env("HARNESS_ADAPTIVE_MAX_PASSAGES"))
-    # Pipeline retrieval: lexical (boolean candidates + BM25 threshold) or hybrid (BM25 + dense, fused).
+    # Ranked retrieval everywhere (pipeline, concept evidence, search_evidence, readers): lexical = BM25
+    # (the pipeline also keeps its boolean candidates and relative threshold); hybrid = BM25 + dense, fused.
     retrieval_mode: Literal["lexical", "hybrid"] = Field("lexical", validation_alias=_env("HARNESS_RETRIEVAL_MODE"))
     agentic_max_passages: int = Field(12, validation_alias=_env("HARNESS_AGENTIC_MAX_PASSAGES"))
     agentic_max_mcp_seeds: int = Field(6, validation_alias=_env("HARNESS_AGENTIC_MAX_MCP_SEEDS"))

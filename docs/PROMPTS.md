@@ -75,7 +75,7 @@ Choosing them:
 3. Pick two to four per prompt that show different error types (a result without its benchmark, a
    reversed relation, an overstated claim). Shorten the input to what the example needs, write the
    "why" in one sentence (the test rejects a leftover TODO), and save the file.
-4. `make check`, then compare with and without the file on the test questions. Keep an example only if
+4. `make check`, then compare with and without the file on the test questions. Templates and examples are read once per process: restart the API and workers after adding, editing or removing a file, and check that the prompt hash in the runs changed. Keep an example only if
    recall rises without precision dropping. Short examples matter at 32k context: each one is sent with
    every call of that prompt.
 

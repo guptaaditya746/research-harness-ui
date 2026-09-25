@@ -34,7 +34,7 @@ flowchart LR
   R[retrieve] --> S[infer_schema] --> X[extract_build] --> A[query_answer]
 ```
 
-- `retrieve` (`retrieval.py`): queries from the question and the chosen concept, BM25 ranking (`HARNESS_RETRIEVAL_MODE=hybrid`: BM25 and dense embeddings fused with reciprocal rank fusion, optionally reranked), agent seed passages and concept sample passages first, passage cap.
+- `retrieve` (`retrieval.py`): queries from the question and the chosen concept, BM25 ranking (`HARNESS_RETRIEVAL_MODE=hybrid`: BM25 and dense embeddings fused with reciprocal rank fusion, optionally reranked), agent seed passages kept, the chosen reading's supporting passages added as candidates (ranked like the others; only from the papers the question names, if it names any), passage cap.
 - `infer_schema` (`research_steps.py`): the subschema for the question (seed DBLP terms plus invented `hrn:` terms).
 - `extract_build`: EDC-style open extraction in batches of 2 passages, relation definition and mapping onto the subschema, evidence review (Adaptive/Agentic), claim subgraphs, graph validation.
 - `query_answer`: SPARQL over the run graph, answer composition, answer verification (Adaptive/Agentic).
@@ -56,18 +56,21 @@ Both chat models are served with a 32k context. Heavy's KV cache is the bottlene
 
 ## Retrieval
 
-`harness_corpus.store.CorpusStore.hybrid_rank` is the one ranked search. BM25 always runs; when a dense
-index exists (`make embed`, written to `<corpus>/index/dense/`, ignored when `passages.jsonl` changed),
-the question is embedded with Qwen3-Embedding's query instruction and the two rankings are fused with
-reciprocal rank fusion (k = 60, Cormack et al. 2009). If `HARNESS_MODEL_RERANK` names a served reranker,
-the fused top is reordered through LiteLLM `/rerank`. Without the index, or when the embedding call fails,
-the ranking is BM25 alone. The MCP tool roles are separate: `search_evidence` is the ranked search,
+`harness_corpus.store.CorpusStore.hybrid_rank` is the one ranked search (pipeline, concept evidence,
+`search_evidence`, paper readers). BM25 always runs. With `HARNESS_RETRIEVAL_MODE=hybrid` and a current
+dense index (`make embed`, written to `<corpus>/index/dense/`, ignored when `passages.jsonl` changed), the
+question is also embedded with Qwen3-Embedding's query instruction and the two rankings are fused with
+reciprocal rank fusion (k = 60, Cormack et al. 2009). So one setting switches every ranked search between
+BM25 alone (`lexical`, the default) and BM25 + dense, which keeps the gold comparison clean. If
+`HARNESS_MODEL_RERANK` names a served reranker, the fused top is reordered through LiteLLM `/rerank`.
+Without the index, or when the embedding call fails (then for 60 s), the ranking is BM25 alone. The MCP tool roles are separate: `search_evidence` is the ranked search,
 `search` is the exact boolean DSL (implicit AND), `grep` is a regular expression over passages.
 
 Concept proposal (`concepts.py`, `HARNESS_CONCEPT_GROUNDING=retrieve_first`) retrieves the top passages and
 keyphrases first and proposes readings from them; each reading cites the passages it rests on. A reading
-whose terms match none of the top-ranked passages is hidden (`HARNESS_HIDE_UNGROUNDED_READINGS`), unless
-no reading has support; hidden readings are recorded in `disagreement.json`.
+whose terms match none of its 50 top-ranked passages is hidden (`HARNESS_HIDE_UNGROUNDED_READINGS`), unless
+no reading has support, so fewer than three readings can be shown; hidden readings are recorded in the
+proposal's `disagreement.json`. `legacy` restores the old order and shows every reading.
 
 ## Context flow in an agentic run
 
@@ -102,9 +105,12 @@ What the agent sees each turn: the system prompt with loaded skills, the questio
 The findings (`HARNESS_AGENT_HANDOFF=findings`) carry a statement and the evidence ids that support it;
 ids the session never observed are rejected. Paper readers (`readers.py`, `HARNESS_SUBAGENT_READERS`)
 then read the papers with the most evidence in parallel threads, one structured call each, and add up to
-four findings per paper. Seeds take one passage per finding first. The findings also reach schema
-inference and answer composition as unverified research notes; extraction and review still work only
-from passages, so a finding becomes a triple only if the passage supports it.
+four findings per paper. Seeds take one passage per supervisor finding first, then the supervisor's
+decision ids, then one passage per paper from the readers (cap `HARNESS_AGENTIC_MAX_MCP_SEEDS`, 6). The
+finding statements also reach schema inference and answer composition as a separate `research_notes`
+field (no ids, so the answer cannot cite a passage no triple uses; the answer verifier does not see
+them). Extraction and review still work only from passages, so a finding becomes a triple only if the
+passage supports it.
 
 ## Prompts and settings
 

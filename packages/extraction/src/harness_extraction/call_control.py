@@ -35,6 +35,22 @@ def call_budget(deadline: float, stopped: Callable[[], bool]) -> Iterator[None]:
         _CALL_BUDGET.reset(token)
 
 
+@contextmanager
+def phase_budget(seconds: float) -> Iterator[None]:
+    """Inside the block, model calls also end ``seconds`` from now (a phase deadline within the run's).
+
+    Blocking calls made through ``run_interruptible`` (also from threads that copy the context, such
+    as ``asyncio.to_thread``) are abandoned at that deadline instead of running to their own timeout.
+    """
+    budget = _CALL_BUDGET.get()
+    deadline = time.monotonic() + seconds
+    stopped: Callable[[], bool] = lambda: False
+    if budget is not None:
+        deadline, stopped = min(deadline, budget[0]), budget[1]
+    with call_budget(deadline, stopped):
+        yield
+
+
 def bounded_timeout(timeout_s: float) -> float:
     """The per-call timeout, shortened to the time the run has left.
 
@@ -97,4 +113,4 @@ def run_interruptible(call: Callable[[], Any], cancel: threading.Event | None = 
                 raise ModelFailure(reason) from None
 
 
-__all__ = ["bounded_timeout", "call_budget", "call_interrupted", "run_interruptible"]
+__all__ = ["bounded_timeout", "call_budget", "call_interrupted", "phase_budget", "run_interruptible"]

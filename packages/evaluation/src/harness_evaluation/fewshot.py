@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Collection, Iterable
+from collections.abc import Collection, Iterable, Mapping
 from typing import Any
 
 from harness_schema.models import Run
@@ -67,18 +67,28 @@ def _review_draft(item: dict[str, Any], question: str) -> dict[str, str]:
 def fewshot_candidates(
     candidates: Iterable[dict], runs: Iterable[Run], *, relations: PredicateRelations,
     judge: Judge | None = None, question_ids: Collection[str] | None = None,
-    include_okay: bool = False,
+    include_okay: bool = False, question_texts: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Missed gold triples and rejected extras over the chosen readings of eligible runs."""
+    """Missed gold triples and rejected extras over the chosen readings of eligible runs.
+
+    A gold row's question id is its ``question_id`` (rows built by labelling), else the id the
+    question library (``question_texts``: id -> text) gives its question text, else the row id.
+    """
     runs = list(runs)
+    by_text = {" ".join(text.split()).casefold(): qid for qid, text in (question_texts or {}).items()}
     grouped: dict[tuple, dict[str, Any]] = {}
     questions: set[str] = set()
+    seen_ids: set[str] = set()
     scored_runs = 0
     for candidate in candidates:
-        question_id = str(candidate.get("question_id") or candidate.get("id") or "")
-        if question_ids is not None and question_id not in question_ids:
-            continue
         question = str(candidate.get("question", ""))
+        question_id = str(candidate.get("question_id")
+                          or by_text.get(" ".join(question.split()).casefold())
+                          or candidate.get("id") or "")
+        seen_ids.update({question_id, str(candidate.get("id") or "")})
+        if question_ids is not None and question_id not in question_ids \
+                and str(candidate.get("id") or "") not in question_ids:
+            continue
         for path in PATHS:
             for run in matching_runs(candidate, runs, path):
                 if run.status != "answered":
@@ -114,6 +124,7 @@ def fewshot_candidates(
         "questions": sorted(questions),
         "scored_runs": scored_runs,
         "split": "development ids given" if question_ids is not None else "all approved questions",
+        "unmatched_ids": sorted(set(question_ids or ()) - seen_ids),
         "candidates": {
             EXTRACT_PROMPT: [row for row in ranked if row["prompt"] == EXTRACT_PROMPT],
             REVIEW_PROMPT: [row for row in ranked if row["prompt"] == REVIEW_PROMPT],

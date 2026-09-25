@@ -596,7 +596,8 @@ def test_hybrid_mode_adds_dense_candidates_lexical_retrieval_misses(tmp_path: Pa
     (folder / "passage_ids.json").write_text(json.dumps(["p4-abstract"]))
     (folder / "meta.json").write_text(json.dumps({"model": "test", "passages_sha256": passages_digest(tmp_path)}))
     store = CorpusStore(tmp_path)
-    store_module._cached_query_embedding.cache_clear()
+    store_module._embed_query_cached.cache_clear()
+    store_module._embedding_down_until.clear()
     monkeypatch.setattr(store_module, "embed_texts", lambda texts, **_: np.asarray([[1.0, 0.0]], dtype=np.float32))
     runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
     # No word of the question appears in the passage; only the embedding links them.
@@ -628,5 +629,29 @@ def test_agent_findings_are_unverified_notes_for_schema_and_answer_only() -> Non
     state = {"question": "Compare SafeRAG and HydraRAG.", "concept": None,
              "agent_findings": [{"statement": "SafeRAG is a benchmark.", "evidence_ids": ["p1-a"]}]}
     assert Baseline20._research_question(state) == "Compare SafeRAG and HydraRAG."
-    with_notes = Baseline20._research_question(state, notes=True)
-    assert "unverified" in with_notes and "- SafeRAG is a benchmark. [p1-a]" in with_notes
+    # Statements only: no ids the answer could cite without a triple behind them.
+    assert Baseline20._research_notes(state) == ["SafeRAG is a benchmark."]
+
+
+def test_reading_support_passages_respect_the_papers_the_question_names(tmp_path: Path) -> None:
+    store = corpus(tmp_path)
+    (tmp_path / "papers.jsonl").write_text(
+        json.dumps({"paper_id": "p4", "title": "Video Prediction Policy", "year": 2025}) + "\n"
+        + json.dumps({"paper_id": "p5", "title": "Other", "year": 2025}) + "\n")
+    with (tmp_path / "passages.jsonl").open("a") as handle:
+        handle.write(json.dumps({"passage_id": "p5-abstract", "paper_id": "p5", "section_path": "Abstract",
+                                 "para_idx": 0, "text": "Robot learning with policies."}) + "\n")
+    store = CorpusStore(tmp_path)
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()), enhanced=True)
+    concept = {"label": "Robot learning", "gloss": "Policies for robots.", "sample_sources": ["p5-abstract"]}
+    result = runner._retrieve({"question": "How does it do robot learning?", "plan": QueryPlan(operation="research"),
+                               "paper_ids": ["p4"], "concept": concept})
+    assert [passage["passage_id"] for passage in result["passages"]] == ["p4-abstract"]
+
+
+def test_hybrid_mode_ranks_by_the_full_question_when_the_title_was_all_it_had(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", "hybrid")
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    result = runner._retrieve({"question": "What is the Video Prediction Policy?", "plan": QueryPlan(operation="research"),
+                               "paper_ids": ["p4"], "concept": None})
+    assert [passage["passage_id"] for passage in result["passages"]] == ["p4-abstract"]

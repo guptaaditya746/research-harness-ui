@@ -18,7 +18,7 @@ You review candidate knowledge-graph triples for one research question and keep 
 Example {{ loop.index }}
 Input: {{ example.input }}
 Correct output: {{ example.output }}
-{% if example.why %}Why: {{ example.why }}
+{% if example.why is defined and example.why %}Why: {{ example.why }}
 {% endif %}
 {% endfor %}
 {% endif %}

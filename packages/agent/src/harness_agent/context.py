@@ -142,24 +142,37 @@ class Conversation:
             head.append(grounded)
         if self.ledger_note is not None:
             head.append(self.ledger_note)
-        cutoff = len(self.exchanges) - self.keep_results if self.keep_results else 0
         body: list[dict[str, Any]] = []
         masked = 0
-        for index, exchange in enumerate(self.exchanges):
-            if index >= cutoff:
-                body.extend(exchange)
-                continue
-            digests = self.digests[index] if index < len(self.digests) else []
-            results = iter(digests)
-            for message in exchange:
-                if message.get("role") == "tool":
-                    digest = next(results, None)
-                    if digest is not None:
-                        message = {**message, "content": digest}
-                        masked += 1
-                body.append(message)
+        for index in range(len(self.exchanges)):
+            rendered, count = self._rendered_exchange(index)
+            body.extend(rendered)
+            masked += count
         self.masked_results = masked
         return head + body
+
+    def _rendered_exchange(self, index: int) -> tuple[list[dict[str, Any]], int]:
+        """One exchange as sent: older ones with their tool results replaced by digests."""
+        exchange = self.exchanges[index]
+        cutoff = len(self.exchanges) - self.keep_results if self.keep_results else 0
+        if index >= cutoff:
+            return list(exchange), 0
+        results = iter(self.digests[index] if index < len(self.digests) else [])
+        rendered, masked = [], 0
+        for message in exchange:
+            if message.get("role") == "tool":
+                digest = next(results, None)
+                if digest is not None:
+                    message = {**message, "content": digest}
+                    masked += 1
+            rendered.append(message)
+        return rendered, masked
+
+    def exchange_tokens(self, count: int) -> int:
+        """Calibrated tokens of the oldest ``count`` exchanges as sent (what archiving them would free)."""
+        messages = [message for index in range(min(count, len(self.exchanges)))
+                    for message in self._rendered_exchange(index)[0]]
+        return int(estimate_tokens(messages) * self.scale) if messages else 0
 
     def _shrink_grounded(self) -> bool:
         """Halve the largest list in the grounded context; False when nothing is left to cut."""

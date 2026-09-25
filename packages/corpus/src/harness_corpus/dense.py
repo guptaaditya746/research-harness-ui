@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -32,6 +33,7 @@ QUERY_INSTRUCTION = (
     "Instruct: Given a question about scientific papers, retrieve the passages that answer it\nQuery: "
 )
 DENSE_DIR = ("index", "dense")
+SCORE_CHUNK = 16384  # rows converted to float32 at a time (64 MB at 1,024 dimensions)
 
 
 def passages_digest(root: Path) -> str:
@@ -98,18 +100,30 @@ class DenseIndex:
 
     def search(self, query_vector: np.ndarray, allowed: set[str] | None = None,
                k: int = 200) -> list[tuple[str, float]]:
-        """Passage ids by cosine similarity, best first, restricted to ``allowed``."""
+        """Passage ids by cosine similarity, best first, restricted to ``allowed``.
+
+        Scores are computed in float32 (float16 products would round cosines to ~5e-4 and create
+        ties); ties keep row order, so the ranking is deterministic.
+        """
         if not self.available or self.matrix is None:
             return []
-        scores = np.asarray(self.matrix @ query_vector.astype(self.matrix.dtype), dtype=np.float32)
+        query = np.asarray(query_vector, dtype=np.float32).reshape(-1)
+        if query.shape[0] != self.matrix.shape[1]:
+            raise ValueError(f"query has {query.shape[0]} dimensions, the index {self.matrix.shape[1]}; "
+                             "rebuild with `make embed`")
         if allowed is not None:
-            rows = np.fromiter((self.row_of[pid] for pid in allowed if pid in self.row_of), dtype=np.int64)
+            rows = np.array(sorted(self.row_of[pid] for pid in allowed if pid in self.row_of), dtype=np.int64)
             if rows.size == 0:
                 return []
-            chosen = rows[np.argsort(-scores[rows], kind="stable")[:k]]
-        else:
-            chosen = np.argsort(-scores, kind="stable")[:k]
-        return [(self.ids[row], float(scores[row])) for row in chosen]
+            scores = np.asarray(self.matrix[rows], dtype=np.float32) @ query
+            order = np.argsort(-scores, kind="stable")[:k]
+            return [(self.ids[rows[i]], float(scores[i])) for i in order]
+        scores = np.concatenate([
+            np.asarray(self.matrix[start:start + SCORE_CHUNK], dtype=np.float32) @ query
+            for start in range(0, self.matrix.shape[0], SCORE_CHUNK)
+        ]) if self.matrix.shape[0] else np.zeros(0, dtype=np.float32)
+        order = np.argsort(-scores, kind="stable")[:k]
+        return [(self.ids[row], float(scores[row])) for row in order]
 
 
 def build_dense_index(root: Path, *, model: str | None = None, batch_size: int = 64) -> dict:
@@ -119,13 +133,22 @@ def build_dense_index(root: Path, *, model: str | None = None, batch_size: int =
     matrix = embed_texts([row["text"] for row in rows], model=model, batch_size=batch_size)
     folder = root.joinpath(*DENSE_DIR)
     folder.mkdir(parents=True, exist_ok=True)
-    np.save(folder / "embeddings.npy", matrix.astype(np.float16))
-    (folder / "passage_ids.json").write_text(json.dumps([row["passage_id"] for row in rows]))
     meta = {"model": model or settings().model_embedding, "dimension": int(matrix.shape[1]) if len(rows) else 0,
             "count": len(rows), "passages_sha256": passages_digest(root),
             "query_instruction": QUERY_INSTRUCTION, "seconds": round(time.monotonic() - started, 1)}
-    (folder / "meta.json").write_text(json.dumps(meta, indent=2))
+    # Write beside and rename: running servers keep their memory map of the old file (a rewrite in
+    # place would truncate the mapped file under them).
+    _replace(folder / "embeddings.npy", lambda fh: np.save(fh, matrix.astype(np.float16)))
+    _replace(folder / "passage_ids.json", lambda fh: fh.write(json.dumps([row["passage_id"] for row in rows]).encode()))
+    _replace(folder / "meta.json", lambda fh: fh.write(json.dumps(meta, indent=2).encode()))
     return meta
+
+
+def _replace(path: Path, write) -> None:
+    temporary = path.with_name(f".{path.name}.tmp")
+    with temporary.open("wb") as handle:
+        write(handle)
+    os.replace(temporary, path)
 
 
 def rrf(rankings: Sequence[Sequence[str]], k: int = 60) -> list[tuple[str, float]]:

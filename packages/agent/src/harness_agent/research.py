@@ -34,7 +34,7 @@ from harness_schema.models import Check, ConceptChoice, Run, TraceRow, required_
 
 from .evidence import evidence_ids
 from .load import heavy_queue_depth
-from .mcp import MCPToolClient, MCPUnavailable, validate_findings
+from .mcp import MCPToolClient, MCPUnavailable, id_list, validate_findings
 from .proposal import ConceptProposalStep
 from .readers import choose_papers, run_readers
 from .verification import independent_verification
@@ -257,8 +257,8 @@ class AgenticResearch(ConceptProposalStep):
             return
         weighted = [(value, 3) for finding in session.findings for value in finding["evidence_ids"]]
         supplied = session.agent_decision.get("additional_evidence_ids")
-        weighted += [(str(value), 2) for value in supplied or [] if isinstance(supplied, list)
-                     and str(value) in session.observed]
+        weighted += [(value, 2) for value in (id_list(supplied) if isinstance(supplied, list) else [])
+                     if value in session.observed]
         weighted += [(value, 1) for value in session.observed]
         papers = choose_papers(corpus, session.question, weighted, config.subagent_readers)
         if not papers:
@@ -292,15 +292,28 @@ class AgenticResearch(ConceptProposalStep):
             self._recover_passages(session)
         supplied_ids = session.agent_decision.get("additional_evidence_ids")
         session.evidence_limit = max(1, settings().agentic_max_mcp_seeds)
-        selected_ids = (
-            [str(item) for item in supplied_ids if str(item) in session.observed]
+        decision_ids = (
+            [item for item in id_list(supplied_ids) if item in session.observed]
             if isinstance(supplied_ids, list) else []
         )
-        # One passage per finding first, so every finding reaches the pipeline, then the rest.
-        finding_first = [finding["evidence_ids"][0] for finding in session.findings]
-        finding_rest = [value for finding in session.findings for value in finding["evidence_ids"][1:]]
-        selected_ids = list(dict.fromkeys([*finding_first, *finding_rest, *selected_ids]))
         corpus_passages = getattr(getattr(self.baseline, "corpus", None), "by_passage", None)
+        # Order: one passage per supervisor finding (every finding reaches the pipeline), the
+        # supervisor's decision ids, one passage per paper from the readers, then the rest. Readers
+        # can add up to 12 findings; they must not push the supervisor's evidence out of the seeds.
+        own = [finding for finding in session.findings if not str(finding.get("source", "")).startswith("reader:")]
+        read = [finding for finding in session.findings if str(finding.get("source", "")).startswith("reader:")]
+        finding_first = [finding["evidence_ids"][0] for finding in own]
+        reader_first: list[str] = []
+        reader_papers: set[str] = set()
+        for finding in read:
+            first = finding["evidence_ids"][0]
+            paper = str((corpus_passages or {}).get(first, {}).get("paper_id") or finding.get("source"))
+            if paper not in reader_papers:
+                reader_papers.add(paper)
+                reader_first.append(first)
+        rest = [value for finding in own for value in finding["evidence_ids"][1:]]
+        rest += [value for finding in read for value in finding["evidence_ids"]]
+        selected_ids = list(dict.fromkeys([*finding_first, *decision_ids, *reader_first, *rest]))
         if corpus_passages is not None:
             selected_ids = [item for item in selected_ids if item in corpus_passages]
             priority = [item for item in dict.fromkeys(finding_first) if item in corpus_passages]

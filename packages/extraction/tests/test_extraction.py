@@ -147,3 +147,36 @@ def test_schema_inference_can_use_a_dedicated_model() -> None:
 
     assert schema_model.calls == 1
     assert claim_model.calls == 1
+
+
+class PayloadModel(RecordedModel):
+    def complete_json(self, system: str, user: str) -> dict:
+        self.payloads = [*getattr(self, "payloads", []), json.loads(user)]
+        return super().complete_json(system, user)
+
+
+def test_agent_notes_are_their_own_field_and_stay_out_of_definitions_and_verification() -> None:
+    from harness_extraction import ExtractedTriple
+    from harness_semantic import HRN
+    from rdflib import RDFS
+
+    schema_model = PayloadModel([{"label": "Tasks", "gloss": "Tasks", "classes": ["Paper", "Task"],
+                                  "properties": ["studiesTask"]}])
+    answer_model = PayloadModel([
+        {"sparql": "SELECT ?p WHERE { ?p ?q ?o }", "answer": "p4 studies NER [p4-intro].",
+         "cited_source_ids": ["p4-intro"]},
+        {"supported": True, "answer": "p4 studies NER [p4-intro].", "cited_source_ids": ["p4-intro"]},
+    ])
+    engine = ExtractionEngine(answer_model, hand_written_subschema(), schema_model=schema_model)
+    notes = ["p4 studies named entity recognition."]
+    inferred = engine.infer_schema("Which tasks?", [{"passage_id": "p4-intro", "paper_id": "p4", "text": "NER."}],
+                                   notes=notes)
+    assert schema_model.payloads[0]["research_notes"] == notes
+    assert list(schema_model.payloads[0])[-2:] == ["research_notes", "question"]
+    assert "named entity" not in str(engine.schema.graph.value(HRN.studiesTask, RDFS.comment))
+    triple = ExtractedTriple(subject="p4", predicate="studiesTask", object="NER", source_id="p4-intro",
+                             evidence="NER.")
+    engine.answer("Which tasks?", inferred, [triple], verify=True, notes=notes)
+    composition, verification = answer_model.payloads
+    assert composition["research_notes"] == notes and "research_notes" not in verification
+    assert verification["question"] == "Which tasks?"

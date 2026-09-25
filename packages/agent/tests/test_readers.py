@@ -98,7 +98,8 @@ def test_reader_findings_join_the_hand_off(monkeypatch) -> None:
     result = AgenticResearch(baseline, agent_model=ReaderModel()).run("Compare.", "slow", "r-read", concept=CONCEPT)
     seeds, findings = baseline.seen
     assert [item["source"] for item in findings] == ["reader:p2", "reader:p1"]
-    assert seeds[:2] == ["p2-a", "p1-a"]
+    # The supervisor's decision id first, then one reader passage from the other paper.
+    assert seeds[:2] == ["p2-b", "p1-a"] and "p2-a" in seeds
     calls = [json.loads(line) for line in result["artifacts"]["tool_calls.jsonl"].splitlines() if line.strip()]
     assert [call["agent"] for call in calls if call["tool"] == "paper_reader"] == ["reader:p2", "reader:p1"]
     checks = {check.name: check for check in result["run"].checks}

@@ -15,6 +15,7 @@ from harness_extraction import (
     bounded_timeout,
     call_interrupted,
     emit_model_event,
+    phase_budget,
     using_prompt,
 )
 from harness_prompts import render, text
@@ -83,6 +84,8 @@ CURATED_TOOLS = (
     "table_search", "results",
 )
 SUMMARISE_AT = 0.8     # share of the usable window at which older exchanges are summarised
+PHASE_GRACE_S = 2.0   # wait_for ends the phase first; threads are abandoned this much later
+SUMMARY_MIN_SAVING = 1_500  # tokens the archivable exchanges must hold before a summary is worth a call
 FINDING_TOOL = "record_finding"
 # A tool the client answers itself (no MCP round trip): the agent's scratchpad.
 FINDING_TOOL_SPEC = {
@@ -108,6 +111,16 @@ FINDING_TOOL_SPEC = {
 }
 
 
+def id_list(value: object) -> list[str]:
+    """Ids from a model-written field: a list, or one id given as a string or number."""
+    if isinstance(value, str | int) and not isinstance(value, bool):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value
+            if isinstance(item, str | int) and not isinstance(item, bool) and str(item).strip()]
+
+
 def validate_findings(raw: object, observed: set[str]) -> tuple[list[dict[str, Any]], list[str]]:
     """Findings with at least one observed id (unobserved ids removed), and the problems found."""
     findings: list[dict[str, Any]] = []
@@ -116,7 +129,7 @@ def validate_findings(raw: object, observed: set[str]) -> tuple[list[dict[str, A
         if not isinstance(item, dict) or not str(item.get("statement") or "").strip():
             problems.append(f"finding {index + 1} needs a statement")
             continue
-        ids = [str(value) for value in item.get("evidence_ids") or [] if isinstance(value, str | int)]
+        ids = list(dict.fromkeys(id_list(item.get("evidence_ids"))))
         kept = [value for value in ids if value in observed]
         if not kept:
             problems.append(f"finding {index + 1} cites no id returned by a tool in this session")
@@ -144,7 +157,7 @@ def decision_problems(
     for key in ("verified_claim_ids", "additional_evidence_ids"):
         if not isinstance(decision.get(key), list):
             problems.append(f"{key} must be a list (use [] when empty)")
-    evidence = [str(item) for item in decision.get("additional_evidence_ids") or [] if isinstance(decision.get("additional_evidence_ids"), list)]
+    evidence = id_list(decision.get("additional_evidence_ids")) if isinstance(decision.get("additional_evidence_ids"), list) else []
     unobserved = [item for item in evidence if item not in observed]
     if unobserved:
         problems.append(
@@ -321,11 +334,16 @@ class MCPToolClient:
                 # Leave room for the reply and a margin for estimation error.
                 return max(2_048, int((window - reply_tokens) * 0.9))
 
-            async def summarise_older() -> None:
-                """Near the limit, replace older exchanges with one model-written summary (Phase 3c)."""
+            async def summarise_older(sent_tools: list[dict[str, Any]]) -> None:
+                """Near the limit, replace older exchanges with one model-written summary (Phase 3c).
+
+                Only when the older exchanges (already masked to digests) hold enough tokens for the
+                summary to save something; otherwise fitting handles the overflow without a model call.
+                """
                 older = len(conversation.exchanges) - max(1, conversation.keep_results)
                 if (not config.agent_summary_compaction or older < 2
-                        or conversation.tokens(tools) < SUMMARISE_AT * limit()
+                        or conversation.tokens(sent_tools) < SUMMARISE_AT * limit()
+                        or conversation.exchange_tokens(older) < max(SUMMARY_MIN_SAVING, 0.1 * limit())
                         or not callable(getattr(model, "complete_json", None))):
                     return
                 archived = []
@@ -337,8 +355,9 @@ class MCPToolClient:
                     ]
                     archived.append({"requested": requested, "returned": digests})
                 prompt = render("agent/compaction_summary",
-                                {"archived": archived, "findings": ledger.notes, "question": question})
-                before = conversation.tokens(tools)
+                                {"earlier_summary": conversation.summary, "archived": archived,
+                                 "findings": ledger.notes, "question": question})
+                before = conversation.tokens(sent_tools)
                 try:
                     with using_prompt(prompt.ref):
                         reply = await asyncio.to_thread(model.complete_json, prompt.system, prompt.user)
@@ -354,7 +373,8 @@ class MCPToolClient:
                 self.sink({
                     "call_id": f"context-{self._counter:03d}", "agent": self.agent,
                     "tool": "context_checkpoint", "arguments": {"mode": "summary"},
-                    "result": {"window": window, "before_tokens": before, "after_tokens": conversation.tokens(tools),
+                    "result": {"window": window, "before_tokens": before,
+                               "after_tokens": conversation.tokens(sent_tools),
                                "summarised_exchanges": older, "summary": summary[:1500],
                                "evidence_ids": sorted(ledger.evidence_ids)},
                     "result_count": len(ledger.evidence_ids), "duration_ms": 0.0, "status": "ok",
@@ -362,16 +382,16 @@ class MCPToolClient:
                     "expected_evidence_type": "research_ledger",
                 })
 
-            def compact() -> None:
-                before = conversation.tokens(tools)
-                if conversation.fit(limit(), tools, ledger.summary(), core_tools=core_count):
+            def compact(sent_tools: list[dict[str, Any]]) -> None:
+                before = conversation.tokens(sent_tools)
+                if conversation.fit(limit(), sent_tools, ledger.summary(), core_tools=core_count):
                     self._counter += 1
                     self.sink({
                         "call_id": f"context-{self._counter:03d}", "agent": self.agent,
                         "tool": "context_checkpoint", "arguments": {},
                         "result": {"window": window, "before_tokens": before,
-                                   "after_tokens": conversation.tokens(tools),
-                                   "tools_offered": len(tools), "tools_available": len(all_tools),
+                                   "after_tokens": conversation.tokens(sent_tools),
+                                   "tools_offered": len(sent_tools), "tools_available": len(all_tools),
                                    "archived_exchanges": conversation.dropped_exchanges,
                                    "masked_results": conversation.masked_results,
                                    "token_scale": conversation.scale,
@@ -388,31 +408,38 @@ class MCPToolClient:
                     except ModelFailure:
                         # Stopped or out of time: end the loop with what we have.
                         return ""
-                    await summarise_older()
-                    compact()
                     # Tool budget reached: only the scratchpad is left, then the decision.
                     budget_reached = 0 < config.agent_max_tool_calls <= ledger.tool_calls
                     offered = [tool for tool in tools if tool["function"]["name"] == FINDING_TOOL] \
                         if budget_reached else tools
+                    # Until a corpus tool has run, the first turn may force a tool call ("required");
+                    # the scratchpad is not offered then, so the forced call is a corpus call.
+                    forcing = needs_tools and ledger.tool_calls == 0 and first_choice == "required"
+                    if forcing and any(tool["function"]["name"] != FINDING_TOOL for tool in offered):
+                        offered = [tool for tool in offered if tool["function"]["name"] != FINDING_TOOL]
+                    await summarise_older(offered)
+                    compact(offered)
                     if budget_reached and not budget_note_sent and conversation.exchanges:
                         budget_note_sent = True
                         conversation.exchanges[-1].append({"role": "user", "content": (
-                            f"You have used the tool budget ({ledger.tool_calls} corpus calls). Record any "
-                            "finding you have not recorded yet, then reply with your final JSON decision.")})
-                    needed = conversation.tokens(tools)
+                            f"You have used the tool budget ({ledger.tool_calls} corpus calls). "
+                            + ("Record any finding you have not recorded yet, then reply"
+                               if offered else "Reply") + " with your final JSON decision.")})
+                    needed = conversation.tokens(offered)
                     if needed > limit():
                         raise ModelFailure(
                             f"agent context window ({window} tokens) is too small: the minimal "
-                            f"prompt with {len(tools)} core tools needs about {needed + reply_tokens} "
+                            f"prompt with {len(offered)} core tools needs about {needed + reply_tokens} "
                             "tokens; serve the agent model with a larger max_model_len or set "
                             "HARNESS_AGENT_CONTEXT_TOKENS"
                         )
+                    offered_names = {tool["function"]["name"] for tool in offered}
                     turn_number += 1
                     turn_started = time.monotonic()
                     alias = getattr(model, "model", "agent")
                     emit_model_event(
                         "Model call started",
-                        f"{alias} · agent tool loop turn {turn_number} · {len(tools)} tools",
+                        f"{alias} · agent tool loop turn {turn_number} · {len(offered)} tools",
                     )
                     body = {
                         "model": getattr(model, "model", ""),
@@ -510,16 +537,25 @@ class MCPToolClient:
                             repeat = ledger.repeat_of(name, arguments) if name != FINDING_TOOL else None
                         if error:
                             pass
+                        elif name not in offered_names:
+                            # Not offered this turn (budget reached, or not in the curated set): refuse
+                            # without calling MCP, and do not count it as research.
+                            result = {"error": f"tool {name} is not available now"
+                                      + ("; the tool budget is used up, reply with your final JSON decision"
+                                         if budget_reached else "")}
+                            status = "unavailable"
+                            error = result["error"]
                         elif name == FINDING_TOOL:
                             observed_now = shown_ids | ledger.evidence_ids
                             kept, finding_problems = validate_findings([arguments], observed_now)
                             if kept:
                                 note = ledger.add_note(kept[0]["statement"], kept[0]["evidence_ids"])
-                                dropped = [str(v) for v in arguments.get("evidence_ids") or []
-                                           if str(v) not in observed_now]
+                                dropped = [value for value in id_list(arguments.get("evidence_ids"))
+                                           if value not in observed_now]
                                 result = {"recorded": note["id"], "notes_so_far": len(ledger.notes)}
                                 if dropped:
-                                    result["dropped_ids"] = dropped
+                                    # Not "*_ids": evidence_ids() must not mistake these for evidence.
+                                    result["removed"] = dropped
                                     result["note"] = "ids never returned by a tool were removed"
                             else:
                                 result = {"error": "; ".join(finding_problems) or "invalid finding"}
@@ -571,7 +607,7 @@ class MCPToolClient:
                             else f"{record['result_count']} results"
                         ) + f" · {record['duration_ms']:.0f} ms")
                         ledger_digest = None
-                        if status != "repeat" and name != FINDING_TOOL:
+                        if status not in {"repeat", "unavailable"} and name != FINDING_TOOL:
                             ledger.record(name, result, record["purpose"], arguments=arguments,
                                           call_id=record["call_id"])
                             ledger_digest = ledger.digests[-1]
@@ -600,9 +636,13 @@ class MCPToolClient:
             timeout_s = settings().mcp_agent_timeout_s
             # Never outlive the run itself.
             timeout_s = bounded_timeout(timeout_s)
-            return asyncio.run(asyncio.wait_for(
-                self._run_agent_async(model, question, grounded_context), timeout_s
-            ))
+            # Blocking model calls inside the loop (the context summary runs in a thread) are
+            # abandoned shortly after the phase deadline too; wait_for alone cannot stop a thread,
+            # and asyncio.run would wait for it.
+            with phase_budget(timeout_s + PHASE_GRACE_S):
+                return asyncio.run(asyncio.wait_for(
+                    self._run_agent_async(model, question, grounded_context), timeout_s
+                ))
         except BaseExceptionGroup as group:
             # The MCP client runs in an anyio task group, so a run's Stop or
             # deadline (RunCancelled, a BaseException raised by the trace sink)
@@ -707,4 +747,4 @@ def tool_preview(result: Any) -> str:
     return text if len(text) <= 500 else text[:500] + "…"
 
 
-__all__ = ["FINDING_TOOL", "MCPToolClient", "MCPUnavailable", "tool_preview", "validate_findings"]
+__all__ = ["FINDING_TOOL", "MCPToolClient", "MCPUnavailable", "id_list", "tool_preview", "validate_findings"]
