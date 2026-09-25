@@ -19,7 +19,7 @@ import json
 import os
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from dotenv import find_dotenv, load_dotenv
 from pydantic import AliasChoices, Field, ValidationError, field_validator
@@ -93,6 +93,8 @@ class Settings(BaseSettings):
         None, validation_alias=_env("HARNESS_AGENT_CONTEXT_TOKENS"))
     agent_reply_tokens: int = Field(2048, validation_alias=_env("HARNESS_AGENT_REPLY_TOKENS"))
     agent_reflections: int = Field(1, validation_alias=_env("HARNESS_AGENT_REFLECTIONS"))
+    agent_first_tool_choice: Literal["auto", "required"] = Field(
+        "required", validation_alias=_env("HARNESS_AGENT_FIRST_TOOL_CHOICE"))
     mcp_agent_timeout_s: float = Field(90, validation_alias=_env("HARNESS_MCP_AGENT_TIMEOUT_S"))
     readings_min: int = Field(3, validation_alias=_env("READINGS_MIN"))
     readings_max: int = Field(4, validation_alias=_env("READINGS_MAX"))

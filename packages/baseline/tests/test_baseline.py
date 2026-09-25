@@ -572,3 +572,13 @@ def test_planner_states_the_measure_used() -> None:
     research = QueryPlan(operation="research", measure="  success rate on CALVIN ABC→D ")
     assert research.stated_measure() == "success rate on CALVIN ABC→D"
     assert QueryPlan(operation="research").stated_measure() is None
+
+
+def test_research_measure_follows_the_chosen_concept() -> None:
+    model = JsonModel({"operation": "research", "measure": "recurring research themes",
+                       "rationale": "needs full text"})
+    concept = {"label": "Commonly used datasets", "gloss": "Datasets referenced by most papers."}
+    result = QueryPlanner(model).plan("What research themes recur across this corpus?", concept)
+    assert result.stated_measure() == "Commonly used datasets"
+    fact = QueryPlanner(JsonModel({"operation": "author_paper_counts", "rank": "top"})).plan("q", concept)
+    assert "distinct corpus papers per author" in fact.stated_measure()

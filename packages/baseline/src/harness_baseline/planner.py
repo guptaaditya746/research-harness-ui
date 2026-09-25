@@ -164,6 +164,10 @@ class QueryPlanner:
             return QueryPlan.fallback(f"invalid plan: {exc.errors()[0].get('msg')}")
         if not plan.requirements_met():
             return QueryPlan.fallback(f"plan for {plan.operation} lacks required arguments")
+        if concept and concept.get("label") and plan.operation == "research":
+            # The user chose this reading; the answer must say it used it, not
+            # whatever measure the model derived from the question's wording.
+            plan = plan.model_copy(update={"measure": str(concept["label"])})
         return plan
 
 

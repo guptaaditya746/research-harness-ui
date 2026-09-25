@@ -106,6 +106,23 @@ def decision_problems(
     return problems
 
 
+def _first_non_exception(group: BaseExceptionGroup) -> BaseException | None:
+    """The first leaf of an exception group that is not an ``Exception`` (e.g. a cancellation)."""
+    for error in group.exceptions:
+        if isinstance(error, BaseExceptionGroup):
+            found = _first_non_exception(error)
+            if found is not None:
+                return found
+        elif not isinstance(error, Exception):
+            return error
+    return None
+
+
+def _detail(error: BaseException) -> str:
+    children = getattr(error, "exceptions", ())
+    return "; ".join(_detail(child) for child in children) if children else f"{type(error).__name__}: {error}"
+
+
 class MCPUnavailable(RuntimeError):
     """Raised when the configured managed MCP server cannot be reached."""
 
@@ -222,6 +239,10 @@ class MCPToolClient:
                 if isinstance(claim, dict) and claim.get("id") is not None
             }
             needs_tools = (grounded_context or {}).get("answer_source") != "verified_facts"
+            # Until the agent has called a corpus tool, ask for a tool call
+            # outright ("required"): a non-thinking model otherwise often
+            # answers from its own knowledge first and needs a rejected turn.
+            first_choice = settings().agent_first_tool_choice
 
             def limit() -> int:
                 # Leave room for the reply and a margin for estimation error.
@@ -277,7 +298,7 @@ class MCPToolClient:
                             "max_tokens": reply_tokens,
                             "messages": conversation.messages(),
                             "tools": tools,
-                            "tool_choice": "auto",
+                            "tool_choice": first_choice if needs_tools and ledger.tool_calls == 0 else "auto",
                         },
                     ))
                     # Wait in short intervals so Stop or the run deadline can
@@ -431,6 +452,15 @@ class MCPToolClient:
             return asyncio.run(asyncio.wait_for(
                 self._run_agent_async(model, question, grounded_context), timeout_s
             ))
+        except BaseExceptionGroup as group:
+            # The MCP client runs in an anyio task group, so a run's Stop or
+            # deadline (RunCancelled, a BaseException raised by the trace sink)
+            # arrives wrapped in a group. Re-raise it so the runtime finalizes
+            # the run as stopped; otherwise the worker thread dies silently.
+            cancelled = _first_non_exception(group)
+            if cancelled is not None:
+                raise cancelled from None
+            raise MCPUnavailable(f"MCP agent workflow failed: {_detail(group)}") from group
         except Exception as exc:
             def detail(error: BaseException) -> str:
                 children = getattr(error, "exceptions", ())

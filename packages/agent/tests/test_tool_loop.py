@@ -50,6 +50,7 @@ class ScriptedModelClient:
 
     script: ClassVar[list[dict]] = []
     sent: ClassVar[list[list[dict]]] = []
+    bodies: ClassVar[list[dict]] = []
 
     def __init__(self, *args, **kwargs) -> None:
         pass
@@ -62,6 +63,7 @@ class ScriptedModelClient:
 
     async def post(self, url: str, *, timeout, headers, json: dict):
         ScriptedModelClient.sent.append(json["messages"])
+        ScriptedModelClient.bodies.append(json)
         return FakeResponse(ScriptedModelClient.script.pop(0))
 
 
@@ -130,3 +132,25 @@ def test_identical_tool_call_is_answered_from_the_ledger_without_hitting_the_ser
     assert [record["status"] for record in records] == ["ok", "repeat"]
     repeated = json.loads(ScriptedModelClient.sent[2][-1]["content"])
     assert repeated["repeated_call"] == records[0]["call_id"] and repeated["result"] == SEARCH
+
+
+
+def test_first_turn_requires_a_tool_call_then_the_agent_chooses(monkeypatch) -> None:
+    ScriptedModelClient.bodies = []
+    run_loop(monkeypatch, [
+        tool_call("search_evidence", {"query": "VPP"}),
+        final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"], "reasoning_summary": "ok"}),
+    ])
+    assert [body["tool_choice"] for body in ScriptedModelClient.bodies] == ["required", "auto"]
+
+
+def test_a_stop_inside_the_mcp_session_reaches_the_runtime() -> None:
+    from harness_agent.mcp import _first_non_exception
+
+    class Cancelled(BaseException):
+        pass
+
+    stop = Cancelled("stopped")
+    group = BaseExceptionGroup("task group", [ValueError("x"), BaseExceptionGroup("inner", [stop])])
+    assert _first_non_exception(group) is stop
+    assert _first_non_exception(ExceptionGroup("only errors", [ValueError("x")])) is None
