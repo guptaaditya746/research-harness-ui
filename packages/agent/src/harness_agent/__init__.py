@@ -616,7 +616,28 @@ class AgenticResearch:
 
     @staticmethod
     def _heavy_queue_depth() -> int | None:
-        """Read vLLM queue pressure when the configured high model exposes metrics."""
+        """Requests waiting on the high model, or None when load is unknown.
+
+        Reads the thesis-llm-setup status API (``LLM_STATUS_URL``), the one
+        supported source of model load; a saturated model counts as at least
+        the queue threshold. Falls back to vLLM's own metrics at
+        ``VLLM_HEAVY_API_BASE`` only when the status API is unreachable.
+        """
+        alias = os.getenv("HARNESS_MODEL_HIGH", "heavy-model")
+        threshold = int(os.getenv("HARNESS_HEAVY_QUEUE_THRESHOLD", "8"))
+        status_url = os.getenv("LLM_STATUS_URL", "http://127.0.0.1:8010/v1/status").strip()
+        if status_url:
+            try:
+                response = httpx.get(status_url, timeout=3)
+                response.raise_for_status()
+                entry = (response.json().get("models") or {}).get(alias)
+                if isinstance(entry, dict):
+                    if entry.get("state") == "unavailable":
+                        return None
+                    waiting = int(entry.get("waiting") or 0)
+                    return max(waiting, threshold) if entry.get("state") == "saturated" else waiting
+            except (httpx.HTTPError, ValueError, TypeError, AttributeError):
+                pass
         base = os.getenv("VLLM_HEAVY_API_BASE", "").rstrip("/")
         if not base:
             return None

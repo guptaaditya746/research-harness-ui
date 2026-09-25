@@ -70,54 +70,27 @@ and a browser, not a Docker image or local app build.
 
 ### Terminal 1 on gammaweb08: models and LiteLLM gateway
 
-Run from the LLM setup repository. Source the harness `.env` for its API key,
-then explicitly route the gateway's heavy/lite aliases to the local backends.
+Models are served by [thesis-llm-setup](https://github.com/guptaaditya746/thesis-llm-setup)
+in the same allocation: Heavy (Qwen3-30B-A3B-Instruct-2507-FP8) on GPU 0 port 8002,
+Lite (Granite 4.1 8B) on GPU 1 port 8003, embeddings on GPU 2 port 8001, LiteLLM on
+port 4000 and the status API on port 8010. Its `docs/OPERATIONS.md` is the full
+reference; the older `llm_setup` repository and its `vllm-model` script are retired.
 
 ```sh
-cd ~/thesis/thesis-kumar-gupta/final_thesis_implementation/llm_setup
-./scripts/vllm-model show qwen3-30b-a3b-instruct-fp8
-./scripts/vllm-model show granite41-8b
-set -a
-source ~/thesis/final-final-frontend/UI/files/harness/.env
-set +a
-export VLLM_HEAVY_API_BASE=http://127.0.0.1:8002/v1
-export VLLM_LITE_API_BASE=http://127.0.0.1:8003/v1
-export VLLM_API_BASE=http://127.0.0.1:8002/v1
-
-./scripts/vllm-model status
+cd ~/thesis/final-final-llm-setup
+set -a; source .env; set +a
+uv run llm-setup status                                   # already running? then skip start
+uv run llm-setup start --profile profiles/a100-3x40.yaml
+uv run llm-setup verify --profile profiles/a100-3x40.yaml
+uv run llm-setup smoke --profile profiles/a100-3x40.yaml
+curl -s http://127.0.0.1:8010/v1/status | python3 -m json.tool
 ```
 
-The profile names belong to the separate `llm_setup` registry, not this
-repository; both profiles must exist there before `start-pair` can use them.
-
-If both backends are stopped, start the pair (this also starts LiteLLM). If
-both already show `RUNNING`, skip this command:
-
-```sh
-cd ~/thesis/thesis-kumar-gupta/final_thesis_implementation/llm_setup
-./scripts/vllm-model start-pair qwen3-30b-a3b-instruct-fp8 granite41-8b
-```
-
-After startup, test both aliases:
-
-```sh
-cd ~/thesis/thesis-kumar-gupta/final_thesis_implementation/llm_setup
-./scripts/vllm-model chat --model heavy-model "Reply only OK"
-./scripts/vllm-model chat --model lite-model "Reply only OK"
-curl -fsS http://127.0.0.1:4000/health/liveliness
-```
-
-If only one backend is running, or you need to replace the pair, run
-`./scripts/vllm-model stop-pair` first, then start it again. After confirming
-both are running, check health with `./scripts/vllm-model health`. If changing
-gateway URLs while LiteLLM is already running, reload just the gateway with
-`./scripts/vllm-model gateway stop` followed by
-`./scripts/vllm-model gateway start`. At the end of the session,
-`./scripts/vllm-model shutdown` stops manager-owned model and gateway
-processes. Heavy is Qwen on port 8002; lite is Granite on port 8003; LiteLLM is
-on port 4000. The first start can take a long time if model weights must be
-downloaded; leave it running and do not launch another `start-pair` while it
-is waiting for readiness.
+The first start can take a long time if model weights must be downloaded; leave
+it running and do not start a second session while it waits for readiness. The
+harness `.env` must use the aliases `heavy-model`, `lite-model` and `qwen-embed`,
+and its `VLLM_API_KEY` must equal the setup's `LITELLM_MASTER_KEY`. At the end of
+the session, `uv run llm-setup stop` releases the GPUs.
 
 ### Terminal 2 on the laptop: laptop tunnel hops
 
@@ -195,8 +168,8 @@ compute port 8000, so no separate `ssh -L` command is needed.
 1. On gammaweb08, press Ctrl-C in the `make dev` terminal.
 2. On gammaweb08, run `omen-tunnels compute stop`.
 3. On the laptop, run `omen-tunnels laptop stop`.
-4. When finished with inference, run `./scripts/vllm-model shutdown` in the
-   LLM setup terminal to release the GPU models and LiteLLM gateway.
+4. When finished with inference, run `uv run llm-setup stop` in the
+   thesis-llm-setup terminal to release the GPU models and LiteLLM gateway.
 
 ## Commands
 
@@ -298,12 +271,13 @@ endpoint. With a completed ingest and a reachable model, run:
 
 ```sh
 set -a && . ./.env && set +a
-HARNESS_MODEL_AGENT=qwen-chat \
+HARNESS_MODEL_AGENT=lite-model \
 uv run --python 3.12 python -m harness_mcp_corpus.probe "Which papers cite p17? Answer from facts and include a fact ID." --root corpus_data
 ```
 
 The shared `.env` points `LITELLM_BASE_URL` and `HARNESS_MODEL_AGENT_URL` at the
-LiteLLM proxy on the same compute node. `qwen-chat` is the default extraction model;
+LiteLLM proxy on the same compute node. `HARNESS_MODEL_SMALL=heavy-model` runs the
+structured extraction calls and `HARNESS_MODEL_AGENT=lite-model` the agent tool loop;
 `HARNESS_MODEL_HIGH=heavy-model` selects the higher-quality supervisor and
 evidence reviewer for agentic runs. The small model extracts candidate triples;
 the reviewer selects question-relevant IDs from those candidates and verifies
@@ -314,7 +288,7 @@ repetitions at once.
 Set `HARNESS_MODEL_SMALL` to another alias only when its vLLM endpoint is running. `heavy-model`
 is also available as the independent judge, and `qwen-embed` is the embedding
 model. The loopback URL remains valid when the allocated compute node changes.
-On the real 37-paper corpus, `qwen-chat` found no incoming citation edge for
+On the real 37-paper corpus, the earlier `qwen-chat` alias found no incoming citation edge for
 `p17` and identified `p4` as introducing Video Prediction Policy, citing
 `p4-abstract`. The recorded calls and tool results are under `docs/evidence/`.
 

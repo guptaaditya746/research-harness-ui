@@ -249,6 +249,7 @@ def test_agent_evidence_ids_must_have_been_observed_in_the_session(monkeypatch) 
     assert verification["agent_evidence_ids"] == {
         "supplied": ["p4-intro", "p99-invented"], "observed_in_session": ["p4-intro"],
         "rejected_unobserved": ["p99-invented"],
+        "used_for_retrieval": ["p4-intro"], "used_for_verification": ["p4-intro"],
     }
     assert verification["triple_provenance"]["verified"] is True
     assert verification["agentic_execution"]["reason"] is None

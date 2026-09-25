@@ -49,6 +49,10 @@ def check_config() -> None:
             report("WARN", f"{name}={value:g}", f"per-call timeout below {minimum}s; Qwen structured calls often exceed it")
     if env("HARNESS_INCLUDE_FIXTURES", "true").casefold() not in {"0", "false", "no"}:
         report("WARN", "HARNESS_INCLUDE_FIXTURES", "recorded demo runs will be listed next to live runs; set false")
+    window = env("HARNESS_AGENT_CONTEXT_TOKENS")
+    if window and window.isdigit() and int(window) > 32768:
+        report("WARN", f"HARNESS_AGENT_CONTEXT_TOKENS={window}",
+               "thesis-llm-setup serves 32768; the first long agent turn will fail before the window is relearned")
     judge, agent = env("HARNESS_MODEL_JUDGE"), env("HARNESS_MODEL_AGENT")
     if judge and judge == agent:
         report("WARN", "HARNESS_MODEL_JUDGE", "judge equals the agent model")
@@ -158,6 +162,28 @@ def check_models(quick: bool) -> None:
             report("FAIL", f"model {agent} native tool calling", f"{type(exc).__name__}: {exc}"[:200])
 
 
+def check_model_status() -> None:
+    """Model load from the thesis-llm-setup status API (the harness busy check reads it too)."""
+    url = env("LLM_STATUS_URL", "http://127.0.0.1:8010/v1/status")
+    try:
+        response = httpx.get(url, timeout=5)
+        response.raise_for_status()
+        models = response.json().get("models") or {}
+    except Exception as exc:  # noqa: BLE001
+        report("WARN", f"model status API at {url}", f"{type(exc).__name__}: {exc}; heavy-busy deferral is off")
+        return
+    for alias in sorted({env("HARNESS_MODEL_HIGH", "heavy-model"), env("HARNESS_MODEL_AGENT")} - {""}):
+        entry = models.get(alias)
+        if not isinstance(entry, dict):
+            report("WARN", f"model status for {alias}", "alias not reported by the status API")
+            continue
+        state = entry.get("state", "unknown")
+        detail = f"{state}, waiting {entry.get('waiting', '?')}, KV cache {entry.get('kvCache', '?')}"
+        if entry.get("preemptions"):
+            detail += f", {entry['preemptions']} preemptions since start (KV cache ran full)"
+        report("PASS" if state in {"healthy", "busy"} else "WARN", f"model status for {alias}", detail)
+
+
 def check_mcp() -> None:
     url = env("MCP_CORPUS_URL", "http://127.0.0.1:8765/mcp")
     try:
@@ -218,6 +244,7 @@ def main() -> int:
     check_config()
     check_corpus()
     check_models(args.quick)
+    check_model_status()
     check_mcp()
     check_api()
     check_storage()

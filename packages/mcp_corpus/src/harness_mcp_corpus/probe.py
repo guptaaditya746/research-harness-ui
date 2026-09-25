@@ -113,7 +113,7 @@ def main() -> None:
         default=os.getenv("HARNESS_MODEL_AGENT_URL"),
         required="HARNESS_MODEL_AGENT_URL" not in os.environ,
     )
-    parser.add_argument("--model", default=os.getenv("HARNESS_MODEL_AGENT", "qwen-chat"))
+    parser.add_argument("--model", default=os.getenv("HARNESS_MODEL_AGENT", "lite-model"))
     args = parser.parse_args()
     result = asyncio.run(
         ask(

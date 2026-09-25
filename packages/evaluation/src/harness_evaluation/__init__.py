@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import re
 import importlib.util
 import json
 import os
+import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from functools import lru_cache
