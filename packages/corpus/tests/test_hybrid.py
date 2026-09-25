@@ -169,3 +169,27 @@ def test_retrieval_mode_setting_is_validated(monkeypatch, mode) -> None:
 
     monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", mode)
     assert settings().retrieval_mode == mode
+
+
+def test_scoped_dense_search_is_the_same_through_the_chunked_path(tmp_path, monkeypatch) -> None:
+    _store(tmp_path, with_dense=True)
+    index = DenseIndex(tmp_path)
+    query = np.asarray([0.2, 0.9, 0.1], dtype=np.float32)
+    scope = {"p1-a", "p2-a", "p2-b"}
+    small = index.search(query, allowed=scope)
+    monkeypatch.setattr(dense_module, "SCORE_CHUNK", 1)   # the scope is now "large": chunked, then filtered
+    assert index.search(query, allowed=scope) == small
+
+
+def test_an_empty_rerank_result_keeps_the_fused_order_and_says_so(tmp_path, monkeypatch) -> None:
+    store = _store(tmp_path, with_dense=False)
+    monkeypatch.setenv("HARNESS_MODEL_RERANK", "test-reranker")
+
+    class Response:
+        def raise_for_status(self) -> None: ...
+
+        def json(self) -> dict:
+            return {"results": []}
+
+    monkeypatch.setattr(store_module.httpx, "post", lambda *a, **k: Response())
+    assert store.hybrid_rank("SafeRAG attack tasks silver noise", limit=2)["retrieval"] == "bm25"

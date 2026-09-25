@@ -371,3 +371,14 @@ def test_a_slow_summary_does_not_outlive_the_agent_phase(monkeypatch) -> None:
     with pytest.raises(mcp_module.MCPUnavailable):
         MCPToolClient(lambda record: None).run_agent(model, "Which attacks?", {"answer_source": "research"})
     assert time.monotonic() - started < 7.5   # phase 2 s + grace 2 s, not the 10 s call
+
+
+def test_the_scratchpad_alone_is_never_forced(monkeypatch) -> None:
+    # Only record_finding on offer (no corpus tool listed): tool_choice must not be "required".
+    _session_with(monkeypatch, [])
+    ScriptedModelClient.bodies = []
+    run_loop(monkeypatch, [final({"verified_claim_ids": [], "additional_evidence_ids": [], "reasoning_summary": "x"}),
+                           final({"verified_claim_ids": [], "additional_evidence_ids": [], "reasoning_summary": "x"})])
+    first = ScriptedModelClient.bodies[0]
+    assert [tool["function"]["name"] for tool in first["tools"]] == ["record_finding"]
+    assert first["tool_choice"] == "auto"

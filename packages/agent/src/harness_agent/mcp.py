@@ -449,7 +449,11 @@ class MCPToolClient:
                     }
                     if offered:
                         body["tools"] = offered
-                        body["tool_choice"] = first_choice if needs_tools and ledger.tool_calls == 0 else "auto"
+                        # Force only when a corpus tool is on offer: a forced scratchpad call never
+                        # counts as research, so every later turn would be forced too.
+                        body["tool_choice"] = first_choice if (
+                            needs_tools and ledger.tool_calls == 0
+                            and any(tool["function"]["name"] != FINDING_TOOL for tool in offered)) else "auto"
                     sent_estimate = conversation.raw_tokens(offered)
                     turn = asyncio.ensure_future(client.post(
                         f"{model.base_url}/chat/completions",

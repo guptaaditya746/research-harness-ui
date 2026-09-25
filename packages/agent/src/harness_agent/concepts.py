@@ -37,6 +37,8 @@ STOP_WORDS = {
     "about", "which", "what", "when", "where", "who", "whom", "whose", "how", "why", "are", "was",
     "were", "been", "being", "have", "has", "had", "does", "did", "their", "there", "they", "them",
     "than", "then", "such", "also", "most", "more", "less", "each", "any", "all", "our", "its",
+    # Short words whose plural forms are other words ("new"/"news", "not"/"notes").
+    "new", "not", "now", "one", "two", "can", "may", "per", "via",
 }
 
 class ConceptProposalError(RuntimeError):

@@ -111,19 +111,24 @@ class DenseIndex:
         if query.shape[0] != self.matrix.shape[1]:
             raise ValueError(f"query has {query.shape[0]} dimensions, the index {self.matrix.shape[1]}; "
                              "rebuild with `make embed`")
+        rows: np.ndarray | None = None
         if allowed is not None:
             rows = np.array(sorted(self.row_of[pid] for pid in allowed if pid in self.row_of), dtype=np.int64)
             if rows.size == 0:
                 return []
-            scores = np.asarray(self.matrix[rows], dtype=np.float32) @ query
-            order = np.argsort(-scores, kind="stable")[:k]
-            return [(self.ids[rows[i]], float(scores[i])) for i in order]
-        scores = np.concatenate([
-            np.asarray(self.matrix[start:start + SCORE_CHUNK], dtype=np.float32) @ query
-            for start in range(0, self.matrix.shape[0], SCORE_CHUNK)
-        ]) if self.matrix.shape[0] else np.zeros(0, dtype=np.float32)
+        if rows is not None and rows.size <= SCORE_CHUNK:
+            scores = np.asarray(self.matrix[rows], dtype=np.float32) @ query     # a small scope
+        else:
+            # The whole matrix in chunks (bounded memory), then the scope's rows.
+            full = np.concatenate([
+                np.asarray(self.matrix[start:start + SCORE_CHUNK], dtype=np.float32) @ query
+                for start in range(0, self.matrix.shape[0], SCORE_CHUNK)
+            ]) if self.matrix.shape[0] else np.zeros(0, dtype=np.float32)
+            scores = full if rows is None else full[rows]
         order = np.argsort(-scores, kind="stable")[:k]
-        return [(self.ids[row], float(scores[row])) for row in order]
+        if rows is None:
+            return [(self.ids[row], float(scores[row])) for row in order]
+        return [(self.ids[rows[i]], float(scores[i])) for i in order]
 
 
 def build_dense_index(root: Path, *, model: str | None = None, batch_size: int = 64) -> dict:

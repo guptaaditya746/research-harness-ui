@@ -506,6 +506,8 @@ class CorpusStore:
             if all("relevance_score" in item for item in results):
                 results = sorted(results, key=lambda item: -float(item["relevance_score"]))
             order = list(dict.fromkeys(head[int(item["index"])] for item in results))
+            if not order:
+                raise ValueError("empty rerank result")
         except (httpx.HTTPError, KeyError, ValueError, IndexError, TypeError) as exc:
             LOGGER.warning("Reranker %s unavailable (%s); keeping the fused order", model, exc)
             return None

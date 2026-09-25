@@ -491,3 +491,16 @@ def test_scalar_ids_in_the_decision_do_not_fail_the_run(monkeypatch) -> None:
     session.agent_decision = {"additional_evidence_ids": 7}
     runner._select_seeds(session)
     assert session.selected_ids == []
+
+
+def test_refused_tool_calls_are_not_corpus_calls() -> None:
+    from time import monotonic
+
+    from harness_agent.research import _Session
+
+    runner = AgenticResearch(StubBaseline(), agent_model=HighModel())
+    session = _Session(question="q", budget="slow", run_id="r", concept=None, concept_input={}, started=monotonic())
+    session.tool_calls = [{"tool": "rank_evidence", "status": "unavailable", "result": {"error": "not available"}},
+                          {"tool": "search_evidence", "status": "ok", "result": {"items": [{"passage_id": "p1-a"}]}}]
+    runner._collect_findings(session)
+    assert [call["tool"] for call in session.corpus_calls] == ["search_evidence"]

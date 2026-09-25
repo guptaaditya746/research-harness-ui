@@ -228,8 +228,9 @@ class AgenticResearch(ConceptProposalStep):
                                           returned=str(exc)))
 
     def _collect_findings(self, session: _Session) -> None:
+        # Refused calls ("unavailable": not offered that turn) never reached the corpus.
         session.corpus_calls = [item for item in session.tool_calls
-                                if item["tool"] not in NON_CORPUS_RECORDS]
+                                if item["tool"] not in NON_CORPUS_RECORDS and item.get("status") != "unavailable"]
         # Only IDs the agent actually saw in this session (tool results and the
         # preliminary result shown to it) count as evidence; existing somewhere
         # in the corpus is not enough.
@@ -411,6 +412,8 @@ class AgenticResearch(ConceptProposalStep):
             return
         verified = decision.get("verified_claim_ids")
         supplied = decision.get("additional_evidence_ids")
+        if isinstance(supplied, list):
+            supplied = id_list(supplied)   # the same normalisation as the seeds (strings, stripped)
         if isinstance(supplied, list) and session.findings:
             # Findings cite evidence too; the verifier checks those ids as well.
             supplied = list(dict.fromkeys([*supplied, *(value for finding in session.findings
@@ -641,7 +644,8 @@ class AgenticResearch(ConceptProposalStep):
             triple.source and triple.evidence
             for reading in run.readings for triple in reading.triples
         ) and any(reading.triples for reading in run.readings)
-        supplied = [str(item) for item in decision.get("additional_evidence_ids") or []]
+        supplied_raw = decision.get("additional_evidence_ids")
+        supplied = id_list(supplied_raw) if isinstance(supplied_raw, list) else []
         artifacts["verification.json"] = json.dumps({
             # Separate checks: provenance of the answer's triples is not the same
             # as a successful agentic execution.
