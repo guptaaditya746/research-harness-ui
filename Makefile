@@ -1,4 +1,4 @@
-.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev demo test eval web-build preflight eval-planner
+.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -23,8 +23,13 @@ dev:
 demo:
 	HARNESS_DEV_RELOAD=0 ./scripts/dev.sh
 
-test:
+# Fast Python-only check for every change: lint, layer contracts, tests.
+check:
+	uv run --python 3.12 ruff check .
+	uv run --python 3.12 lint-imports
 	uv run --python 3.12 pytest -q
+
+test: check
 	cd web && corepack pnpm build && corepack pnpm test:e2e
 
 eval:
@@ -38,3 +43,7 @@ preflight:
 
 eval-planner:
 	uv run --python 3.12 python scripts/eval_planner.py
+
+# Summaries of recent runs (see docs/RUN_ANALYSIS.md): make runs ARGS="list -n 20"
+runs:
+	uv run --python 3.12 python scripts/runs.py $(if $(ARGS),$(ARGS),list)

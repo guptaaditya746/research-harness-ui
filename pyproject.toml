@@ -31,6 +31,8 @@ dev = [
     "mypy>=1.13",
     "hypothesis>=6",
     "watchfiles>=0.21",
+    "import-linter>=2.1",
+    "harness-public-gateway",
 ]
 
 [tool.uv.workspace]
@@ -51,11 +53,44 @@ harness-extraction = { workspace = true }
 harness-baseline = { workspace = true }
 harness-agent = { workspace = true }
 harness-evaluation = { workspace = true }
+harness-public-gateway = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["api"]
-testpaths = ["packages/config/tests", "packages/prompts/tests", "packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "packages/agent/tests", "packages/evaluation/tests", "api/tests"]
+testpaths = ["packages/config/tests", "packages/prompts/tests", "packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "packages/agent/tests", "packages/evaluation/tests", "packages/public_gateway/tests", "api/tests"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+
+[tool.importlinter]
+root_packages = [
+    "harness_agent", "harness_baseline", "harness_config", "harness_corpus", "harness_evaluation",
+    "harness_extraction", "harness_graphstore", "harness_ledger", "harness_mcp_corpus",
+    "harness_observability", "harness_prompts", "harness_public_gateway", "harness_runs",
+    "harness_schema", "harness_semantic",
+]
+
+# Higher layers may import lower ones, never the reverse. Packages joined by
+# "|" are siblings and must not import each other. See AGENTS.md ("Layers").
+[[tool.importlinter.contracts]]
+name = "Research packages are layered"
+type = "layers"
+layers = [
+    "harness_agent",
+    "harness_baseline",
+    "harness_extraction | harness_graphstore | harness_mcp_corpus | harness_evaluation | harness_runs",
+    "harness_corpus | harness_semantic | harness_observability | harness_ledger | harness_prompts",
+    "harness_schema | harness_config",
+]
+
+# The internet-facing gateway talks to the API over HTTP only.
+[[tool.importlinter.contracts]]
+name = "Public gateway imports no harness internals"
+type = "forbidden"
+source_modules = ["harness_public_gateway"]
+forbidden_modules = [
+    "harness_agent", "harness_baseline", "harness_corpus", "harness_evaluation",
+    "harness_extraction", "harness_graphstore", "harness_ledger", "harness_mcp_corpus",
+    "harness_observability", "harness_prompts", "harness_runs", "harness_semantic",
+]

@@ -8,6 +8,7 @@ dependencies = [
     "tenacity>=8.2",
     "harness-config",
     "harness-prompts",
+    "harness-schema",
     "harness-semantic",
 ]
 
@@ -18,4 +19,5 @@ build-backend = "hatchling.build"
 [tool.uv.sources]
 harness-config = { workspace = true }
 harness-prompts = { workspace = true }
+harness-schema = { workspace = true }
 harness-semantic = { workspace = true }

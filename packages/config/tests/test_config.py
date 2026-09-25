@@ -1,0 +1,65 @@
+"""Settings: defaults, blank values, and agreement with .env.example."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from harness_config import DYNAMIC_VARIABLES, Settings, settings
+
+ROOT = Path(__file__).resolve().parents[3]
+# Read by packages/public_gateway, which keeps its own configuration.
+PUBLIC_GATEWAY = re.compile(r"^(PUBLIC_|TURNSTILE_)")
+
+
+def _aliases() -> set[str]:
+    names: set[str] = set()
+    for field in Settings.model_fields.values():
+        alias = field.validation_alias
+        names.update(getattr(alias, "choices", [alias]))
+    return {str(name) for name in names}
+
+
+def test_every_env_example_variable_is_a_setting() -> None:
+    variables = re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", (ROOT / ".env.example").read_text(), re.M)
+    unknown = [
+        name for name in variables
+        if name not in _aliases() and not PUBLIC_GATEWAY.match(name)
+        and not name.startswith(DYNAMIC_VARIABLES)
+    ]
+    assert unknown == []
+
+
+def test_blank_values_mean_unset_and_flags_parse(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", "")
+    monkeypatch.setenv("HARNESS_MODEL_EDC", " ")
+    monkeypatch.setenv("HARNESS_INCLUDE_FIXTURES", "false")
+    monkeypatch.setenv("HARNESS_MODEL_STREAM", "yes")
+    config = settings()
+    assert config.agent_context_tokens is None and config.model_edc is None
+    assert config.include_fixtures is False and config.model_stream is True
+
+
+def test_settings_follow_the_current_environment(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_MODEL_AGENT", "a")
+    assert settings().model_agent == "a"
+    monkeypatch.setenv("HARNESS_MODEL_AGENT", "b")
+    assert settings().model_agent == "b"
+
+
+def test_run_deadline_prefers_the_most_specific_variable(monkeypatch) -> None:
+    monkeypatch.delenv("HARNESS_RUN_DEADLINE_AGENTIC_SLOW_S", raising=False)
+    monkeypatch.delenv("HARNESS_RUN_DEADLINE_SLOW_S", raising=False)
+    assert settings().run_deadline_seconds("agentic", "slow") == 300.0
+    monkeypatch.setenv("HARNESS_RUN_DEADLINE_SLOW_S", "600")
+    assert settings().run_deadline_seconds("baseline", "slow") == 600.0
+    monkeypatch.setenv("HARNESS_RUN_DEADLINE_BASELINE_SLOW_S", "120")
+    assert settings().run_deadline_seconds("baseline", "slow") == 120.0
+
+
+def test_model_options_are_read_per_alias(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_MODEL_OPTIONS", '{"heavy-model": {"max_tokens": 10}}')
+    assert settings().model_options("heavy-model") == {"max_tokens": 10}
+    assert settings().model_options("lite-model") == {}
+    monkeypatch.setenv("HARNESS_MODEL_OPTIONS", "not json")
+    assert settings().model_options("heavy-model") == {}
