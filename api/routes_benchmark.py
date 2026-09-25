@@ -2,27 +2,16 @@
 
 from __future__ import annotations
 
-import logging
-from statistics import mean
-
 import app_state
 from api_models import BenchmarkExecuteRequest, RunRequest
 from fastapi import APIRouter, HTTPException
 from harness_config import settings
-from harness_evaluation import evaluate_run
+from harness_evaluation import load_relations
+from harness_evaluation.benchmark import build_benchmark
+from harness_evaluation.judge import CachedJudge
 from harness_schema.models import EvaluationSnapshot, Run
 
 router = APIRouter()
-LOGGER = logging.getLogger(__name__)
-
-
-def _score_aggregate(scores: list[dict], metric: str) -> dict[str, float | None]:
-    values = [score[metric] for score in scores]
-    return {
-        "mean": mean(values) if values else None,
-        "min": min(values) if values else None,
-        "max": max(values) if values else None,
-    }
 
 
 def _run_cost(run: Run) -> dict[str, float | int]:
@@ -37,90 +26,20 @@ def _run_cost(run: Run) -> dict[str, float | int]:
 
 
 @router.get("/benchmark")
-def benchmark(category: str | None = None) -> dict:
-    """Return approved benchmark questions with aggregated path scores."""
+def benchmark(category: str | None = None, judge: bool = True) -> dict:
+    """Approved benchmark questions with aggregated path scores (see harness_evaluation.benchmark).
+
+    ``judge=false`` reports the soft level from reviewer variants only (use it when the judge's
+    agreement with people is below the bar, see labelling docs/EVALUATION.md).
+    """
     candidates = [row for row in app_state.runtime.gold.list() if row.get("status") == "approved"]
     if category:
         candidates = [row for row in candidates if row.get("category") == category]
-    runs = app_state.runtime.list()
-    question_rows = []
-    for candidate in candidates:
-        path_rows = []
-        for path in ("baseline", "baseline-enhanced", "agentic"):
-            matching = [
-                run
-                for run in runs
-                if run.question == candidate.get("question") and run.path == path
-            ]
-            if candidate.get("snapshot") is not None:
-                matching = [
-                    run
-                    for run in matching
-                    if run.snapshot
-                    and run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]
-                ]
-            evaluations = []
-            for run in matching:
-                if run.status != "answered":
-                    continue
-                try:
-                    evaluations.append(
-                        evaluate_run(
-                            run, candidate.get("gold_triples", []), candidate.get("gold_claims")
-                        )
-                    )
-                except (ValueError, TypeError, KeyError) as exc:
-                    LOGGER.warning(
-                        "Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc
-                    )
-            eligible = [result for result in evaluations if result["eligible_for_path_score"]]
-            scores = [result["chosen"] for result in eligible if result["chosen"] is not None]
-            claim_scores = [
-                reading["claim_score"]["claim"]
-                for result in eligible
-                for reading in result["readings"]
-                if reading["index"] == result["chosen_reading"]
-                and reading["claim_score"] is not None
-            ]
-            costs = [_run_cost(run) for run in matching]
-            if not matching:
-                continue
-            path_rows.append(
-                {
-                    "path": "adaptive-baseline" if path == "baseline-enhanced" else path,
-                    "repetitions": [run.id for run in matching],
-                    "completed": len(scores),
-                    "failed": len(matching) - len(scores),
-                    "precision": _score_aggregate(scores, "precision"),
-                    "recall": _score_aggregate(scores, "recall"),
-                    "f1": _score_aggregate(scores, "f1"),
-                    "claim_precision": _score_aggregate(claim_scores, "precision"),
-                    "claim_recall": _score_aggregate(claim_scores, "recall"),
-                    "claim_f1": _score_aggregate(claim_scores, "f1"),
-                    "model_calls": mean([item["model_calls"] for item in costs]),
-                    "tool_calls": mean([item["tool_calls"] for item in costs]),
-                    "wall_clock_s": mean([item["wall_clock_s"] for item in costs]),
-                }
-            )
-        question_rows.append(
-            {
-                "id": candidate.get("id"),
-                "question": candidate.get("question"),
-                "category": candidate.get("category", "uncategorized"),
-                "theme": candidate.get("theme"),
-                "difficulty": candidate.get("difficulty"),
-                "expected_status": candidate.get("expected_status", "answered"),
-                "gold_version": candidate.get("gold_version"),
-                "corpus_fingerprint": candidate.get("corpus_fingerprint"),
-                "ontology_hash": candidate.get("ontology_hash"),
-                "snapshot": candidate.get("snapshot"),
-                "paths": path_rows,
-            }
-        )
-    return {
-        "questions": question_rows,
-        "categories": sorted({row["category"] for row in question_rows}),
-    }
+    # Cache-only judge: opening the page never starts model calls (`make evaluate ARGS=--judge` fills it).
+    result = build_benchmark(candidates, app_state.runtime.list(), relations=load_relations(),
+                             judge=CachedJudge() if judge else None, cost=_run_cost)
+    result["judge"] = "cache" if judge else "off"
+    return result
 
 
 @router.get("/benchmark/validate")

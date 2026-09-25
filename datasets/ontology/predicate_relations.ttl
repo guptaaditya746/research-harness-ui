@@ -1,0 +1,37 @@
+# Rules for the "entailed" matching level of triple evaluation.
+#
+# Each line says how two predicates, classes or entities relate. The scorer
+# closes these rules together with the harness schema and the DBLP seed schema
+# (OWL 2 RL, owlrl) and then credits a run triple when it logically implies a
+# gold triple (recall) or is implied by one (precision).
+#
+#   rdfs:subPropertyOf      A is a narrower kind of B        (A implies B, not the reverse)
+#   owl:equivalentProperty  A and B are two names for one relation
+#   owl:inverseOf           A is B read in the other direction
+#   rdfs:subClassOf         every A is a B (for rdf:type triples)
+#   owl:sameAs              two names for the same entity
+#
+# Invented predicates use the hrn: namespace with the exact spelling the
+# harness emits (case-sensitive), e.g. hrn:hasAttackTask for "hasAttackTask".
+# Add a rule only when it holds in every context; anything weaker belongs to
+# the soft level (variants or the judge). Record why in a comment.
+# Known limit: owl:sameAs between two author names does not yet reach the
+# objects of dblp:authoredBy (those are keyed as person slugs).
+# Background and examples: labelling/docs/EVALUATION.md, "Entailed level".
+
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix owl:  <http://www.w3.org/2002/07/owl#> .
+@prefix dblp: <https://dblp.org/rdf/schema#> .
+@prefix hrn:  <https://harness.local/schema#> .
+
+# The harness predicates title/authoredBy/year/venue/cites are already linked to
+# DBLP by the harness schema, and the DBLP seed brings its own hierarchy
+# (dblp:authoredBy is a kind of dblp:createdBy, inverse of dblp:authorOf).
+# No invented-predicate rules are active yet: add them as invented predicates
+# appear in reviewed gold.
+
+# Examples (from the nlp27 worked example); enable only after checking they hold:
+# hrn:hasAttackTask   rdfs:subPropertyOf     hrn:evaluatesAttack .
+# hrn:addresses       owl:equivalentProperty hrn:addressesProblem .
+# hrn:authorOf        owl:inverseOf          dblp:authoredBy .
+# hrn:HybridRAGMethod rdfs:subClassOf        hrn:Method .

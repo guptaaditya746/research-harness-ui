@@ -242,7 +242,14 @@ def test_benchmark_endpoint_aggregates_approved_question(tmp_path: Path, monkeyp
     assert edited.json()["status"] == "approved"
     response = client.get("/benchmark")
     assert response.status_code == 200
-    assert response.json()["questions"][0]["paths"][0]["f1"]["mean"] == 1.0
+    body = response.json()
+    path_row = body["questions"][0]["paths"][0]
+    assert path_row["f1"]["mean"] == 1.0
+    assert path_row["levels"]["strict"]["f1"]["mean"] == 1.0
+    assert path_row["levels"]["soft"]["f1"]["mean"] == 1.0
+    assert path_row["judge_pending"] == 0
+    everything = next(row for row in body["by_complexity"]["rows"] if row["complexity"] == "all")
+    assert everything["questions"] == 1 and everything["paths"]["baseline"]["soft"]["mean"] == 1.0
 
     degraded = test_runtime.get(run_id).model_copy(
         update={"reason": "agentic_degraded: heavy_model_busy: 93 requests waiting"}

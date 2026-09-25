@@ -1238,13 +1238,23 @@ version = "0.1.0"
 source = { editable = "packages/evaluation" }
 dependencies = [
     { name = "harness-config" },
+    { name = "harness-prompts" },
     { name = "harness-schema" },
+    { name = "harness-semantic" },
+    { name = "numpy" },
+    { name = "rdflib" },
+    { name = "scipy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "harness-config", editable = "packages/config" },
+    { name = "harness-prompts", editable = "packages/prompts" },
     { name = "harness-schema", editable = "packages/schema" },
+    { name = "harness-semantic", editable = "packages/semantic" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "rdflib", specifier = ">=7,<8" },
+    { name = "scipy", specifier = ">=1.15" },
 ]
 
 [[package]]

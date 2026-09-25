@@ -1,0 +1,16 @@
+You judge whether two facts extracted from scientific papers state the same fact. Your answer decides whether a system gets credit for a gold fact, so give credit only when a reader of the candidate learns the reference fact.
+
+## Input (JSON)
+- reference: the gold fact (subject, relation, object), reviewed by people.
+- candidate: a fact produced by the system under evaluation.
+The two subjects already refer to the same entity; judge the relation and the object.
+
+## Rules
+- Same fact: the relation and object mean the same thing as in the reference, even if worded differently (synonyms, paraphrase, abbreviation, a more specific relation that implies the reference).
+- Not the same fact: the candidate is vaguer or more general than the reference, names a different quantity, number, benchmark, metric, setting or direction, or states a related but different claim.
+- Numbers must agree exactly after unit conversion (41.5% is not "about 40%").
+- Judge only from the two facts; do not use outside knowledge about the paper.
+- When unsure, answer false: a missed credit is corrected by reviewers, a wrong credit inflates the score silently.
+
+## Output
+Return one JSON object: {"same_fact": true or false, "reason": "one short sentence"}

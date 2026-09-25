@@ -1,4 +1,15 @@
-"""Pure artifact evaluation for research runs."""
+"""Evaluation of saved runs against gold.
+
+- ``canonical_triple_key`` / ``score_triples``: exact set-based triple scores (the original metric).
+- ``matching.score_levels``: precision and recall at the strict, entailed and soft levels, one-to-one,
+  with locally closed DBLP scoring, vital recall and judged precision.
+- ``relations``: RDFS/OWL rules for the entailed level (closed with owlrl).
+- ``judge``: the cached soft-match judge (no model calls unless the caller passes one).
+- ``stats``: bootstrap confidence intervals over questions.
+
+The metric definitions, their reasons and their limits are documented in the
+labelling repository (``docs/EVALUATION.md``).
+"""
 
 from __future__ import annotations
 
@@ -13,6 +24,9 @@ from urllib.parse import unquote, urlsplit
 
 from harness_config import settings
 from harness_schema.models import ClaimSubgraph, Run, Triple
+
+from .matching import LEVELS, Judge, LevelScore, score_levels
+from .relations import PredicateRelations, load_relations
 
 
 @dataclass(frozen=True)
@@ -44,6 +58,7 @@ class TripleScore:
 PREDICATE_ALIASES = {
     "cites": "https://dblp.org/rdf/schema#cites",
     "authoredby": "https://dblp.org/rdf/schema#authoredBy",
+    "author": "https://dblp.org/rdf/schema#authoredBy",
     "title": "https://dblp.org/rdf/schema#title",
     "year": "https://dblp.org/rdf/schema#yearOfPublication",
     "venue": "https://dblp.org/rdf/schema#publishedIn",
@@ -196,10 +211,18 @@ def score_claims(
 def evaluate_run(
     run: Run, gold_triples: Iterable[Triple | Mapping[str, object]],
     gold_claims: Iterable[ClaimSubgraph | Mapping[str, object]] | None = None,
-    *, question_id: str | None = None,
+    *, question_id: str | None = None, relations: PredicateRelations | None = None,
+    judge: Judge | None = None, rejected: Iterable[Mapping[str, object]] = (),
 ) -> dict:
-    """Evaluate every reading and the selected reading without mutating the run."""
+    """Evaluate every reading and the selected reading without mutating the run.
+
+    ``score``/``chosen`` keep the original exact set-based metric; ``levels``/``chosen_levels``
+    add the strict/entailed/soft scores, vital recall, judged precision and the matched,
+    missed and extra triples for the Interpretation window.
+    """
     gold = list(gold_triples)
+    rejected = list(rejected)
+    relations = relations if relations is not None else load_relations()
     claim_gold = list(gold_claims) if gold_claims is not None else None
     shared = _shared_vocabulary()
     if question_id is None and shared:
@@ -232,16 +255,68 @@ def evaluate_run(
                 "answer_claim_ids": sorted(answer_claim_ids),
                 "missing_gold": len(gold_keys - predicted_keys),
                 "claim_score": score_claims(reading.claims, claim_gold) if claim_gold is not None else None,
+                # The judge is only consulted for the chosen reading, the one that is reported.
+                "levels": score_levels(
+                    reading.triples, gold, key=lambda item: canonical_triple_key(item, question_id),
+                    relations=relations, judge=judge if index == run.chosen_reading else None,
+                    rejected=rejected,
+                ),
             }
         )
     selected = next((row["score"] for row in rows if row["index"] == run.chosen_reading), None)
+    selected_levels = next((row["levels"] for row in rows if row["index"] == run.chosen_reading), None)
     return {"run_id": run.id, "path": run.path, "status": run.status,
             "producing_path": run.producing_path, "execution_status": run.execution_status,
             "eligible_for_path_score": run.status == "answered" and run.execution_status != "degraded" and
             not (run.reason or "").startswith("agentic_degraded:") and
             run.producing_path in {None, run.path},
             "gold": len(gold_keys), "gold_claims": len(claim_gold) if claim_gold is not None else None,
-            "readings": rows, "chosen_reading": run.chosen_reading, "chosen": selected}
+            "readings": rows, "chosen_reading": run.chosen_reading, "chosen": selected,
+            "chosen_levels": selected_levels}
 
 
-__all__ = ["TripleScore", "canonical_triple_key", "evaluate_run", "score_claims", "score_triples"]
+def evaluate_gold_row(
+    run: Run, row: Mapping[str, object], *, relations: PredicateRelations | None = None,
+    judge: Judge | None = None, question_id: str | None = None,
+) -> dict:
+    """Evaluate a run against one gold row, using everything the row carries.
+
+    Reviewer-rejected triples (``forbidden_alternatives``) feed judged precision. For an ambiguous
+    question, ``accepted_readings`` may give one gold set per accepted reading: the run is scored
+    against the row's own gold and against each reading's gold, and the best soft F1 is kept (the
+    AmbigQA/ASQA convention). ``accepted_reading`` names the reading credited (None = the row's own
+    gold). The original exact metric (``chosen``) always refers to the row's own gold.
+    """
+    relations = relations if relations is not None else load_relations()
+    rejected = list(row.get("forbidden_alternatives") or [])
+    base = evaluate_run(run, row.get("gold_triples") or [], row.get("gold_claims"), question_id=question_id,
+                        relations=relations, judge=judge, rejected=rejected)
+    base["accepted_reading"] = None
+    readings = [item for item in row.get("accepted_readings") or [] if item.get("gold_triples")]
+    if not readings:
+        return base
+
+    def soft_f1(result: dict) -> float:
+        levels = result.get("chosen_levels") or {}
+        return float(levels.get("levels", {}).get("soft", {}).get("f1", 0.0))
+
+    best_score, best_index, best = soft_f1(base), None, base
+    for index, reading in enumerate(readings):
+        result = evaluate_run(run, reading["gold_triples"], None, question_id=question_id,
+                              relations=relations, judge=judge, rejected=rejected)
+        if soft_f1(result) > best_score:
+            best_score, best_index, best = soft_f1(result), index, result
+    if best_index is None:
+        return base
+    base["chosen_levels"] = best["chosen_levels"]
+    for mine, theirs in zip(base["readings"], best["readings"], strict=True):
+        mine["levels"] = theirs["levels"]
+    base["accepted_reading"] = {"index": best_index, "label": readings[best_index].get("label"),
+                                "measure": readings[best_index].get("measure"), "gold": best["gold"]}
+    return base
+
+
+__all__ = [
+    "LEVELS", "Judge", "LevelScore", "PredicateRelations", "TripleScore", "canonical_triple_key",
+    "evaluate_gold_row", "evaluate_run", "load_relations", "score_claims", "score_levels", "score_triples",
+]

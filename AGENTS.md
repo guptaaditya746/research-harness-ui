@@ -23,7 +23,7 @@ Start with `docs/ARCHITECTURE.md` for how a run flows, and `CONTEXT.md` for the 
 | Corpus store, BM25, ingest | `packages/corpus/src/harness_corpus/` |
 | Run / API contract (Pydantic, generated TS types) | `packages/schema/src/harness_schema/models.py` → `make fixtures` |
 | Ontology seed, OWL/SHACL validation | `packages/semantic/`, `seed/` |
-| Evaluation against gold | `packages/evaluation/`, `api/routes_benchmark.py` |
+| Evaluation against gold | `packages/evaluation/`, `api/routes_benchmark.py`, `make evaluate`; metric definitions in labelling `docs/EVALUATION.md` |
 | Web UI | `web/src/App.tsx`, `web/src/AnswerGraph.tsx` |
 | Why a run behaved as it did | `docs/RUN_ANALYSIS.md`, `make runs` |
 | Known problems and their causes | `docs/KNOWN_ISSUES.md` |
@@ -49,6 +49,7 @@ harness_schema | harness_config
 - `make check` — ruff, layer contracts, all Python tests. Run it before every commit.
 - `make test` — `make check` plus the web build and Playwright screen tests.
 - `make runs ARGS="list -n 20"` — recent runs; `show <id>`, `compare <a> <b>`, `stats`, `--json`.
+- `make evaluate` — runs against approved gold: strict / entailed / soft by complexity and path; `ARGS="--judge"` fills the soft-match judge cache.
 - `make fixtures` — regenerate `web/src/generated/run.ts`, JSON Schema and fixture runs after changing `harness_schema`.
 - `make dev` / `make demo` — MCP server, API and UI (needs the models from thesis-llm-setup).
 - `make preflight` — checks config, corpus, models, model status, MCP and API on the live node.

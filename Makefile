@@ -1,4 +1,4 @@
-.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs
+.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -47,3 +47,8 @@ eval-planner:
 # Summaries of recent runs (see docs/RUN_ANALYSIS.md): make runs ARGS="list -n 20"
 runs:
 	uv run --python 3.12 python scripts/runs.py $(if $(ARGS),$(ARGS),list)
+
+# Gold-based scores: strict / entailed / soft by complexity and path (labelling/docs/EVALUATION.md).
+# make evaluate ARGS="--judge" also asks the soft-match judge and caches its answers.
+evaluate:
+	uv run --python 3.12 python scripts/evaluate.py $(ARGS)

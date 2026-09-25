@@ -114,6 +114,9 @@ class Settings(BaseSettings):
         None, validation_alias=_env("LABELLING_NORMALIZATION_FILE"))
     labelling_vocabulary_file: str | None = Field(
         None, validation_alias=_env("LABELLING_VOCABULARY_FILE"))
+    # Evaluation: rules for the "entailed" level and the soft-match judge's cache.
+    predicate_relations_file: str = Field("", validation_alias=_env("HARNESS_PREDICATE_RELATIONS_FILE"))
+    judge_cache_file: str = Field("", validation_alias=_env("HARNESS_JUDGE_CACHE_FILE"))
 
     # ─── Evaluation snapshot (must match labelling's gold rows) ──────────────
     corpus_fingerprint: str = Field("unknown", validation_alias=_env("CORPUS_FINGERPRINT"))

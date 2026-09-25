@@ -137,12 +137,25 @@ class GoldCandidateStore:
             return self._rows()
 
     def validate_benchmark(self, *, minimum_per_category: int = 3) -> dict:
-        mandatory = ("metadata", "citation", "aggregation/ranking", "synthesis")
+        """Coverage check. Gold from labelling carries a complexity level; the benchmark is then
+        stratified by level (simple / compound / complex) instead of by question category."""
         rows = self.list()
         errors: list[dict[str, object]] = []
         approved = [row for row in rows if row.get("status") == "approved"]
+        if any(isinstance(row.get("complexity"), dict) for row in approved):
+            stratified_by = "complexity"
+            mandatory: tuple[str, ...] = ("simple", "compound", "complex")
+
+            def group(row: dict) -> object:
+                return (row.get("complexity") or {}).get("level")
+        else:
+            stratified_by = "category"
+            mandatory = ("metadata", "citation", "aggregation/ranking", "synthesis")
+
+            def group(row: dict) -> object:
+                return row.get("category")
         for category in mandatory:
-            matches = [row for row in approved if row.get("category") == category]
+            matches = [row for row in approved if group(row) == category]
             if len(matches) < minimum_per_category:
                 errors.append({"category": category, "code": "minimum_questions", "count": len(matches), "required": minimum_per_category})
         for row in approved:
@@ -153,7 +166,7 @@ class GoldCandidateStore:
                 errors.append({"id": row.get("id"), "code": "empty_gold_triples"})
             if not row.get("gold_claims"):
                 errors.append({"id": row.get("id"), "code": "missing_gold_claims"})
-        return {"valid": not errors, "mandatory_categories": list(mandatory), "approved_questions": len(approved), "errors": errors}
+        return {"valid": not errors, "stratified_by": stratified_by, "mandatory_categories": list(mandatory), "approved_questions": len(approved), "errors": errors}
 
     def promote(self, run: Run) -> dict:
         if run.rating is None:

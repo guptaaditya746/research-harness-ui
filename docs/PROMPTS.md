@@ -15,7 +15,7 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 - `HARNESS_PROMPT_SET` selects the set: `v2` (default) or `v1`.
 - `Run.prompt_hashes` records the versions a run used.
 
-## The 16 prompts
+## The 17 prompts
 
 | Name | Model call |
 |---|---|
@@ -35,6 +35,7 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | `extraction/answer_verification` | Remove unsupported claims from the draft answer |
 | `extraction/claim_enrichment` | Missing context fields of result claims, with exact quotes |
 | `mcp_corpus/probe` | M1 corpus-only probe (development tool) |
+| `evaluation/triple_match` | Soft-match judge: does a run triple state the same fact as a gold triple? (added after templating; v1 = v2) |
 
 ## Sets
 
