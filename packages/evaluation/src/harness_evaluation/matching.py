@@ -92,6 +92,17 @@ def _plain(item: Mapping[str, Any]) -> dict[str, str]:
     return {"s": str(item.get("s", "")), "p": str(item.get("p", "")), "o": str(item.get("o", ""))}
 
 
+def _with_source(item: Mapping[str, Any]) -> dict[str, str]:
+    """The triple plus its source id and a short evidence quote, when it has them (for error review)."""
+    out = _plain(item)
+    if item.get("source"):
+        out["source"] = str(item["source"])
+    evidence = str(item.get("evidence") or "").strip()
+    if evidence and evidence != out.get("source"):
+        out["evidence"] = evidence[:300]
+    return out
+
+
 def _variant_triples(gold: Mapping[str, Any]) -> list[dict[str, str]]:
     """Variants are full triples, or just another wording of the object."""
     out = []
@@ -275,10 +286,10 @@ def score_levels(
         matched.append({"run": _plain(run_by_key[run_keys[i]]), "gold": _plain(gold_by_key[gold_keys[j]]),
                         "level": level, "how": reason, "weight": gold_by_key[gold_keys[j]].get("weight")})
     recalled_gold = set(recall_matching.values())
-    missed = [{**_plain(gold_by_key[g]), "weight": gold_by_key[g].get("weight")}
+    missed = [{**_with_source(gold_by_key[g]), "weight": gold_by_key[g].get("weight")}
               for j, g in enumerate(gold_keys) if j not in recalled_gold]
     credited_runs = set(matchings["soft"][0])
-    extra = [{**_plain(run_by_key[r]), "verdict": "wrong" if i in wrong_runs else "unjudged"}
+    extra = [{**_with_source(run_by_key[r]), "verdict": "wrong" if i in wrong_runs else "unjudged"}
              for i, r in enumerate(run_keys) if i not in credited_runs]
     return {
         "levels": levels,

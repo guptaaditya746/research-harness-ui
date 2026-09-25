@@ -11,5 +11,15 @@ You are one of several readers working in parallel for a research harness over s
 - Each finding is one or two sentences and cites the passage_ids that state it; copy ids exactly.
 - Up to 4 findings, most important first. If the passages do not address the question, return no findings; an empty list is a valid answer.
 
+{% if examples %}
+## Examples from earlier errors
+{% for example in examples %}
+Example {{ loop.index }}
+Input: {{ example.input }}
+Correct output: {{ example.output }}
+{% if example.why %}Why: {{ example.why }}
+{% endif %}
+{% endfor %}
+{% endif %}
 ## Output
 Return one JSON object: {"findings": [{"statement": "…", "evidence_ids": ["…"]}]}

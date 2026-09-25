@@ -12,7 +12,7 @@ are documented in the labelling repository: `docs/EVALUATION.md`. This README is
   `score_claims`, `evaluate_run` (every reading; adds `levels`), `evaluate_gold_row` (a gold row
   with rejected alternatives and accepted readings for ambiguous questions).
 - `matching.py` — `score_levels`: strict / entailed / soft precision and recall, one-to-one
-  (SciPy maximum bipartite matching), locally closed DBLP scoring, vital recall, judged precision,
+  (SciPy weighted assignment), locally closed DBLP scoring, vital recall, judged precision,
   and the matched / missed / extra triples for the Interpretation window.
 - `relations.py` — RDFS/OWL rules for the entailed level: harness schema + DBLP seed +
   `datasets/ontology/predicate_relations.ttl`, closed once with owlrl.
@@ -21,6 +21,8 @@ are documented in the labelling repository: `docs/EVALUATION.md`. This README is
 - `stats.py` — percentile-bootstrap intervals over questions, paired differences.
 - `benchmark.py` — `build_benchmark`: runs paired with gold by question, path and snapshot;
   per-question and complexity × path summaries (used by `/benchmark` and `scripts/evaluate.py`).
+- `fewshot.py` — `fewshot_candidates`: missed vital gold triples and rejected extras, repeated
+  errors first, with draft examples (`make fewshot`, `docs/PROMPTS.md`).
 - `cli.py` — the older `harness-eval run` over a JSONL dataset (exact metric only).
 
 ## Settings

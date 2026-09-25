@@ -14,6 +14,13 @@ user message is prose rather than data, ``<name>.user.j2``). Two sets exist:
 carries ``ref`` = ``<name>@<set>:<hash>``; model events and traces record it,
 so a result can always be traced to the exact prompt text that produced it.
 
+Few-shot examples (Phase 3f): ``examples/<set>/<name>.json`` (a list of
+``{"input": ..., "output": ..., "why": ...}``) is passed to the template as
+``examples``; v2 templates of the extraction, answer and reader prompts show
+them when present. The examples are part of the prompt's hash. Choose them from
+failures on a development part of the gold set, never from the questions you
+report on (see docs/PROMPTS.md).
+
 Data payloads stay JSON (they are machine-readable and the IDs must be
 copied exactly). In v2 the long parts of a payload (passages, candidates,
 triples, claims) come first and the question comes last, which is the order
@@ -69,6 +76,20 @@ def _environment() -> Environment:
 
 
 @cache
+def _examples(prompt_set: str, name: str) -> tuple[str, list[dict[str, Any]]]:
+    """The raw JSON (for the hash) and the parsed examples for one prompt; empty when absent."""
+    path = resources.files("harness_prompts").joinpath("examples", prompt_set, f"{name}.json")
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, IsADirectoryError, NotADirectoryError):
+        return "", []
+    examples = json.loads(raw)
+    if not isinstance(examples, list) or not all(isinstance(item, dict) for item in examples):
+        raise ValueError(f"examples for {name!r} in set {prompt_set!r} must be a list of objects")
+    return raw, examples
+
+
+@cache
 def _source(prompt_set: str, name: str, part: str) -> str | None:
     path = resources.files("harness_prompts").joinpath("templates", prompt_set, f"{name}.{part}.j2")
     try:
@@ -114,6 +135,8 @@ def render(
     if system_source is None:
         raise KeyError(f"no prompt {name!r} in set {chosen!r}")
     user_source = _source(chosen, name, "user")
+    examples_raw, examples = _examples(chosen, name)
+    variables = {"examples": examples, **variables}
     system = _render_text(system_source, variables)
     if user_source is not None:
         user = _render_text(user_source, {"payload": payload or {}, **variables})
@@ -122,7 +145,9 @@ def render(
         user = json.dumps(data, ensure_ascii=ensure_ascii)
     else:
         user = ""
-    digest = hashlib.sha256((system_source + "\x00" + (user_source or "")).encode()).hexdigest()[:8]
+    digest = hashlib.sha256(
+        (system_source + "\x00" + (user_source or "") + ("\x00" + examples_raw if examples_raw else "")).encode()
+    ).hexdigest()[:8]
     return Prompt(name=name, prompt_set=chosen, version=digest, system=system, user=user)
 
 

@@ -25,6 +25,16 @@ Loaded for this question:
 {% endfor %}
 {% endif %}
 
+{% if examples %}
+## Examples from earlier errors
+{% for example in examples %}
+Example {{ loop.index }}
+Input: {{ example.input }}
+Correct output: {{ example.output }}
+{% if example.why %}Why: {{ example.why }}
+{% endif %}
+{% endfor %}
+{% endif %}
 ## Final message
 When you stop calling tools, reply with one JSON object and nothing else:
 {"reasoning_summary": "two or three sentences on what you found and why these ids answer the question", "verified_claim_ids": [ids of preliminary claims the evidence confirms; [] when there are none], "additional_evidence_ids": [passage, fact or reference ids you read that support the answer]{% if findings_tool %}, "findings": [{"statement": "a finding not yet recorded", "evidence_ids": [ids]}; [] when all are recorded]{% endif %}}

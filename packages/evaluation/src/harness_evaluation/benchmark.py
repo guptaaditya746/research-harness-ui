@@ -80,6 +80,15 @@ def _by_complexity(question_rows: list[dict]) -> dict:
     return {"metric": "triple F1 per question, mean and 95% bootstrap interval over questions", "rows": rows}
 
 
+def matching_runs(candidate: dict, runs: Iterable[Run], path: str) -> list[Run]:
+    """The runs of ``path`` for this gold row: same question text and, if the row has one, same snapshot."""
+    matching = [run for run in runs if run.question == candidate.get("question") and run.path == path]
+    if candidate.get("snapshot") is not None:
+        matching = [run for run in matching
+                    if run.snapshot and run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]]
+    return matching
+
+
 def build_benchmark(
     candidates: Iterable[dict], runs: Iterable[Run], *, relations: PredicateRelations,
     judge: Judge | None = None, cost: Callable[[Run], dict] | None = None,
@@ -90,18 +99,7 @@ def build_benchmark(
     for candidate in candidates:
         path_rows = []
         for path in PATHS:
-            matching = [
-                run
-                for run in runs
-                if run.question == candidate.get("question") and run.path == path
-            ]
-            if candidate.get("snapshot") is not None:
-                matching = [
-                    run
-                    for run in matching
-                    if run.snapshot
-                    and run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]
-                ]
+            matching = matching_runs(candidate, runs, path)
             evaluations = []
             for run in matching:
                 if run.status != "answered":
@@ -183,4 +181,4 @@ def build_benchmark(
     }
 
 
-__all__ = ["PATHS", "build_benchmark", "complexity_level"]
+__all__ = ["PATHS", "build_benchmark", "complexity_level", "matching_runs"]

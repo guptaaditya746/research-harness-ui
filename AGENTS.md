@@ -17,10 +17,10 @@ Start with `docs/ARCHITECTURE.md` for how a run flows, and `CONTEXT.md` for the 
 | Model calls (client, retries, cancellation, events) | `packages/extraction/src/harness_extraction/model_client.py`, `call_control.py`, `events.py` |
 | Schema inference, extraction, review, answer | `packages/extraction/src/harness_extraction/engine.py` |
 | Claim subgraphs (also imported by `labelling`) | `packages/extraction/src/harness_extraction/claims.py` |
-| Prompts (every model call) | `packages/prompts/src/harness_prompts/templates/{v1,v2}/` — see `docs/PROMPTS.md` |
+| Prompts (every model call) and few-shot examples | `packages/prompts/src/harness_prompts/templates/{v1,v2}/`, `examples/` — see `docs/PROMPTS.md` |
 | Settings / environment variables | `packages/config/src/harness_config/__init__.py`, `.env.example` |
 | Corpus tools for the agent (MCP) | `packages/mcp_corpus/src/harness_mcp_corpus/server.py` |
-| Corpus store, BM25, ingest | `packages/corpus/src/harness_corpus/` |
+| Corpus store, BM25 + dense (hybrid) ranking, ingest | `packages/corpus/src/harness_corpus/` (`store.py`, `dense.py`) |
 | Run / API contract (Pydantic, generated TS types) | `packages/schema/src/harness_schema/models.py` → `make fixtures` |
 | Ontology seed, OWL/SHACL validation | `packages/semantic/`, `seed/` |
 | Evaluation against gold | `packages/evaluation/`, `api/routes_benchmark.py`, `make evaluate`; metric definitions in labelling `docs/EVALUATION.md` |
@@ -50,6 +50,8 @@ harness_schema | harness_config
 - `make test` — `make check` plus the web build and Playwright screen tests.
 - `make runs ARGS="list -n 20"` — recent runs; `show <id>`, `compare <a> <b>`, `stats`, `--json`.
 - `make evaluate` — runs against approved gold: strict / entailed / soft by complexity and path; `ARGS="--judge"` fills the soft-match judge cache.
+- `make fewshot ARGS="--dev <ids>"` — few-shot example candidates from gold errors on development questions (`docs/PROMPTS.md`).
+- `make embed` — dense passage index for hybrid retrieval, after every ingest (needs `qwen-embed`).
 - `make fixtures` — regenerate `web/src/generated/run.ts`, JSON Schema and fixture runs after changing `harness_schema`.
 - `make dev` / `make demo` — MCP server, API and UI (needs the models from thesis-llm-setup).
 - `make preflight` — checks config, corpus, models, model status, MCP and API on the live node.

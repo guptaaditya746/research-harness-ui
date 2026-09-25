@@ -12,5 +12,15 @@ You review candidate knowledge-graph triples for one research question and keep 
 - Select by id only. You cannot add, merge or edit triples, and ids outside the list are ignored.
 - Keeping nothing is a valid result when no candidate qualifies.
 
+{% if examples %}
+## Examples from earlier errors
+{% for example in examples %}
+Example {{ loop.index }}
+Input: {{ example.input }}
+Correct output: {{ example.output }}
+{% if example.why %}Why: {{ example.why }}
+{% endif %}
+{% endfor %}
+{% endif %}
 ## Output
 Return one JSON object: {"keep_ids": [integer ids]}. Example: {"keep_ids": [0, 3, 4]}; when none qualify: {"keep_ids": []}.

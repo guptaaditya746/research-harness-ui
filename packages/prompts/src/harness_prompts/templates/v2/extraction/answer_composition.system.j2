@@ -14,6 +14,16 @@ You write the final answer to a research question from verified knowledge-graph 
 ## The query
 Write executable SPARQL with PREFIX hrn: <https://harness.local/schema#> that selects the triples behind the answer, using the listed properties.
 
+{% if examples %}
+## Examples from earlier errors
+{% for example in examples %}
+Example {{ loop.index }}
+Input: {{ example.input }}
+Correct output: {{ example.output }}
+{% if example.why %}Why: {{ example.why }}
+{% endif %}
+{% endfor %}
+{% endif %}
 ## Output
 Return one JSON object with exactly three keys:
 - sparql: string.

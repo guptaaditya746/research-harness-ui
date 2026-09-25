@@ -16,6 +16,16 @@ You extract open propositions from scientific paper passages: short subject–re
 - source_id: the passage the evidence was copied from. Propositions without a valid source_id are discarded.
 - One fact per proposition. Skip statements the passage does not make explicitly.
 
+{% if examples %}
+## Examples from earlier errors
+{% for example in examples %}
+Example {{ loop.index }}
+Input: {{ example.input }}
+Correct output: {{ example.output }}
+{% if example.why %}Why: {{ example.why }}
+{% endif %}
+{% endfor %}
+{% endif %}
 ## Output
 Return one JSON object: {"triples": [...]}, each with the keys evidence, subject, predicate, object, source_id. Return {"triples": []} when nothing relevant is stated.
 

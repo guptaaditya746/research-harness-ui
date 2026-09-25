@@ -15,7 +15,7 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 - `HARNESS_PROMPT_SET` selects the set: `v2` (default) or `v1`.
 - `Run.prompt_hashes` records the versions a run used.
 
-## The 17 prompts
+## The 19 prompts
 
 | Name | Model call |
 |---|---|
@@ -25,6 +25,8 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | `agent/decision_rejected` | Message sending an invalid agent decision back with its problems |
 | `agent/grounded_context` | Research context message (JSON appended) |
 | `agent/independent_verifier` | Fresh-context check of the agent's cited evidence |
+| `agent/compaction_summary` | Summary of the oldest tool exchanges when the agent's context is 80% full (Phase 3c; v1 = v2) |
+| `agent/paper_reader` | Parallel reader: up to four findings from one paper's top passages (Phase 3d; v1 = v2) |
 | `extraction/schema_inference` | Subschema for the question |
 | `extraction/triple_extraction` | Triple extraction in non-EDC mode (unused by live runs, see KNOWN_ISSUES 7) |
 | `extraction/edc_extract` | Open propositions from passages |
@@ -47,4 +49,35 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 1. Edit the v2 template (or add a v3 set for a larger experiment: copy `v2/`, add the set name to `SETS`).
 2. Keep the output keys the parser reads (see the call site in `engine.py`, `planner.py`, `concepts.py`, `mcp.py`, `verification.py`). Schemas with `extra="forbid"` (`SchemaInference`, `ExtractedTriple`, `AnswerResult`) reject any additional key.
 3. `make check` renders every template (missing variables fail).
-4. Compare on the gold set (`HARNESS_PROMPT_SET=v1` vs `v2`) before relying on a change; runs record which version they used.
+4. Compare on the gold set before relying on a change; runs record which version they used.
+
+## Few-shot examples (Phase 3f)
+
+Five v2 prompts show worked examples when a file for them exists: `extraction/edc_extract`,
+`extraction/evidence_review`, `extraction/answer_composition`, `agent/paper_reader` and
+`agent/research_supervisor`. The file is `packages/prompts/src/harness_prompts/examples/v2/<area>/<name>.json`,
+a list of `{"input": ..., "output": ..., "why": ...}`. The template renders them under "Examples from
+earlier errors" just before the output instructions. The file's text is part of the prompt hash, so a
+run's `prompt_hashes` tell which examples it saw. No example files ship: the examples should come from
+this harness's own errors, not invented ones.
+
+Choosing them:
+
+1. Split the gold questions once, before looking at errors: a development part (about a third, spread
+   over simple/compound/complex) and a test part. Write the development ids to a file and never change
+   the split afterwards. Report results only on the test part; examples taken from test questions would
+   inflate the scores (leakage).
+2. Run the paths on the development questions, then `make fewshot ARGS="--dev @dev_ids.txt"`. It lists
+   missed vital gold triples (edc_extract candidates: the passage that states the fact and the
+   proposition that should have come out) and extras reviewers rejected as wrong (evidence_review
+   candidates: the candidate with its evidence and `{"keep_ids": []}`), repeated errors first, and
+   writes the full list to `results/fewshot_candidates.json`.
+3. Pick two to four per prompt that show different error types (a result without its benchmark, a
+   reversed relation, an overstated claim). Shorten the input to what the example needs, write the
+   "why" in one sentence (the test rejects a leftover TODO), and save the file.
+4. `make check`, then compare with and without the file on the test questions. Keep an example only if
+   recall rises without precision dropping. Short examples matter at 32k context: each one is sent with
+   every call of that prompt.
+
+The `answer_composition`, `paper_reader` and `research_supervisor` examples have no generator; write
+them from failed runs you have inspected (`make runs ARGS="show <id>"`).
