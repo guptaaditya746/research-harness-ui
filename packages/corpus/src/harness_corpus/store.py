@@ -1,16 +1,37 @@
-"""Read-only corpus tools over ingest artifacts and a BM25S index."""
+"""Read-only corpus tools over ingest artifacts, a BM25S index and an optional dense index.
+
+Retrieval roles:
+
+- ``grep``: exact regular expressions.
+- ``search``: exact lexical/boolean DSL (every term must appear; phrases, OR, NOT, NEAR/n, fields).
+- ``hybrid_rank``: ranked natural-language retrieval: BM25 over all passages in scope (no boolean
+  filter) fused with dense embeddings (reciprocal rank fusion) when ``index/dense`` exists, and an
+  optional reranker (``HARNESS_MODEL_RERANK``). The agent's ``search_evidence`` uses it.
+- ``rank_evidence``: BM25 scores for a given set of passages.
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from collections import Counter
 from difflib import SequenceMatcher
+from functools import lru_cache
 from pathlib import Path
 
 import bm25s
+import httpx
+import numpy as np
 import regex as safe_regex
+from harness_config import settings
+
+from .dense import QUERY_INSTRUCTION, DenseIndex, embed_texts, rrf
+
+LOGGER = logging.getLogger(__name__)
+FUSION_DEPTH = 200     # candidates taken from each ranking before fusion
+RERANK_DEPTH = 30      # fused candidates sent to the optional reranker
 
 PATTERN_MAX_LENGTH = 300
 PATTERN_BUDGET_S = 2.0
@@ -170,6 +191,7 @@ class CorpusStore:
             if (index_path / "params.index.json").exists()
             else None
         )
+        self.dense = DenseIndex(root, self.by_passage)
 
     def seed_facts(self) -> list[dict]:
         """Return deterministic, corpus-wide facts suitable for graph seeding."""
@@ -434,6 +456,86 @@ class CorpusStore:
             rows.sort(key=lambda row: (-row["score"], row["passage_id"]))
         return paged(rows, offset, limit)
 
+    # ─── Ranked retrieval (BM25 + dense) ─────────────────────────────────────
+
+    def _bm25_order(self, query: str, allowed: set[str]) -> list[tuple[str, float]]:
+        """Allowed passages with a positive BM25 score, best first (no boolean filter)."""
+        if not allowed:
+            return []
+        if self.bm25 is not None:
+            tokens = bm25s.tokenize([query], stopwords="en", show_progress=False)
+            if not tokens.vocab:
+                return []
+            ranked = self.bm25.retrieve(tokens, k=len(self.passages), show_progress=False, sorted=True)
+            return [(doc["passage_id"], float(score))
+                    for doc, score in zip(ranked.documents[0], ranked.scores[0], strict=True)
+                    if score > 0 and doc["passage_id"] in allowed]
+        # No BM25 index (small test corpora): count content words of four letters or more.
+        terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 3]
+        scored = [(pid, float(sum(self.by_passage[pid]["text"].casefold().count(t) for t in terms)))
+                  for pid in allowed]
+        return sorted((row for row in scored if row[1] > 0), key=lambda row: (-row[1], row[0]))
+
+    def embed_query(self, query: str) -> np.ndarray | None:
+        """The query's embedding, or None when the dense index or the embedding service is unavailable."""
+        if not self.dense.available:
+            return None
+        return _cached_query_embedding(query, str(self.dense.meta.get("model") or settings().model_embedding))
+
+    def _rerank(self, query: str, ranked: list[str]) -> list[str] | None:
+        """Reorder the top fused candidates with a served reranker (LiteLLM ``/rerank``), if configured."""
+        model = settings().model_rerank.strip()
+        if not model or not ranked:
+            return None
+        head = ranked[:RERANK_DEPTH]
+        try:
+            response = httpx.post(
+                f"{settings().litellm_base_url.rstrip('/')}/rerank",
+                headers={"Authorization": f"Bearer {settings().api_key}"},
+                json={"model": model, "query": query, "top_n": len(head),
+                      "documents": [self.by_passage[pid]["text"][:4000] for pid in head]},
+                timeout=30,
+            )
+            response.raise_for_status()
+            order = [head[int(item["index"])] for item in response.json()["results"]]
+        except (httpx.HTTPError, KeyError, ValueError, IndexError) as exc:
+            LOGGER.warning("Reranker %s unavailable (%s); keeping the fused order", model, exc)
+            return None
+        return order + [pid for pid in ranked if pid not in set(order)]
+
+    def hybrid_rank(
+        self, query: str, scope: dict | None = None, passage_ids: list[str] | None = None,
+        offset: int = 0, limit: int = 10,
+    ) -> dict:
+        """Ranked retrieval for a natural-language query: BM25 ∪ dense, fused, optionally reranked.
+
+        Items are passages with ``score`` (fused), ``bm25_rank`` and ``dense_rank`` (None when that
+        ranking did not return the passage). ``retrieval`` says which rankings took part.
+        """
+        restrict = set(passage_ids) if passage_ids is not None else None
+        allowed = {
+            p["passage_id"] for p in self.passages
+            if in_scope(self.by_paper[p["paper_id"]], scope)
+            and (restrict is None or p["passage_id"] in restrict)
+            and (not (scope or {}).get("section_roles")
+                 or any(role.casefold() in p["section_path"].casefold() for role in scope["section_roles"]))
+        }
+        bm25 = [pid for pid, _ in self._bm25_order(query, allowed)[:FUSION_DEPTH]]
+        vector = self.embed_query(query) if allowed else None
+        dense = [pid for pid, _ in self.dense.search(vector, allowed, FUSION_DEPTH)] if vector is not None else []
+        fused = rrf([ranking for ranking in (bm25, dense) if ranking])
+        order = [pid for pid, _ in fused]
+        reranked = self._rerank(query, order)
+        method = "+".join(name for name, ranking in (("bm25", bm25), ("dense", dense)) if ranking) or "none"
+        if reranked is not None:
+            order, method = reranked, method + "+rerank"
+        scores = dict(fused)
+        bm25_rank = {pid: rank for rank, pid in enumerate(bm25, start=1)}
+        dense_rank = {pid: rank for rank, pid in enumerate(dense, start=1)}
+        rows = [{**self.by_passage[pid], "score": round(scores.get(pid, 0.0), 6),
+                 "bm25_rank": bm25_rank.get(pid), "dense_rank": dense_rank.get(pid)} for pid in order]
+        return {**paged(rows, offset, limit), "retrieval": method, "passages_in_scope": len(allowed)}
+
     def reference_title(self, reference_id: str) -> str | None:
         row = self.by_reference.get(str(reference_id))
         if not row:
@@ -687,7 +789,8 @@ class CorpusStore:
         return paged(rows, offset, limit)
 
     def query2doc(self, query: str, offset: int = 0, limit: int = 10) -> dict:
-        return self.search(query, offset=offset, limit=limit)
+        """Natural-language query: the same ranked retrieval as ``hybrid_rank``."""
+        return self.hybrid_rank(query, offset=offset, limit=limit)
 
     def find_number(self, pattern: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return self.results(pattern, scope, offset, limit)
@@ -698,16 +801,10 @@ class CorpusStore:
         return paged(rows, offset, limit)
 
     def rank(self, query: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
-        terms = [t.casefold() for t in re.findall(r"[A-Za-z0-9]+", query) if len(t) > 2]
-        rows = []
-        for passage in self.passages:
-            if not in_scope(self.by_paper[passage["paper_id"]], scope):
-                continue
-            text = passage["text"].casefold()
-            score = sum(text.count(term) for term in terms)
-            if score:
-                rows.append({"passage_id": passage["passage_id"], "paper_id": passage["paper_id"], "score": score})
-        return paged(sorted(rows, key=lambda row: (-row["score"], row["passage_id"])), offset, limit)
+        """Ranked passages for a query (kept for compatibility; same as ``hybrid_rank``)."""
+        result = self.hybrid_rank(query, scope, offset=offset, limit=limit)
+        return {**result, "items": [{"passage_id": row["passage_id"], "paper_id": row["paper_id"],
+                                     "score": row["score"]} for row in result["items"]]}
 
     def entities(self, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         counts: Counter[str] = Counter()
@@ -737,3 +834,12 @@ class CorpusStore:
             if in_scope(paper, scope):
                 rows.append({"paper_id": paper["paper_id"], "title": paper.get("title", ""), "year": paper.get("year"), "passages": sum(p["paper_id"] == paper["paper_id"] for p in self.passages)})
         return paged(rows, offset, limit)
+
+
+@lru_cache(maxsize=512)
+def _cached_query_embedding(query: str, model: str) -> np.ndarray | None:
+    try:
+        return embed_texts([QUERY_INSTRUCTION + query], model=model, timeout_s=20)[0]
+    except (httpx.HTTPError, KeyError, ValueError, IndexError) as exc:
+        LOGGER.warning("Query embedding with %s failed (%s); using BM25 only", model, exc)
+        return None

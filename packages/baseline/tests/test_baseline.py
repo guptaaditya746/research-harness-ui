@@ -582,3 +582,35 @@ def test_research_measure_follows_the_chosen_concept() -> None:
     assert result.stated_measure() == "Commonly used datasets"
     fact = QueryPlanner(JsonModel({"operation": "author_paper_counts", "rank": "top"})).plan("q", concept)
     assert "distinct corpus papers per author" in fact.stated_measure()
+
+
+def test_hybrid_mode_adds_dense_candidates_lexical_retrieval_misses(tmp_path: Path, monkeypatch) -> None:
+    import numpy as np
+    from harness_corpus import store as store_module
+    from harness_corpus.dense import passages_digest
+
+    store = corpus(tmp_path)
+    folder = tmp_path / "index" / "dense"
+    folder.mkdir(parents=True)
+    np.save(folder / "embeddings.npy", np.asarray([[1.0, 0.0]], dtype=np.float16))
+    (folder / "passage_ids.json").write_text(json.dumps(["p4-abstract"]))
+    (folder / "meta.json").write_text(json.dumps({"model": "test", "passages_sha256": passages_digest(tmp_path)}))
+    store = CorpusStore(tmp_path)
+    store_module._cached_query_embedding.cache_clear()
+    monkeypatch.setattr(store_module, "embed_texts", lambda texts, **_: np.asarray([[1.0, 0.0]], dtype=np.float32))
+    runner = Baseline20(store, ExtractionEngine(RecordedModel(), hand_written_subschema()))
+    # No word of the question appears in the passage; only the embedding links them.
+    state = {"question": "Which approaches forecast footage for manipulators?",
+             "plan": QueryPlan(operation="research"), "paper_ids": [], "concept": None}
+    monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", "lexical")
+    try:
+        runner._retrieve(dict(state))
+    except Exception as exc:  # noqa: BLE001
+        assert type(exc).__name__ == "NoEvidenceFound"
+    else:
+        raise AssertionError("lexical retrieval should find no exact word")
+    monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", "hybrid")
+    result = runner._retrieve(dict(state))
+    assert [passage["passage_id"] for passage in result["passages"]] == ["p4-abstract"]
+    assert result["retrieval"]["retrieval_mode"] == "hybrid"
+    assert result["retrieval"]["queries"][-1]["retrieval"] == "dense"

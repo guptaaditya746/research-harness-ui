@@ -1219,6 +1219,7 @@ dependencies = [
     { name = "grobid-client-python" },
     { name = "harness-config" },
     { name = "httpx" },
+    { name = "numpy" },
     { name = "regex" },
 ]
 
@@ -1229,6 +1230,7 @@ requires-dist = [
     { name = "grobid-client-python", specifier = ">=0.0.11" },
     { name = "harness-config", editable = "packages/config" },
     { name = "httpx", specifier = ">=0.27" },
+    { name = "numpy", specifier = ">=1.26" },
     { name = "regex", specifier = ">=2024.1" },
 ]
 

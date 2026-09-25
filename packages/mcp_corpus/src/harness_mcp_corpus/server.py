@@ -72,12 +72,14 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
         return corpus.abstracts(keys(paper_ids), offset, limit)
 
     @mcp.tool(
-        description="Find passages with lexical boolean, phrase, proximity, or field query terms."
+        description="Exact lexical search: every term must appear in the passage (implicit AND). Supports "
+        '"quoted phrases", OR, NOT, NEAR/n and paper:/year:/section: fields. For natural-language '
+        "questions use search_evidence; for regular expressions use grep."
     )
     def search(dsl: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return corpus.search(dsl, norm_scope(scope), offset, limit)
 
-    @mcp.tool(description="Find regex matches with passage IDs and matching lines.")
+    @mcp.tool(description="Exact regular-expression matches with passage IDs and matching lines (names, numbers, exact wording).")
     def grep(regex: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return corpus.grep(regex, norm_scope(scope), offset, limit)
 
@@ -140,7 +142,7 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def citation_contexts(paper_id: str, offset: int = 0, limit: int = 10) -> dict:
         return corpus.citation_contexts(key(paper_id), offset, limit)
 
-    @mcp.tool(description="Search the corpus from a natural-language query.")
+    @mcp.tool(description="Ranked search from a natural-language query (same retrieval as search_evidence).")
     def query2doc(query: str, offset: int = 0, limit: int = 10) -> dict:
         return corpus.query2doc(query, offset, limit)
 
@@ -152,7 +154,7 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def co_cited(paper_id: str, offset: int = 0, limit: int = 10) -> dict:
         return corpus.co_cited(key(paper_id), offset, limit)
 
-    @mcp.tool(description="Rank passages lexically for a query.")
+    @mcp.tool(description="Rank passages for a query (same retrieval as search_evidence, ids and scores only).")
     def rank(query: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return corpus.rank(query, norm_scope(scope), offset, limit)
 
@@ -183,13 +185,16 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
     def corpus_map(scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return corpus.corpus_map(norm_scope(scope), offset, limit)
 
-    @mcp.tool(description="High-level agent evidence search. Composes existing lexical search and BM25 evidence ranking, returning stable passage IDs and coverage.")
+    @mcp.tool(description=(
+        "Main evidence search. Write the question or topic in natural language; not every word has to "
+        "appear. Ranks passages by BM25 fused with dense embeddings (when the corpus has a dense index), "
+        "returning stable passage IDs, scores and coverage. Use search for exact boolean queries and grep "
+        "for regular expressions."
+    ))
     def search_evidence(query: str, scope: dict | None = None, limit: int = 20) -> dict:
         scope = norm_scope(scope)
-        lexical = corpus.search(query, scope=scope, limit=max(1, len(corpus.passages)))
-        ids = [str(item["passage_id"]) for item in lexical["items"]]
-        ranked = corpus.rank_evidence(query, passage_ids=ids, limit=limit) if ids else {"items": [], "total": 0}
-        return coverage(ranked, scope=scope, exhaustive=False, passages_examined=len(ids))
+        ranked = corpus.hybrid_rank(query, scope=scope, limit=limit)
+        return coverage(ranked, scope=scope, exhaustive=False, passages_examined=ranked["passages_in_scope"])
 
     @mcp.tool(description="High-level agent evidence reader. Read stable passage IDs with neighbouring context; raw evidence remains recoverable by ID.")
     def read_evidence(evidence_ids: list[str], window: int = 1) -> dict:

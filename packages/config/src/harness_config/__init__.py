@@ -45,6 +45,8 @@ class Settings(BaseSettings):
     model_high: str = Field("heavy-model", validation_alias=_env("HARNESS_MODEL_HIGH"))
     model_judge: str = Field("heavy-model", validation_alias=_env("HARNESS_MODEL_JUDGE"))
     model_embedding: str = Field("qwen-embed", validation_alias=_env("HARNESS_MODEL_EMBEDDING"))
+    # Optional served reranker alias (LiteLLM /rerank); empty = fused order only.
+    model_rerank: str = Field("", validation_alias=_env("HARNESS_MODEL_RERANK"))
     model_agent_url: str | None = Field(None, validation_alias=_env("HARNESS_MODEL_AGENT_URL"))
     model_options_json: str = Field("", validation_alias=_env("HARNESS_MODEL_OPTIONS"))
     max_output_tokens: int = Field(4096, validation_alias=_env("HARNESS_MAX_OUTPUT_TOKENS"))
@@ -85,6 +87,8 @@ class Settings(BaseSettings):
     heavy_queue_threshold: int = Field(8, validation_alias=_env("HARNESS_HEAVY_QUEUE_THRESHOLD"))
     baseline_retrieve_k: int = Field(20, validation_alias=_env("BASELINE_RETRIEVE_K"))
     adaptive_max_passages: int = Field(16, validation_alias=_env("HARNESS_ADAPTIVE_MAX_PASSAGES"))
+    # Pipeline retrieval: lexical (boolean candidates + BM25 threshold) or hybrid (BM25 + dense, fused).
+    retrieval_mode: Literal["lexical", "hybrid"] = Field("lexical", validation_alias=_env("HARNESS_RETRIEVAL_MODE"))
     agentic_max_passages: int = Field(12, validation_alias=_env("HARNESS_AGENTIC_MAX_PASSAGES"))
     agentic_max_mcp_seeds: int = Field(6, validation_alias=_env("HARNESS_AGENTIC_MAX_MCP_SEEDS"))
 

@@ -6,6 +6,7 @@ from pathlib import Path
 
 from harness_config import settings
 
+from harness_corpus.dense import build_dense_index
 from harness_corpus.ingest import enrich_dblp, ingest, prune_unresolved_dblp
 
 
@@ -18,8 +19,13 @@ def main() -> None:
     parser.add_argument("--skip-dblp", action="store_true")
     parser.add_argument("--dblp-only", action="store_true", help="enrich an existing corpus")
     parser.add_argument("--prune-unresolved-dblp", action="store_true")
+    parser.add_argument("--embed", action="store_true",
+                        help="build the dense passage index with HARNESS_MODEL_EMBEDDING (needs the model server)")
+    parser.add_argument("--embed-batch", type=int, default=64)
     args = parser.parse_args()
-    if args.prune_unresolved_dblp:
+    if args.embed:
+        result = build_dense_index(args.root, batch_size=args.embed_batch)
+    elif args.prune_unresolved_dblp:
         result = prune_unresolved_dblp(args.root)
     elif args.dblp_only:
         result = enrich_dblp(args.root)

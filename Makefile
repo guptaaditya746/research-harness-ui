@@ -1,4 +1,4 @@
-.PHONY: fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -47,6 +47,10 @@ eval-planner:
 # Summaries of recent runs (see docs/RUN_ANALYSIS.md): make runs ARGS="list -n 20"
 runs:
 	uv run --python 3.12 python scripts/runs.py $(if $(ARGS),$(ARGS),list)
+
+# Dense passage index for hybrid retrieval (needs the embedding model from thesis-llm-setup).
+embed:
+	uv run --python 3.12 python -m harness_corpus --embed --root $${CORPUS_ROOT:-corpus_data}
 
 # Gold-based scores: strict / entailed / soft by complexity and path (labelling/docs/EVALUATION.md).
 # make evaluate ARGS="--judge" also asks the soft-match judge and caches its answers.

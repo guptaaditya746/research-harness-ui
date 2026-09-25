@@ -1,6 +1,14 @@
 """Retrieval step: choose the passages a research run reads (BM25, seeds, coverage).
 
 A mixin of ``Baseline20``: methods use the pipeline's state (``self``).
+
+``HARNESS_RETRIEVAL_MODE``:
+
+- ``lexical`` (default): boolean DSL candidates, then BM25 ranking with a relative threshold.
+- ``hybrid``: the same candidates plus the top of ``CorpusStore.hybrid_rank`` (BM25 without the
+  boolean filter, fused with dense embeddings when the corpus has a dense index), ranked by the
+  fused order and cut at ``retrieve_k``. Measure it against lexical on the gold set before
+  making it the default.
 """
 
 from __future__ import annotations
@@ -8,6 +16,8 @@ from __future__ import annotations
 import re
 import time
 from typing import Any
+
+from harness_config import settings
 
 from .planner import QueryPlan
 from .state import (
@@ -66,12 +76,6 @@ class RetrievalStep:
             passage = self.corpus.by_passage.get(source_id)
             if passage is not None:
                 found.setdefault(source_id, passage)
-        if not found:
-            raise NoEvidenceFound("No evidence was found in the indexed full text.", {
-                "coverage_complete": False, "queries": len(queries), "passages_inspected": 0,
-                "papers_in_scope": len(mentioned_papers) or len(self.corpus.papers),
-                "retrieval_methods": "lexical+semantic-rank", "parser_failures": 0,
-            })
         focus = question
         if concept:
             focus = f"{question} {concept.get('label', '')} {concept.get('gloss', '')}"
@@ -85,37 +89,73 @@ class RetrievalStep:
                 focus = re.sub(rf"(?i)\b{re.escape(brand)}\b", " ", focus)
         if not re.search(r"[A-Za-z]{3,}", focus):
             focus = question
+        hybrid = settings().retrieval_mode == "hybrid"
+        methods = "lexical+semantic-rank"
+        if hybrid:
+            # Natural-language candidates: no boolean filter, dense embeddings when indexed.
+            query_started = time.monotonic()
+            depth = max(self.retrieve_k, 3 * (self.max_passages or self.retrieve_k))
+            scope = {"paper_ids": mentioned_papers} if mentioned_papers else None
+            extra = self.corpus.hybrid_rank(focus, scope=scope, limit=depth)
+            before = len(found)
+            for row in extra["items"]:
+                found.setdefault(str(row["passage_id"]), self.corpus.by_passage[str(row["passage_id"])])
+            methods = f"lexical+hybrid({extra['retrieval']})"
+            rounds.append({
+                "round": len(rounds) + 1, "query": f"hybrid: {focus}", "limit": depth,
+                "returned": len(extra["items"]), "new": len(found) - before,
+                "passage_ids": [str(row["passage_id"]) for row in extra["items"]],
+                "retrieval": extra["retrieval"],
+                "duration_ms": round((time.monotonic() - query_started) * 1000, 1),
+            })
+        if not found:
+            raise NoEvidenceFound("No evidence was found in the indexed full text.", {
+                "coverage_complete": False, "queries": len(queries), "passages_inspected": 0,
+                "papers_in_scope": len(mentioned_papers) or len(self.corpus.papers),
+                "retrieval_methods": methods, "parser_failures": 0,
+            })
         rank_started = time.monotonic()
-        ranked = self.corpus.rank_evidence(
-            focus, passage_ids=list(found), limit=max(1, len(found))
-        )["items"]
-        if focus != question and not any(float(row["score"]) > 0 for row in ranked):
-            # Removing the paper's own name left nothing that scores (e.g. the
-            # question was mostly the title): rank by the full question instead.
-            focus = question
+        limitation_question = plan.evidence_focus == "limitations"
+        relative_threshold = 0.70
+        if hybrid:
+            ranked = self.corpus.hybrid_rank(focus, passage_ids=list(found), limit=max(1, len(found)))["items"]
+            top = ranked[: self.retrieve_k]
+            top_ids = {str(row["passage_id"]) for row in top}
+            if limitation_question:
+                top += [row for row in ranked[self.retrieve_k: 2 * self.retrieve_k]
+                        if str(row["passage_id"]) not in top_ids
+                        and re.search(r"\blimitations?\b", row["text"], re.IGNORECASE)]
+            rows = [{key: value for key, value in row.items()
+                     if key not in {"score", "bm25_rank", "dense_rank"}} for row in top]
+        else:
             ranked = self.corpus.rank_evidence(
                 focus, passage_ids=list(found), limit=max(1, len(found))
             )["items"]
+            if focus != question and not any(float(row["score"]) > 0 for row in ranked):
+                # Removing the paper's own name left nothing that scores (e.g. the
+                # question was mostly the title): rank by the full question instead.
+                focus = question
+                ranked = self.corpus.rank_evidence(
+                    focus, passage_ids=list(found), limit=max(1, len(found))
+                )["items"]
+            best_by_paper: dict[str, float] = {}
+            for row in ranked:
+                key = str(row["paper_id"]) if mentioned_papers else "all"
+                best_by_paper[key] = max(best_by_paper.get(key, 0.0), float(row["score"]))
+            rows = [
+                {key: value for key, value in row.items() if key != "score"}
+                for row in ranked
+                if row["score"] > 0
+                and (
+                    row["score"] >= relative_threshold * best_by_paper[
+                        str(row["paper_id"]) if mentioned_papers else "all"
+                    ]
+                    or limitation_question and re.search(r"\blimitations?\b", row["text"], re.IGNORECASE)
+                )
+            ]
+            if not self.enhanced:
+                rows = rows[: self.retrieve_k]
         rank_duration_ms = round((time.monotonic() - rank_started) * 1000, 1)
-        best_by_paper: dict[str, float] = {}
-        for row in ranked:
-            key = str(row["paper_id"]) if mentioned_papers else "all"
-            best_by_paper[key] = max(best_by_paper.get(key, 0.0), float(row["score"]))
-        relative_threshold = 0.70
-        limitation_question = plan.evidence_focus == "limitations"
-        rows = [
-            {key: value for key, value in row.items() if key != "score"}
-            for row in ranked
-            if row["score"] > 0
-            and (
-                row["score"] >= relative_threshold * best_by_paper[
-                    str(row["paper_id"]) if mentioned_papers else "all"
-                ]
-                or limitation_question and re.search(r"\blimitations?\b", row["text"], re.IGNORECASE)
-            )
-        ]
-        if not self.enhanced:
-            rows = rows[: self.retrieve_k]
         # Agent-selected passages have already been observed through MCP.
         # Keep them even when lexical ranking of the original question gives
         # them a low score; otherwise the early MCP search cannot help the
@@ -163,14 +203,15 @@ class RetrievalStep:
             raise NoEvidenceFound("No evidence was found after the configured full-text search.", {
                 "coverage_complete": False, "queries": len(queries), "passages_inspected": len(ranked),
                 "papers_in_scope": len(mentioned_papers) or len(self.corpus.papers),
-                "retrieval_methods": "lexical+semantic-rank", "parser_failures": 0,
+                "retrieval_methods": methods, "parser_failures": 0,
             })
         paper_count = len({row["paper_id"] for row in rows})
         self._emit("Retrieving top passages",
                    f"{len(rows)} passages from {paper_count} papers across {len(rounds)} rounds")
         self._check("retrieval", "pass", f"{len(rows)} passages from {paper_count} papers")
         return {"passages": rows, "retrieval": {
-            "queries": rounds, "stop_reason": "relative_bm25_relevance",
+            "queries": rounds, "stop_reason": "hybrid_top_k" if hybrid else "relative_bm25_relevance",
+            "retrieval_mode": "hybrid" if hybrid else "lexical",
             "mentioned_paper_ids": mentioned_papers,
             "plan": plan.model_dump(),
             "reused_claim_ids": [claim.id for claim in reused_claims],
