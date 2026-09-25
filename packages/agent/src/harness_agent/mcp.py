@@ -10,7 +10,13 @@ from typing import Any
 
 import httpx
 from harness_config import settings
-from harness_extraction import ModelFailure, bounded_timeout, call_interrupted, emit_model_event
+from harness_extraction import (
+    ModelFailure,
+    bounded_timeout,
+    call_interrupted,
+    emit_model_event,
+    using_prompt,
+)
 from harness_prompts import render, text
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
@@ -20,6 +26,7 @@ from .context import (
     cap_tool_result,
     discover_window,
     is_context_error,
+    result_digest,
     window_from_error,
 )
 from .research_state import ResearchLedger, _handles
@@ -67,6 +74,15 @@ def _tool_payload(result: Any) -> Any:
 
 
 DECISION_KEYS = ("verified_claim_ids", "additional_evidence_ids", "reasoning_summary")
+# The tools offered to the agent with HARNESS_AGENT_TOOLSET=curated: one tool per job. Left out are
+# duplicates (rank, rank_evidence, candidates_for, query2doc = search_evidence; facts =
+# structured_facts; read_passage, expand = read_evidence) and rarely useful specialists.
+CURATED_TOOLS = (
+    "search_evidence", "read_evidence", "structured_facts", "aggregate_facts", "metadata_table",
+    "citations", "evidence_for_claim", "search", "grep", "paper_outline", "abstracts", "list_papers",
+    "table_search", "results",
+)
+SUMMARISE_AT = 0.8     # share of the usable window at which older exchanges are summarised
 FINDING_TOOL = "record_finding"
 # A tool the client answers itself (no MCP round trip): the agent's scratchpad.
 FINDING_TOOL_SPEC = {
@@ -235,9 +251,12 @@ class MCPToolClient:
                 }
                 for item in listed.tools
             ]
+            config = settings()
+            if config.agent_toolset == "curated":
+                tools = [tool for tool in tools if tool["function"]["name"] in CURATED_TOOLS]
             ledger = ResearchLedger(question=question)
             ledger.notes = self.notes
-            if settings().agent_handoff == "findings":
+            if config.agent_handoff == "findings":
                 tools.append(FINDING_TOOL_SPEC)
             loaded_skills = relevant(question)
             for skill in loaded_skills:
@@ -263,7 +282,9 @@ class MCPToolClient:
                 {"role": "system", "content": supervisor.system},
                 {"role": "user", "content": question},
             ]
-            conversation = Conversation(fixed, grounded=grounded_context or None)
+            conversation = Conversation(fixed, grounded=grounded_context or None,
+                                        keep_results=max(0, config.agent_keep_results))
+            budget_note_sent = False
             # Priority order: the evidence tools the supervisor is told to prefer,
             # then the specialist tools, which are dropped first when space is short.
             core_names = ["search_evidence", "read_evidence", FINDING_TOOL, "structured_facts", "aggregate_facts",
@@ -300,6 +321,47 @@ class MCPToolClient:
                 # Leave room for the reply and a margin for estimation error.
                 return max(2_048, int((window - reply_tokens) * 0.9))
 
+            async def summarise_older() -> None:
+                """Near the limit, replace older exchanges with one model-written summary (Phase 3c)."""
+                older = len(conversation.exchanges) - max(1, conversation.keep_results)
+                if (not config.agent_summary_compaction or older < 2
+                        or conversation.tokens(tools) < SUMMARISE_AT * limit()
+                        or not callable(getattr(model, "complete_json", None))):
+                    return
+                archived = []
+                for exchange, digests in zip(conversation.exchanges[:older], conversation.digests[:older],
+                                             strict=False):
+                    requested = [
+                        {"tool": call["function"]["name"], "arguments": call["function"].get("arguments")}
+                        for call in exchange[0].get("tool_calls") or []
+                    ]
+                    archived.append({"requested": requested, "returned": digests})
+                prompt = render("agent/compaction_summary",
+                                {"archived": archived, "findings": ledger.notes, "question": question})
+                before = conversation.tokens(tools)
+                try:
+                    with using_prompt(prompt.ref):
+                        reply = await asyncio.to_thread(model.complete_json, prompt.system, prompt.user)
+                    summary = str(reply.get("summary") or "").strip()
+                    open_items = [str(item) for item in reply.get("open") or [] if str(item).strip()]
+                    if open_items:
+                        summary += " Still open: " + "; ".join(open_items[:5])
+                except Exception as exc:  # noqa: BLE001 - the deterministic ledger still replaces them
+                    emit_model_event("Context summary failed", f"{type(exc).__name__}: {exc}"[:200])
+                    summary = ""
+                conversation.archive_oldest(older, summary[:1500] or None, ledger.summary())
+                self._counter += 1
+                self.sink({
+                    "call_id": f"context-{self._counter:03d}", "agent": self.agent,
+                    "tool": "context_checkpoint", "arguments": {"mode": "summary"},
+                    "result": {"window": window, "before_tokens": before, "after_tokens": conversation.tokens(tools),
+                               "summarised_exchanges": older, "summary": summary[:1500],
+                               "evidence_ids": sorted(ledger.evidence_ids)},
+                    "result_count": len(ledger.evidence_ids), "duration_ms": 0.0, "status": "ok",
+                    "purpose": "Summarise older research to stay within the context window.",
+                    "expected_evidence_type": "research_ledger",
+                })
+
             def compact() -> None:
                 before = conversation.tokens(tools)
                 if conversation.fit(limit(), tools, ledger.summary(), core_tools=core_count):
@@ -311,6 +373,8 @@ class MCPToolClient:
                                    "after_tokens": conversation.tokens(tools),
                                    "tools_offered": len(tools), "tools_available": len(all_tools),
                                    "archived_exchanges": conversation.dropped_exchanges,
+                                   "masked_results": conversation.masked_results,
+                                   "token_scale": conversation.scale,
                                    "evidence_ids": sorted(ledger.evidence_ids)},
                         "result_count": len(ledger.evidence_ids), "duration_ms": 0.0, "status": "ok",
                         "purpose": "Keep the conversation within the model context window.",
@@ -324,7 +388,17 @@ class MCPToolClient:
                     except ModelFailure:
                         # Stopped or out of time: end the loop with what we have.
                         return ""
+                    await summarise_older()
                     compact()
+                    # Tool budget reached: only the scratchpad is left, then the decision.
+                    budget_reached = 0 < config.agent_max_tool_calls <= ledger.tool_calls
+                    offered = [tool for tool in tools if tool["function"]["name"] == FINDING_TOOL] \
+                        if budget_reached else tools
+                    if budget_reached and not budget_note_sent and conversation.exchanges:
+                        budget_note_sent = True
+                        conversation.exchanges[-1].append({"role": "user", "content": (
+                            f"You have used the tool budget ({ledger.tool_calls} corpus calls). Record any "
+                            "finding you have not recorded yet, then reply with your final JSON decision.")})
                     needed = conversation.tokens(tools)
                     if needed > limit():
                         raise ModelFailure(
@@ -340,18 +414,21 @@ class MCPToolClient:
                         "Model call started",
                         f"{alias} · agent tool loop turn {turn_number} · {len(tools)} tools",
                     )
+                    body = {
+                        "model": getattr(model, "model", ""),
+                        "temperature": 0,
+                        "max_tokens": reply_tokens,
+                        "messages": conversation.messages(),
+                    }
+                    if offered:
+                        body["tools"] = offered
+                        body["tool_choice"] = first_choice if needs_tools and ledger.tool_calls == 0 else "auto"
+                    sent_estimate = conversation.raw_tokens(offered)
                     turn = asyncio.ensure_future(client.post(
                         f"{model.base_url}/chat/completions",
                         timeout=turn_timeout,
                         headers={"Authorization": f"Bearer {model.api_key}"},
-                        json={
-                            "model": getattr(model, "model", ""),
-                            "temperature": 0,
-                            "max_tokens": reply_tokens,
-                            "messages": conversation.messages(),
-                            "tools": tools,
-                            "tool_choice": first_choice if needs_tools and ledger.tool_calls == 0 else "auto",
-                        },
+                        json=body,
                     ))
                     # Wait in short intervals so Stop or the run deadline can
                     # abandon a slow model turn immediately.
@@ -378,7 +455,10 @@ class MCPToolClient:
                             reply_tokens = min(configured_reply, max(512, window // 4))
                             continue
                         raise ModelFailure(f"model returned HTTP {response.status_code}: {body}")
-                    message = response.json()["choices"][0]["message"]
+                    payload = response.json()
+                    message = payload["choices"][0]["message"]
+                    usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+                    conversation.calibrate(usage.get("prompt_tokens"), sent_estimate)
                     requested = message.get("tool_calls") or []
                     emit_model_event(
                         "Model call finished",
@@ -409,6 +489,7 @@ class MCPToolClient:
                         "tool_calls": requested,
                     }
                     tool_messages: list[dict[str, Any]] = []
+                    digests: list[str] = []
                     for call in requested:
                         name = call["function"]["name"]
                         started = time.monotonic()
@@ -489,9 +570,12 @@ class MCPToolClient:
                             else "returned" if record["result_count"] is None
                             else f"{record['result_count']} results"
                         ) + f" · {record['duration_ms']:.0f} ms")
+                        ledger_digest = None
                         if status != "repeat" and name != FINDING_TOOL:
                             ledger.record(name, result, record["purpose"], arguments=arguments,
                                           call_id=record["call_id"])
+                            ledger_digest = ledger.digests[-1]
+                        digests.append(result_digest(name, result, ledger_digest))
                         tool_messages.append({
                             "role": "tool",
                             "tool_call_id": call["id"],
@@ -503,7 +587,7 @@ class MCPToolClient:
                         })
                     # An exchange is only added whole: the assistant request
                     # together with one result per requested call.
-                    conversation.add_exchange(assistant, tool_messages)
+                    conversation.add_exchange(assistant, tool_messages, digests)
 
     def run_agent(
         self, model: Any, question: str, grounded_context: dict[str, Any] | None = None

@@ -74,3 +74,38 @@ def test_grounded_context_shrinks_in_answer_order_with_an_explicit_note() -> Non
     assert conversation.tokens([]) <= 3000
     assert '"claim-0"' in grounded and '"claim-79"' not in grounded
     assert "omitted_for_context" in grounded and "structured_facts" in grounded
+
+
+def test_older_tool_results_are_masked_by_digests_and_stay_valid() -> None:
+    conversation = Conversation([{"role": "system", "content": "s"}], keep_results=2)
+    for index in range(4):
+        assistant, results = exchange(index, size=2000)
+        conversation.add_exchange(assistant, results, [f'{{"digest": {index}}}'] * 2)
+    messages = conversation.messages()
+    assert_valid(messages)
+    tool_contents = [m["content"] for m in messages if m["role"] == "tool"]
+    assert tool_contents[:4] == ['{"digest": 0}'] * 2 + ['{"digest": 1}'] * 2
+    assert tool_contents[4:] == ["x" * 2000] * 4
+    assert conversation.masked_results == 4
+    assert conversation.exchanges[0][1]["content"] == "x" * 2000       # the originals are kept
+
+
+def test_calibration_moves_the_estimate_towards_the_server_count() -> None:
+    conversation = Conversation([{"role": "user", "content": "x" * 3000}])
+    raw = conversation.raw_tokens([])
+    conversation.calibrate(raw * 2, raw)
+    assert conversation.scale == 1.5 and conversation.tokens([]) == int(raw * 1.5)
+    conversation.calibrate(None, raw)
+    conversation.calibrate(10 * raw, raw)                               # bounded at 2.5
+    assert conversation.scale == 2.0
+
+
+def test_archiving_replaces_older_exchanges_with_a_summary_and_the_ledger() -> None:
+    conversation = Conversation([{"role": "system", "content": "s"}])
+    for index in range(3):
+        conversation.add_exchange(*exchange(index, size=100), ["d", "d"])
+    conversation.archive_oldest(2, "searched SafeRAG; found p1-a", '{"your_findings": []}')
+    messages = conversation.messages()
+    assert_valid(messages)
+    assert len(conversation.exchanges) == 1 and conversation.dropped_exchanges == 2
+    assert "Summary of the archived research: searched SafeRAG; found p1-a" in messages[1]["content"]

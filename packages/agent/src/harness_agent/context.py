@@ -9,8 +9,19 @@ reject that with 400 Bad Request.
 
 Here the conversation is three fixed parts (system, question, grounded
 context) plus complete *exchanges* (assistant tool request + its tool
-results). Fitting drops whole exchanges oldest-first, replacing them with the
-research ledger, and truncates oversized tool results with an explicit note.
+results). Three mechanisms keep it inside the window, cheapest first:
+
+1. **Observation masking**: tool results older than the last ``keep_results``
+   exchanges are shown as a short digest (ids and first items), the request
+   itself stays, so the conversation remains valid and the ids remain known.
+2. **Summarising compaction** (in the tool loop): near the limit, older
+   exchanges are replaced by one model-written summary plus the research
+   ledger (digests and the agent's findings).
+3. **Fitting**: drops whole exchanges oldest-first, then specialist tools, then
+   grounded-context tails, then truncates the last results with a note.
+
+Token counts are estimated (~3 characters per token) and calibrated against
+the ``usage.prompt_tokens`` the model server reports for each turn.
 """
 
 from __future__ import annotations
@@ -97,6 +108,13 @@ class Conversation:
     ledger_note: dict[str, Any] | None = None
     dropped_exchanges: int = 0
     shown: dict[str, int] = field(default_factory=dict)
+    # Observation masking: results of exchanges older than this many are shown as digests (0 = off).
+    keep_results: int = 0
+    digests: list[list[str]] = field(default_factory=list)
+    # Estimated tokens × scale ≈ the server's count (calibrated from usage.prompt_tokens).
+    scale: float = 1.0
+    summary: str | None = None
+    masked_results: int = 0
 
     def _grounded_message(self) -> dict[str, Any] | None:
         if not self.grounded:
@@ -124,7 +142,24 @@ class Conversation:
             head.append(grounded)
         if self.ledger_note is not None:
             head.append(self.ledger_note)
-        return head + [message for exchange in self.exchanges for message in exchange]
+        cutoff = len(self.exchanges) - self.keep_results if self.keep_results else 0
+        body: list[dict[str, Any]] = []
+        masked = 0
+        for index, exchange in enumerate(self.exchanges):
+            if index >= cutoff:
+                body.extend(exchange)
+                continue
+            digests = self.digests[index] if index < len(self.digests) else []
+            results = iter(digests)
+            for message in exchange:
+                if message.get("role") == "tool":
+                    digest = next(results, None)
+                    if digest is not None:
+                        message = {**message, "content": digest}
+                        masked += 1
+                body.append(message)
+        self.masked_results = masked
+        return head + body
 
     def _shrink_grounded(self) -> bool:
         """Halve the largest list in the grounded context; False when nothing is left to cut."""
@@ -140,11 +175,46 @@ class Conversation:
         self.shown[key] = max(3, count // 2)
         return True
 
-    def tokens(self, tools: list[dict[str, Any]]) -> int:
+    def raw_tokens(self, tools: list[dict[str, Any]]) -> int:
+        """Uncalibrated estimate (what calibration compares with the server's count)."""
         return estimate_tokens(self.messages()) + estimate_tokens(tools)
 
-    def add_exchange(self, assistant: dict[str, Any], tool_messages: list[dict[str, Any]]) -> None:
+    def tokens(self, tools: list[dict[str, Any]]) -> int:
+        return int(self.raw_tokens(tools) * self.scale)
+
+    def calibrate(self, prompt_tokens: object, estimated: int) -> None:
+        """Move the scale towards the server's real count for the last request (bounded, smoothed)."""
+        if not isinstance(prompt_tokens, int) or prompt_tokens <= 0 or estimated <= 0:
+            return
+        observed = min(2.5, max(0.5, prompt_tokens / estimated))
+        self.scale = round(0.5 * self.scale + 0.5 * observed, 3)
+
+    def add_exchange(self, assistant: dict[str, Any], tool_messages: list[dict[str, Any]],
+                     digests: list[str] | None = None) -> None:
         self.exchanges.append([assistant, *tool_messages])
+        self.digests.append(list(digests or []))
+
+    def archive_oldest(self, count: int, summary: str | None, ledger_summary: str) -> None:
+        """Replace the oldest ``count`` exchanges with a summary and the research ledger."""
+        count = min(count, max(0, len(self.exchanges) - 1))
+        if count <= 0:
+            return
+        del self.exchanges[:count]
+        del self.digests[:count]
+        self.dropped_exchanges += count
+        if summary:
+            self.summary = summary
+        self._set_ledger_note(ledger_summary)
+
+    def _set_ledger_note(self, ledger_summary: str) -> None:
+        summary = f"Summary of the archived research: {self.summary}\n" if self.summary else ""
+        self.ledger_note = {
+            "role": "user",
+            "content": (
+                f"{summary}Research ledger ({self.dropped_exchanges} earlier tool exchanges archived; "
+                "evidence IDs below remain valid and can be re-read with tools): " + ledger_summary
+            ),
+        }
 
     def fit(
         self, limit: int, tools: list[dict[str, Any]], ledger_summary: str, core_tools: int = 0,
@@ -159,14 +229,10 @@ class Conversation:
         changed = False
         while self.tokens(tools) > limit and len(self.exchanges) > 1:
             self.exchanges.pop(0)
+            if self.digests:
+                self.digests.pop(0)
             self.dropped_exchanges += 1
-            self.ledger_note = {
-                "role": "user",
-                "content": (
-                    f"Research ledger ({self.dropped_exchanges} earlier tool exchanges archived; "
-                    "evidence IDs below remain valid and can be re-read with tools): " + ledger_summary
-                ),
-            }
+            self._set_ledger_note(ledger_summary)
             changed = True
         while self.tokens(tools) > limit and len(tools) > core_tools:
             tools.pop()
@@ -178,7 +244,7 @@ class Conversation:
             overflow = self.tokens(tools) - limit
             results = [m for m in self.exchanges[-1] if m.get("role") == "tool"]
             if results:
-                cut_chars = (overflow * 3) // len(results) + 200
+                cut_chars = int(overflow * 3 / self.scale) // len(results) + 200
                 for message in results:
                     content = str(message.get("content") or "")
                     keep = max(400, len(content) - cut_chars)
@@ -189,6 +255,18 @@ class Conversation:
                         )
                         changed = True
         return changed
+
+
+def result_digest(tool: str, result: Any, ledger_digest: dict[str, Any] | None = None) -> str:
+    """What an older tool result is replaced with: its ids and first items, not its full text."""
+    body: dict[str, Any] = {"earlier_result_of": tool}
+    if ledger_digest:
+        body.update({key: value for key, value in ledger_digest.items() if key not in {"tool", "args"}})
+    else:
+        text = json.dumps(result, ensure_ascii=False, default=str)
+        body["excerpt"] = text[:300] + ("…" if len(text) > 300 else "")
+    body["note"] = "full result removed to save context; read ids again with read_evidence if needed"
+    return json.dumps(body, ensure_ascii=False)
 
 
 def cap_tool_result(content: str, limit_tokens: int) -> str:
@@ -203,5 +281,5 @@ def cap_tool_result(content: str, limit_tokens: int) -> str:
 
 __all__ = [
     "Conversation", "cap_tool_result", "discover_window", "estimate_tokens",
-    "is_context_error", "window_from_error",
+    "is_context_error", "result_digest", "window_from_error",
 ]

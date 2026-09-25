@@ -99,6 +99,11 @@ class Settings(BaseSettings):
         None, validation_alias=_env("HARNESS_AGENT_CONTEXT_TOKENS"))
     agent_reply_tokens: int = Field(2048, validation_alias=_env("HARNESS_AGENT_REPLY_TOKENS"))
     agent_reflections: int = Field(1, validation_alias=_env("HARNESS_AGENT_REFLECTIONS"))
+    # Context and tools of the agent's tool loop (Phase 3c).
+    agent_toolset: Literal["curated", "all"] = Field("curated", validation_alias=_env("HARNESS_AGENT_TOOLSET"))
+    agent_max_tool_calls: int = Field(12, validation_alias=_env("HARNESS_AGENT_MAX_TOOL_CALLS"))
+    agent_keep_results: int = Field(3, validation_alias=_env("HARNESS_AGENT_KEEP_RESULTS"))
+    agent_summary_compaction: bool = Field(True, validation_alias=_env("HARNESS_AGENT_SUMMARY_COMPACTION"))
     agent_first_tool_choice: Literal["auto", "required"] = Field(
         "required", validation_alias=_env("HARNESS_AGENT_FIRST_TOOL_CHOICE"))
     mcp_agent_timeout_s: float = Field(90, validation_alias=_env("HARNESS_MCP_AGENT_TIMEOUT_S"))
