@@ -229,6 +229,7 @@ class OpenAICompatibleModel:
                     f"reply hit the {max_tokens}-token output limit before finishing"
                     + (" (a thinking model spent it on reasoning)"
                        if choice["message"].get("reasoning_content") or "<think>" in content else "")
+                    + _cut_off_ending(content)
                 )
             value = _json_object(content)
         except (KeyError, TypeError, ValueError, IndexError) as exc:
@@ -242,6 +243,15 @@ class OpenAICompatibleModel:
             + (f" · prompt {prompt}" if prompt else ""),
         )
         return value
+
+
+def _cut_off_ending(content: str) -> str:
+    """How a cut-off reply ended, so the trace tells a long answer from a repetition loop."""
+    tail = content[-400:]
+    if content and not tail.strip():
+        return "; it ended in whitespace only (a JSON-mode loop)"
+    words = " ".join(tail.split())[-120:]
+    return f"; it ended with: …{words}" if words else ""
 
 
 __all__ = ["ModelClient", "OpenAICompatibleModel", "complete", "model_options", "strip_reasoning"]

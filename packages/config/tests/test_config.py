@@ -80,3 +80,22 @@ def test_settings_are_reused_until_the_environment_changes(monkeypatch) -> None:
     assert settings() is first
     monkeypatch.setenv("HARNESS_MODEL_JUDGE", "other")
     assert settings() is not first and settings().model_judge == "other"
+
+
+def test_a_comment_after_an_empty_value_is_not_the_value(tmp_path, monkeypatch) -> None:
+    from harness_config import load_env_file, settings
+
+    env = tmp_path / ".env"
+    env.write_text("HARNESS_PREDICATE_RELATIONS_FILE=   # empty = the default file\n"
+                   "HARNESS_MODEL_RERANK=              # optional\nHARNESS_MODEL_JUDGE=judge-model   # a comment\n")
+    for name in ("HARNESS_PREDICATE_RELATIONS_FILE", "HARNESS_MODEL_RERANK", "HARNESS_MODEL_JUDGE"):
+        monkeypatch.delenv(name, raising=False)
+    load_env_file(env)
+    assert settings().predicate_relations_file == ""
+    assert settings().model_rerank == ""
+    assert settings().model_judge == "judge-model"
+
+
+def test_env_example_puts_comments_of_empty_values_on_their_own_line() -> None:
+    lines = re.findall(r"^[A-Z][A-Z0-9_]*=[ \t]+#.*$", (ROOT / ".env.example").read_text(), re.MULTILINE)
+    assert lines == []

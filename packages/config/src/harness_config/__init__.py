@@ -21,11 +21,27 @@ import threading
 from pathlib import Path
 from typing import Any, Literal
 
-from dotenv import find_dotenv, load_dotenv
+from dotenv import dotenv_values, find_dotenv
 from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-load_dotenv(find_dotenv(usecwd=True), override=False)
+
+def load_env_file(path: str | os.PathLike[str] | None = None) -> None:
+    """Load a ``.env`` into ``os.environ`` without overriding variables that are already set.
+
+    ``KEY=   # comment`` means an empty value (that is how the shell reads it), but python-dotenv
+    returns the comment as the value; such values are loaded as empty.
+    """
+    chosen = path if path is not None else find_dotenv(usecwd=True)
+    if not chosen:
+        return
+    for key, value in dotenv_values(chosen).items():
+        if value is None or key in os.environ:
+            continue
+        os.environ[key] = "" if value.lstrip().startswith("#") else value
+
+
+load_env_file()
 
 
 def _env(name: str, *more: str) -> Any:

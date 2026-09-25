@@ -16,6 +16,7 @@ from harness_prompts import render
 from harness_semantic import HRN, Subschema
 from rdflib import RDF, RDFS, XSD, Literal, URIRef
 
+from .errors import ModelFailure
 from .events import emit_model_event, labelled
 from .model_client import ModelClient, complete
 from .schemas import (
@@ -432,9 +433,15 @@ class ExtractionEngine:
         }
         if notes:
             payload["research_notes"] = list(notes)
-        result = AnswerResult.model_validate(complete(self.model, render(
-            "extraction/answer_composition", payload,
-        )))
+        try:
+            reply = complete(self.model, render("extraction/answer_composition", payload))
+        except ModelFailure as exc:
+            if "output limit" not in str(exc):
+                raise
+            # Cut off (a very long answer or a repetition loop): once more with explicit limits.
+            emit_model_event("Answer too long", "retrying answer composition with a shorter format")
+            reply = complete(self.model, render("extraction/answer_composition", payload, brief=True))
+        result = AnswerResult.model_validate(reply)
         sources = {triple.source_id for triple in triples}
         if not set(result.cited_source_ids) <= sources:
             raise ValueError("answer cites a source outside the extracted evidence")

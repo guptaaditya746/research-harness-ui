@@ -15,6 +15,11 @@ You write the final answer to a research question from verified knowledge-graph 
 ## The query
 Write executable SPARQL with PREFIX hrn: <https://harness.local/schema#> that selects the triples behind the answer, using the listed properties.
 
+{% if brief is defined and brief %}
+## Keep it short
+Your previous reply was cut off at the output limit. This time: at most 3 sentences (about 80 words) naming the main points, at most 8 cited source_ids, SPARQL under 10 lines, and nothing outside the JSON object.
+
+{% endif %}
 {% if examples %}
 ## Examples from earlier errors
 {% for example in examples %}

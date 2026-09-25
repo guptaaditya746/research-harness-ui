@@ -39,6 +39,8 @@ SERVICES = {
     "thesis-redis": (16379, 36380, 56380, 46380),
     "tracing-clickhouse-http": (18123, 38123, 58123, 48123),
     "tracing-clickhouse-native": (19000, 39000, 59000, 49000),
+    # Argilla (gold review, labelling repo): laptop browser 26900, Slurm node scripts 36900.
+    "argilla": (6900, 26900, 46900, 36900),
     # Reverse service: laptop browser -> gateway -> Slurm compute node.
     "harness-ui": (0, 25173, 45173, 5173),
 }

@@ -180,3 +180,39 @@ def test_agent_notes_are_their_own_field_and_stay_out_of_definitions_and_verific
     composition, verification = answer_model.payloads
     assert composition["research_notes"] == notes and "research_notes" not in verification
     assert verification["question"] == "Which tasks?"
+
+
+def test_an_answer_cut_off_at_the_output_limit_is_retried_once_in_a_shorter_format() -> None:
+    import pytest
+    from harness_extraction import ExtractedTriple, ModelFailure
+    from harness_extraction.schemas import SchemaInference
+
+    class CutOffOnce:
+        def __init__(self, failures: int) -> None:
+            self.failures = failures
+            self.systems: list[str] = []
+
+        def complete_json(self, system: str, user: str) -> dict:
+            self.systems.append(system)
+            if len(self.systems) <= self.failures:
+                raise ModelFailure("unusable reply: reply hit the 4096-token output limit before finishing")
+            return {"sparql": "SELECT ?p WHERE { ?p ?q ?o }", "answer": "NER [p4-intro].",
+                    "cited_source_ids": ["p4-intro"]}
+
+    inferred = SchemaInference(label="t", gloss="t", classes=["Paper"], properties=["title"])
+    triple = ExtractedTriple(subject="p4", predicate="title", object="NER", source_id="p4-intro", evidence="NER.")
+    model = CutOffOnce(1)
+    engine = ExtractionEngine(model, hand_written_subschema())
+    assert engine.answer("Which tasks?", inferred, [triple]).answer == "NER [p4-intro]."
+    assert "Keep it short" not in model.systems[0] and "Keep it short" in model.systems[1]
+    stubborn = CutOffOnce(2)
+    with pytest.raises(ModelFailure):
+        ExtractionEngine(stubborn, hand_written_subschema()).answer("Which tasks?", inferred, [triple])
+    assert len(stubborn.systems) == 2
+
+
+def test_a_cut_off_reply_says_how_it_ended() -> None:
+    from harness_extraction.model_client import _cut_off_ending
+
+    assert "JSON-mode loop" in _cut_off_ending('{"answer": "x"' + " " * 500)
+    assert _cut_off_ending('{"answer": "a b c d').endswith('{"answer": "a b c d')
