@@ -1,0 +1,421 @@
+"""Run outcomes: turn a finished pipeline state into a Run and its artifacts.
+
+A mixin of ``Baseline20``: methods use the pipeline's state (``self``).
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from datetime import datetime
+from typing import Any
+from urllib.parse import quote
+
+from harness_extraction import (
+    ModelFailure,
+)
+from harness_extraction.claims import (
+    build_claims,
+    classify_claim_relations,
+    derive_query_claim,
+    enrich_result_claims,
+    valid_edge,
+)
+from harness_graphstore import ProvenanceDataset
+from harness_observability import record_tool_call
+from harness_schema.models import (
+    Metrics,
+    Reading,
+    Run,
+    Triple,
+    required_artifacts,
+)
+from harness_semantic import DBLP, HRN, validate_subschema
+from rdflib import RDFS, XSD, Literal, URIRef
+
+from . import answer_graph
+from .state import (
+    BaselineState,
+    CorpusAbsent,
+    NoEvidenceFound,
+)
+
+
+class RunOutcomes:
+    def _failure(
+        self,
+        run_id: str,
+        started_at: datetime,
+        question: str,
+        budget: str,
+        reason: str,
+        detail: str,
+    ) -> tuple[Run, dict[str, bytes]]:
+        self._emit("Run incomplete", f"{reason}: {detail}")
+        run = Run(
+            id=run_id,
+            startedAt=started_at,
+            durationS=round(time.monotonic() - self.started, 3),
+            question=question,
+            path="baseline-enhanced" if self.enhanced else "baseline",
+            budget=budget,
+            status="incomplete",
+            reason=reason,
+            trace=self.trace,
+            modelAgent="",
+            modelSmall=getattr(self.extraction.model, "model", "recorded"),
+            artifacts=list(required_artifacts("baseline-enhanced" if self.enhanced else "baseline")),
+        )
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
+        artifacts["trace.json"] = json.dumps(
+            [r.model_dump(by_alias=True) for r in self.trace], indent=2
+        ).encode()
+        artifacts["answer.md"] = detail.encode()
+        return run, artifacts
+
+    def _absence(
+        self, run_id: str, started_at: datetime, question: str, budget: str,
+        absence: CorpusAbsent,
+    ) -> tuple[Run, dict[str, bytes]]:
+        self._emit("Corpus absence verified", str(absence))
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        coverage = {"exhaustive": True, "inspected": absence.inspected, "matches": 0, "failures": 0}
+        run = Run(
+            id=run_id, startedAt=started_at,
+            durationS=round(time.monotonic() - self.started, 3),
+            question=question, path=path, budget=budget, status="corpus_absent",
+            reason=str(absence), evidenceSurface=absence.evidence_surface,
+            searchCoverage=coverage, trace=self.trace,
+            producingPath=path, executionStatus="completed",
+            artifacts=list(required_artifacts(path)),
+        )
+        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
+        artifacts["answer.md"] = str(absence).encode()
+        artifacts["claims.json"] = b'{"claims": [], "relations": []}'
+        artifacts["coverage_plan.json"] = json.dumps({
+            "evidence_surface": absence.evidence_surface, **coverage,
+        }).encode()
+        artifacts["trace.json"] = json.dumps(
+            [row.model_dump(by_alias=True) for row in self.trace], indent=2,
+        ).encode()
+        return run, artifacts
+
+    def _no_evidence(
+        self, run_id: str, started_at: datetime, question: str, budget: str,
+        absence: NoEvidenceFound,
+    ) -> tuple[Run, dict[str, bytes]]:
+        self._emit("Semantic search completed", str(absence))
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        run = Run(
+            id=run_id, startedAt=started_at, durationS=round(time.monotonic() - self.started, 3),
+            question=question, path=path, budget=budget, status="no_evidence_found",
+            reason=str(absence), evidenceSurface="indexed_full_text", searchCoverage=absence.coverage,
+            trace=self.trace, producingPath=path, executionStatus="completed",
+            artifacts=list(required_artifacts(path)),
+        )
+        artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
+        artifacts["answer.md"] = str(absence).encode()
+        artifacts["claims.json"] = b'{"claims": [], "relations": []}'
+        artifacts["coverage_plan.json"] = json.dumps({"evidence_surface": "indexed_full_text", **absence.coverage}).encode()
+        artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in self.trace], indent=2).encode()
+        return run, artifacts
+
+    def _success(
+        self,
+        run_id: str,
+        started_at: datetime,
+        question: str,
+        budget: str,
+        state: BaselineState,
+    ) -> tuple[Run, dict[str, bytes]]:
+        inferred = state["inferred"]
+        extracted = state["extracted"]
+        answer = state["answer"]
+        schema = self.extraction.schema
+        path = "baseline-enhanced" if self.enhanced else "baseline"
+        source_ids = {row["passage_id"] for row in state["passages"]}
+        source_ids |= {
+            str(row.get("source_id")) for row in self.corpus.fact_rows if row.get("source_id")
+        }
+        source_ids |= {str(row["reference_id"]) for row in self.corpus.references}
+        dataset = ProvenanceDataset(schema, source_ids)
+        ui_triples: list[Triple] = []
+        seed_rows = self.corpus.seed_facts()
+        seed_rdf: list[tuple[Any, URIRef, Any]] = []
+        for row in seed_rows:
+            raw_predicate = str(row["predicate"])
+            predicate_name = {"author": "authoredBy"}.get(raw_predicate, raw_predicate)
+            if raw_predicate == "cites" and not self.corpus.canonical_paper_iri(str(row.get("object", ""))):
+                title = self.corpus.reference_title(str(row.get("source_id", "")))
+                if not title:
+                    continue
+                predicate_name = "citesTitle"
+            if not hasattr(HRN, predicate_name):
+                continue
+            local_predicate = URIRef(HRN[predicate_name])
+            predicate = URIRef(
+                {
+                    "title": DBLP.title,
+                    "authoredBy": DBLP.authoredBy,
+                    "year": DBLP.yearOfPublication,
+                    "venue": DBLP.publishedIn,
+                }.get(predicate_name, local_predicate)
+            )
+            subject_value = self.corpus.canonical_paper_iri(str(row["subject"])) or str(row["subject"])
+            subject = URIRef(
+                subject_value
+                if subject_value.startswith("https://dblp.org/rec/")
+                else f"https://harness.local/resource/{quote(subject_value, safe='')}"
+            )
+            expected = schema.graph.value(predicate, RDFS.range) or schema.graph.value(local_predicate, RDFS.range)
+            raw = title if predicate_name == "citesTitle" else row.get("object")
+            target_iri = self.corpus.canonical_paper_iri(str(raw))
+            object_ = Literal(raw) if predicate_name == "citesTitle" or (expected and str(expected).startswith(str(XSD))) else URIRef(
+                target_iri
+                or f"https://harness.local/resource/{quote(str(raw), safe='')}"
+            )
+            seed_rdf.append((subject, predicate, object_))
+        if seed_rdf:
+            dataset.add_event("corpus-seed", seed_rdf, sorted({str(row["source_id"]) for row in seed_rows}))
+        for index, item in enumerate(extracted, start=1):
+            candidate = Triple(
+                s=item.subject, p=item.predicate, o=item.object,
+                support="1 passage", evidence=item.evidence, source=item.source_id,
+            )
+            if not valid_edge(candidate):
+                continue
+            local_predicate = URIRef(HRN[item.predicate])
+            predicate = URIRef(
+                {
+                    "title": DBLP.title,
+                    "authoredBy": DBLP.authoredBy,
+                    "year": DBLP.yearOfPublication,
+                    "venue": DBLP.publishedIn,
+                }.get(item.predicate, local_predicate)
+            )
+            expected = schema.graph.value(predicate, RDFS.range) or schema.graph.value(local_predicate, RDFS.range)
+            subject_iri = self.corpus.canonical_paper_iri(item.subject)
+            object_iri = self.corpus.canonical_paper_iri(item.object)
+            if (
+                expected and str(expected) == str(HRN.Paper)
+                and not object_iri and item.object not in self.corpus.by_paper
+            ):
+                # A paper-valued relation must resolve to an indexed paper.
+                continue
+            object_ = (
+                Literal(item.object)
+                if expected and str(expected).startswith(str(XSD))
+                else URIRef(object_iri or f"https://harness.local/resource/{quote(item.object, safe='')}")
+            )
+            subject = URIRef(
+                subject_iri
+                or f"https://harness.local/resource/{quote(item.subject, safe='')}"
+            )
+            dataset.add_event(f"extract-{index}", [(subject, predicate, object_)], [item.source_id])
+            ui_triples.append(
+                Triple(
+                    s=subject_iri or item.subject,
+                    p=item.predicate,
+                    o=object_iri or item.object,
+                    support="1 passage",
+                    evidence=item.evidence,
+                    source=item.source_id,
+                    tripleId=f"t-{index:03d}",
+                )
+            )
+        def paper_for_source(source_id: str, subject: str) -> str:
+            row = self.corpus.by_passage.get(source_id)
+            paper_id = str(row["paper_id"]) if row else subject
+            return self.corpus.canonical_paper_iri(paper_id) or paper_id
+
+        claims, claim_relations = build_claims(ui_triples, paper_for_source)
+        if state["passages"] and any(claim.kind == "ResultClaim" for claim in claims):
+            try:
+                claims = enrich_result_claims(
+                    claims, state["passages"], self.refinement_model or self.extraction.model,
+                )
+                self._emit("Enriching claim context", f"{len(claims)} provenance-bearing claims")
+            except (ModelFailure, ValueError, TypeError) as exc:
+                self._emit("Claim context remains partial", type(exc).__name__)
+        claim_relations = classify_claim_relations(claims)
+        query_claim = derive_query_claim(question, claims)
+        if query_claim is not None:
+            claims.append(query_claim)
+        if state.get("retrieval", {}).get("stop_reason") != "verified_facts" and claims:
+            grouped: dict[str, list[str]] = {}
+            for claim in claims:
+                if "object" not in claim.fields:
+                    continue
+                title = self.corpus.paper_title(claim.paper_id) or claim.paper_id
+                statement = claim.fields["object"].value
+                grouped.setdefault(title, []).append(
+                    f"{statement} [{', '.join(claim.source_ids)}]"
+                )
+            answer = answer.model_copy(update={
+                "answer": "The indexed papers report: " + " ".join(
+                    f"{title}: {'; '.join(statements)}."
+                    for title, statements in grouped.items()
+                ),
+                "cited_source_ids": sorted({source for claim in claims for source in claim.source_ids}),
+            })
+        plan = state.get("plan")
+        graph = answer_graph.build(
+            ui_triples, claims, state.get("computed") or [],
+            is_paper=lambda value: bool(self.corpus.canonical_paper_iri(value)) or value in self.corpus.by_paper,
+            paper_label=lambda value: self.corpus.paper_title(
+                self.corpus.by_dblp.get(value, value)) or value,
+        )
+        supported = bool(ui_triples) and all(t.source.strip() and t.evidence.strip() for t in ui_triples)
+        self._check("triple provenance", "pass" if supported else "fail",
+                    f"{len(ui_triples)} triples, each with a source and evidence" if supported
+                    else "some triples lack a source or evidence")
+        if self.refine:
+            self._check("answer verification",
+                        "pass" if state.get("retrieval", {}).get("stop_reason") != "verified_facts" else "skipped",
+                        "every claim in the answer was checked against its triples"
+                        if state.get("retrieval", {}).get("stop_reason") != "verified_facts"
+                        else "answer composed directly from verified facts")
+        reading = Reading(
+            measure=plan.stated_measure() if plan is not None else None,
+            graph=graph,
+            label=inferred.label,
+            gloss=inferred.gloss,
+            classes=inferred.classes,
+            properties=inferred.properties,
+            axioms=self.extraction.axioms(inferred),
+            sparql=answer.sparql,
+            answer=answer.answer,
+            triples=ui_triples,
+            claims=claims,
+            claimRelations=claim_relations,
+            # The prose renderer below only enumerates these source-backed claims.
+            answerClaimIds=[claim.id for claim in claims],
+            metrics=Metrics(),
+            status="answered",
+        )
+        run = Run(
+            id=run_id,
+            startedAt=started_at,
+            durationS=round(time.monotonic() - self.started, 3),
+            question=question,
+            path=path,
+            budget=budget,
+            status="answered",
+            producingPath=path,
+            executionStatus="completed",
+            readings=[reading],
+            chosenReading=0,
+            trace=self.trace,
+            coverage=None,
+            modelAgent="",
+            modelSmall=getattr(self.extraction.model, "model", "recorded"),
+            artifacts=list(required_artifacts(path)),
+        )
+        report = validate_subschema(schema.graph)
+        artifacts = {
+            "subschema.ttl": schema.graph.serialize(format="turtle").encode(),
+            "query.rq": answer.sparql.encode(),
+            "coverage_plan.json": json.dumps(
+                {"coverage": None, "reason": "baseline has no ledger"}, indent=2
+            ).encode(),
+            # Shared downstream contract: controllers supply evidence; claim
+            # construction, validation, provenance, and prose consume this
+            # same package for Fast, Adaptive, and Agentic paths.
+            "ledger.json": json.dumps({
+                "evidence_bundle": {
+                    "passage_ids": [str(item["passage_id"]) for item in state.get("passages", [])],
+                    "source_ids": sorted({source for claim in claims for source in claim.source_ids}),
+                    "coverage": state.get("retrieval", {}),
+                },
+                "claim_subgraph_ids": [claim.id for claim in claims],
+                "execution_metadata": {
+                    "controller": "adaptive" if self.enhanced else "fast",
+                    "run_id": run_id,
+                },
+            }, ensure_ascii=False, indent=2).encode(),
+            "graph.trig": dataset.export_trig().encode(),
+            "triples.ttl": dataset.export_turtle().encode(),
+            "claims.json": json.dumps({
+                "claims": [claim.model_dump(by_alias=True) for claim in claims],
+                "relations": [relation.model_dump(by_alias=True) for relation in claim_relations],
+            }, ensure_ascii=False, indent=2).encode(),
+            "shacl_report.ttl": report.graph.serialize(format="turtle").encode(),
+            "answer.md": answer.answer.encode(),
+            "citations.json": json.dumps(answer.cited_source_ids, indent=2).encode(),
+            "trace.json": json.dumps(
+                [r.model_dump(by_alias=True) for r in self.trace], indent=2
+            ).encode(),
+        }
+        tool_calls = self._workflow_tool_calls(state, run_id)
+        artifacts["tool_calls.jsonl"] = b"\n".join(
+            json.dumps(item, ensure_ascii=False, default=str).encode() for item in tool_calls
+        ) + (b"\n" if tool_calls else b"")
+        if self.enhanced:
+            artifacts["retrieval.json"] = json.dumps(state.get("retrieval", {}), indent=2).encode()
+            artifacts["extraction_batches.json"] = json.dumps(state.get("extraction_batches", []), indent=2).encode()
+            artifacts["seed_manifest.json"] = json.dumps(
+                {
+                    "facts": len(seed_rows),
+                    "seed_graph": "corpus-seed",
+                    "ontology": "dblp_schema_2024-06-14.ttl",
+                    "ontology_version": schema.seed_schema_version,
+                    "ontology_sha256": schema.seed_schema_sha256,
+                },
+                indent=2,
+            ).encode()
+        return run, artifacts
+
+    def _workflow_tool_calls(self, state: BaselineState, run_id: str) -> list[dict[str, Any]]:
+        """Record only corpus operations that the local workflow actually ran."""
+        records: list[dict[str, Any]] = []
+        retrieval = state.get("retrieval", {})
+        queries = retrieval.get("queries", [])
+        for index, query in enumerate(queries, start=1):
+            record = {
+                "call_id": f"tool-baseline-{index:03d}",
+                "agent": "baseline",
+                "tool": "search",
+                "transport": "local",
+                "arguments": {"dsl": query.get("query", ""), "limit": query.get("limit")},
+                "result": {"passage_ids": query.get("passage_ids", [])},
+                "result_count": query.get("returned", 0),
+                "duration_ms": query.get("duration_ms", 0.0),
+                "status": "ok",
+            }
+            records.append(record)
+            record_tool_call(record, run_id=run_id)
+        ranking = retrieval.get("ranking")
+        if ranking:
+            record = {
+                "call_id": f"tool-baseline-{len(records) + 1:03d}",
+                "agent": "baseline",
+                "tool": "rank_evidence",
+                "transport": "local",
+                "arguments": {
+                    "query": ranking["query"],
+                    "passage_ids": ranking["candidate_ids"],
+                },
+                "result": {"passage_ids": ranking["passage_ids"]},
+                "result_count": len(ranking["passage_ids"]),
+                "duration_ms": ranking["duration_ms"],
+                "status": "ok",
+            }
+            records.append(record)
+            record_tool_call(record, run_id=run_id)
+        if retrieval.get("stop_reason") == "verified_facts":
+            record = {
+                "call_id": f"tool-baseline-{len(records) + 1:03d}",
+                "agent": "baseline",
+                "tool": "facts",
+                "transport": "local",
+                "arguments": {"question": state["question"]},
+                "result": [item.model_dump() for item in state.get("extracted", [])],
+                "result_count": len(state.get("extracted", [])),
+                "duration_ms": retrieval.get("fact_lookup_ms", 0.0),
+                "status": "ok",
+            }
+            records.append(record)
+            record_tool_call(record, run_id=run_id)
+        return records
+

@@ -17,12 +17,12 @@ Design rules:
 
 from __future__ import annotations
 
-import json
 import re
 from difflib import SequenceMatcher
 from typing import Any, Literal
 
-from harness_extraction import model_purpose
+from harness_extraction import complete, model_purpose
+from harness_prompts import Prompt, render
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 Operation = Literal[
@@ -81,23 +81,9 @@ OPERATIONS: dict[str, str] = {
                 "mechanisms, limitations, comparisons, opinions, open questions.",
 }
 
-SYSTEM_PROMPT = (
-    "You convert a research question about a fixed corpus of scientific papers into a typed "
-    "query plan. You do not answer the question. Choose exactly one operation:\n"
-    + "\n".join(f"- {name}: {text}" for name, text in OPERATIONS.items())
-    + "\nIf a research interpretation is supplied, choose the operation that computes exactly the "
-    "measure it names (for example citation-based versus paper-count rankings); if no operation "
-    "computes it, use research. Set measure to a short phrase naming the quantity or criterion the "
-    "answer will use."
-    + "\nRules: copy paper names or titles exactly as written in the question, without words "
-    "like 'the' or 'paper'. Use a metadata operation only when the question asks for that "
-    "metadata; otherwise use research. For research, set evidence_focus to results, "
-    "limitations, methods, metrics or general, and set benchmark to the named benchmark or "
-    "setting if the question names one. If a research interpretation is supplied, plan for it. "
-    'Return strict JSON: {"operation": str, "papers": [str], "year": int|null, '
-    '"extreme": "earliest"|"latest"|null, "rank": "top"|null, "min_papers": int|null, '
-    '"evidence_focus": str, "benchmark": str|null, "measure": str|null, "rationale": str}'
-)
+def planning_prompt(request: dict[str, Any], prompt_set: str | None = None) -> Prompt:
+    """The question-understanding prompt (``planning/query_plan``) for one request."""
+    return render("planning/query_plan", request, prompt_set=prompt_set, operations=OPERATIONS)
 
 
 class QueryPlan(BaseModel):
@@ -169,7 +155,7 @@ class QueryPlanner:
             }
         try:
             with model_purpose("question understanding"):
-                payload = self.model.complete_json(SYSTEM_PROMPT, json.dumps(request))
+                payload = complete(self.model, planning_prompt(request))
         except Exception as exc:  # noqa: BLE001 - planning must never fail a run
             return QueryPlan.fallback(f"planner unavailable: {type(exc).__name__}")
         try:

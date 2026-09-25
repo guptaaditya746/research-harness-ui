@@ -7,14 +7,15 @@ visible as a partial claim rather than filled with a guessed value.
 from __future__ import annotations
 
 import hashlib
-import json
 import re
 from collections.abc import Callable
 from typing import Any
 
+from harness_prompts import render
 from harness_schema.models import ClaimField, ClaimRelation, ClaimSubgraph, EvidenceAnchor, Triple
 
-from . import labelled
+from .events import labelled
+from .model_client import complete
 
 PLACEHOLDERS = {"", "null", "none", "n/a", "unknown", "undefined"}
 NUMERIC = re.compile(r"(?<!\w)(\d+(?:\.\d+)?)\s*(%|percent(?:age points?)?)", re.IGNORECASE)
@@ -193,18 +194,12 @@ def enrich_result_claims(
     enriched = {claim.id: claim for claim in claims}
     for start in range(0, len(candidates), 6):
         batch = candidates[start:start + 6]
-        response = model.complete_json(
-            "For each scientific result, fill only missing context fields supported by the same experiment. "
-            "For each field return its value, source_id, and an exact quote copied from that source. "
-            "Do not infer missing comparators, settings, or metrics. Return JSON with enrichments: "
-            "[{claim_id, fields: {field_name: {value, source_id, quote}}}].",
-            json.dumps({"claims": [{
-                "id": claim.id, "paper_id": claim.paper_id,
-                "fields": {name: field.value for name, field in claim.fields.items()},
-                "sources": {source: by_source.get(source, excerpt)[:2500]
-                            for source, excerpt in claim.evidence.items()},
-            } for claim in batch]}, ensure_ascii=False),
-        )
+        response = complete(model, render("extraction/claim_enrichment", {"claims": [{
+            "id": claim.id, "paper_id": claim.paper_id,
+            "fields": {name: field.value for name, field in claim.fields.items()},
+            "sources": {source: by_source.get(source, excerpt)[:2500]
+                        for source, excerpt in claim.evidence.items()},
+        } for claim in batch]}, ensure_ascii=False))
         if not isinstance(response, dict):
             continue
         for item in response.get("enrichments", []):

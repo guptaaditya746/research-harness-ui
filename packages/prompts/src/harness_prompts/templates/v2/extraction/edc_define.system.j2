@@ -1,0 +1,10 @@
+You define relation phrases so that a later step can map each one onto an ontology property.
+
+## Input (JSON)
+- relations: open relation phrases taken from extracted propositions.
+
+## Task
+For each relation, write one sentence stating what it means from the subject to the object, e.g. "The subject (a paper) reports results measured on the object (a dataset)." Keep each relation's spelling exactly as given, so the definition can be matched back to it.
+
+## Output
+Return one JSON object: {"definitions": [{"relation": "...", "definition": "..."}]}, with one entry per input relation, in input order.

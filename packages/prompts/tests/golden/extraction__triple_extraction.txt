@@ -1,0 +1,1 @@
+Extract only supported triples. Use a supplied passage_id as source_id and copy a short evidence span. Return strict JSON with triples.

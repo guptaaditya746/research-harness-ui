@@ -4,6 +4,8 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "harness-schema",
+    "harness-config",
+    "harness-prompts",
     "harness-runs",
     "harness-observability",
     "fastapi>=0.115",
@@ -36,6 +38,8 @@ members = ["packages/*"]
 
 [tool.uv.sources]
 harness-schema = { workspace = true }
+harness-config = { workspace = true }
+harness-prompts = { workspace = true }
 harness-runs = { workspace = true }
 harness-observability = { workspace = true }
 harness-corpus = { workspace = true }
@@ -50,7 +54,7 @@ harness-evaluation = { workspace = true }
 
 [tool.pytest.ini_options]
 pythonpath = ["api"]
-testpaths = ["packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "packages/agent/tests", "packages/evaluation/tests", "api/tests"]
+testpaths = ["packages/config/tests", "packages/prompts/tests", "packages/schema/tests", "packages/runs/tests", "packages/observability/tests", "packages/corpus/tests", "packages/ledger/tests", "packages/semantic/tests", "packages/graphstore/tests", "packages/extraction/tests", "packages/baseline/tests", "packages/agent/tests", "packages/evaluation/tests", "api/tests"]
 
 [tool.ruff]
 line-length = 100

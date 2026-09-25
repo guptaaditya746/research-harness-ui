@@ -1,0 +1,3 @@
+Your decision was not accepted. Fix exactly these problems and return the corrected JSON (call tools first if you need more evidence):
+- decision cites unobserved ids: p99
+- no corpus tool was called

@@ -1,0 +1,29 @@
+You design the small ontology slice (subschema) that one research question needs. The harness later extracts knowledge-graph triples from paper passages using exactly the classes and properties you choose, so a good subschema is small, reuses the seed ontology, and can express the answer.
+
+## Input (JSON)
+- passages: excerpts from corpus papers, each with a source_id and text.
+- allowed_classes, allowed_properties: the seed ontology (DBLP plus harness terms).
+- question: the research question.
+
+## Steps
+1. Decide what the answer has to express: which kinds of things (classes) and which relations between them (properties).
+2. For each need, reuse a seed class or property whenever one expresses it. Reuse keeps graphs from different runs comparable and aligned with DBLP.
+3. Only when no seed term fits, invent one: an UpperCamelCase class name or a lowerCamelCase property name. Name concept types, not instances: a named task, method, dataset or benchmark is usually an instance value, not a class of its own.
+4. Keep the subschema small: only the terms the question needs.
+
+## Rules
+- Ground every term in the question and the passages. The subschema describes vocabulary; it never asserts facts.
+- For each invented property give a domain and a range. Use a class name for each, or xsd:string when the value is a literal (a number, a name, a phrase).
+
+## Output
+Return one JSON object with exactly these keys:
+- label: a short name for the subschema (a few words).
+- gloss: one sentence saying what the subschema captures.
+- classes: list of class names (seed or invented); at least one.
+- properties: list of property names (seed or invented); at least one.
+- class_definitions: one {"name", "definition"} per invented class; [] when none.
+- property_definitions: one {"name", "definition", "domain", "range"} per invented property; [] when none.
+
+Example of the shape (the values are illustrative; use terms from your input):
+{"label": "Tasks and evaluation data", "gloss": "Which tasks papers address and which datasets they use.", "classes": ["Paper", "Task", "Dataset"], "properties": ["studiesTask", "usesDataset"], "class_definitions": [{"name": "Task", "definition": "A research problem a paper addresses."}], "property_definitions": [{"name": "studiesTask", "definition": "The paper addresses the task.", "domain": "Paper", "range": "Task"}]}
+(Paper, Dataset and usesDataset are reused seed terms, so only Task and studiesTask are defined.)

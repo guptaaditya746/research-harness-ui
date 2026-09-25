@@ -77,3 +77,32 @@ def test_client_errors_surface_the_provider_message(monkeypatch) -> None:
     use_transport(monkeypatch, lambda _: httpx.Response(400, text='{"error": "context too long"}'))
     with pytest.raises(ModelFailure, match="HTTP 400.*context too long"):
         OpenAICompatibleModel(model="m").complete_json("s", "u")
+
+
+def test_streaming_reply_is_assembled_like_a_plain_reply(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_MODEL_STREAM", "true")
+    chunks = [
+        {"choices": [{"delta": {"content": '{"ok": '}, "finish_reason": None}]},
+        {"choices": [{"delta": {"content": "true}"}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": {"completion_tokens": 5}},
+    ]
+    body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks) + "data: [DONE]\n\n"
+    seen = use_transport(monkeypatch, lambda _: httpx.Response(
+        200, text=body, headers={"content-type": "text/event-stream"}))
+    events: list[tuple[str, str]] = []
+    with model_events(lambda action, detail: events.append((action, detail))):
+        assert OpenAICompatibleModel(model="m").complete_json("s", "u") == {"ok": True}
+    assert seen[0]["stream"] is True and seen[0]["stream_options"] == {"include_usage": True}
+    assert "5 tokens" in events[-1][1]
+
+
+def test_prompt_template_is_named_in_the_finished_event(monkeypatch) -> None:
+    from harness_extraction import complete
+    from harness_prompts import render
+
+    use_transport(monkeypatch, lambda _: reply('{"definitions": []}'))
+    events: list[tuple[str, str]] = []
+    prompt = render("extraction/edc_define", {"relations": ["uses"]}, prompt_set="v2")
+    with model_events(lambda action, detail: events.append((action, detail))):
+        complete(OpenAICompatibleModel(model="m"), prompt)
+    assert f"prompt {prompt.ref}" in events[-1][1]

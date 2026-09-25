@@ -1,0 +1,1 @@
+Research context (gather evidence with MCP before answer verification). Source IDs are provenance handles, not paper IDs. When a tool needs paper_id, use the local paper_id from a search result or the papers list. For corpus aggregation, retrieve every indexed paper rather than one default page: 

@@ -12,6 +12,7 @@ dependencies = [
     "harness-schema",
     "harness-semantic",
     "harness-observability",
+    "harness-prompts",
 ]
 
 [build-system]
@@ -19,6 +20,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
+harness-prompts = { workspace = true }
 harness-corpus = { workspace = true }
 harness-extraction = { workspace = true }
 harness-graphstore = { workspace = true }

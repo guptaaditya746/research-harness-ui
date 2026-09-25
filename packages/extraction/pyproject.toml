@@ -2,11 +2,20 @@
 name = "harness-extraction"
 version = "0.1.0"
 requires-python = ">=3.12"
-dependencies = ["httpx>=0.27", "pydantic>=2.10", "harness-semantic"]
+dependencies = [
+    "httpx>=0.27",
+    "pydantic>=2.10",
+    "tenacity>=8.2",
+    "harness-config",
+    "harness-prompts",
+    "harness-semantic",
+]
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.uv.sources]
+harness-config = { workspace = true }
+harness-prompts = { workspace = true }
 harness-semantic = { workspace = true }
