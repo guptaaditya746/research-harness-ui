@@ -16,12 +16,13 @@ research ledger, and truncates oversized tool results with an explicit note.
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from harness_config import settings
+from harness_prompts import text
 
 DEFAULT_WINDOW = 32_768
 
@@ -58,7 +59,7 @@ def is_context_error(text: str) -> bool:
 
 def discover_window(model: Any) -> int:
     """The agent model's context window: configured, reported by LiteLLM, or a default."""
-    configured = os.getenv("HARNESS_AGENT_CONTEXT_TOKENS", "").strip()
+    configured = settings().agent_context_tokens
     if configured:
         return int(configured)
     base = str(getattr(model, "base_url", "")).rstrip("/")
@@ -83,12 +84,6 @@ def discover_window(model: Any) -> int:
     return DEFAULT_WINDOW
 
 
-GROUNDED_PREFIX = (
-    "Research context (gather evidence with MCP before answer verification). "
-    "Source IDs are provenance handles, not paper IDs. When a tool needs paper_id, "
-    "use the local paper_id from a search result or the papers list. For corpus aggregation, "
-    "retrieve every indexed paper rather than one default page: "
-)
 SHRINKABLE = ("preliminary_claims", "preliminary_triples", "papers")
 
 
@@ -119,7 +114,8 @@ class Conversation:
                 "note": "Listed items come first in answer order; read the rest with the corpus "
                         "tools (structured_facts, search_evidence, read_evidence).",
             }
-        return {"role": "user", "content": GROUNDED_PREFIX + json.dumps(rendered, ensure_ascii=False)}
+        return {"role": "user", "content": text(
+            "agent/grounded_context", context_json=json.dumps(rendered, ensure_ascii=False))}
 
     def messages(self) -> list[dict[str, Any]]:
         head = list(self.fixed)

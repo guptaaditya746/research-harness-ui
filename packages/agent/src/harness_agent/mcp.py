@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import time
 from collections.abc import Callable
 from typing import Any
 
 import httpx
+from harness_config import settings
 from harness_extraction import ModelFailure, bounded_timeout, call_interrupted, emit_model_event
+from harness_prompts import render, text
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
@@ -118,7 +119,8 @@ class MCPToolClient:
     """
 
     def __init__(self, sink: ToolSink | None = None, *, agent: str = "supervisor") -> None:
-        self.url = os.getenv("MCP_CORPUS_URL", "http://127.0.0.1:8765/mcp")
+        self.url = settings().mcp_corpus_url
+        self.prompt_ref: str | None = None
         self.sink = sink or (lambda _: None)
         self.agent = agent
         self._counter = 0
@@ -180,29 +182,16 @@ class MCPToolClient:
                     "purpose": "Load a reusable research strategy for the active question.",
                     "expected_evidence_type": "research_skill",
                 })
+            supervisor = render(
+                "agent/research_supervisor",
+                skills_catalog=catalog(),
+                loaded_skills="; ".join(
+                    f"{skill.name}@{skill.version}: {skill.instructions}" for skill in loaded_skills),
+                skills=loaded_skills,
+            )
+            self.prompt_ref = supervisor.ref
             fixed: list[dict[str, Any]] = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are the research supervisor. Form hypotheses, then freely choose corpus "
-                        "MCP evidence tools. Prefer search_evidence, read_evidence, structured_facts, "
-                        "citations, tables, and evidence_for_claim; use specialist tools when needed. "
-                        "For questions over all papers (counts, rankings, earliest/latest, 'which "
-                        "authors/papers') call aggregate_facts or metadata_table once instead of opening "
-                        "papers one by one. Paper ids are local keys like p23. "
-                        "When there are no preliminary claims, discover relevant evidence with the "
-                        "corpus tools and return verified_claim_ids as an empty list. Preliminary "
-                        "claims, when present, are candidates, not authority. Verify or challenge "
-                        "them and follow additional "
-                        "evidence when it could materially change the answer. Stop when the answer "
-                        "requirements are evidenced or a complete indexed absence procedure is "
-                        "exhausted. Return only JSON with verified_claim_ids (list of preliminary "
-                        "claim IDs), additional_evidence_ids (list of observed passage IDs), and "
-                        "reasoning_summary. Never invent IDs, facts, or counts. Available skills: "
-                        + catalog() + ". Loaded skills: "
-                        + "; ".join(f"{skill.name}@{skill.version}: {skill.instructions}" for skill in loaded_skills)
-                    ),
-                },
+                {"role": "system", "content": supervisor.system},
                 {"role": "user", "content": question},
             ]
             conversation = Conversation(fixed, grounded=grounded_context or None)
@@ -217,13 +206,13 @@ class MCPToolClient:
             core_count = sum(1 for tool in tools if tool["function"]["name"] in core_names)
             all_tools = list(tools)
             window = discover_window(model)
-            configured_reply = int(os.getenv("HARNESS_AGENT_REPLY_TOKENS", "2048"))
+            configured_reply = settings().agent_reply_tokens
             reply_tokens = min(configured_reply, max(512, window // 4))
             retried_for_length = False
             turn_number = 0
             # One bounded self-correction: a decision that fails validation is
             # sent back once with the exact problems, instead of degrading the run.
-            reflections_left = int(os.getenv("HARNESS_AGENT_REFLECTIONS", "1"))
+            reflections_left = settings().agent_reflections
             shown_ids = _handles(grounded_context or {}) | {
                 str(claim.get("id")) for claim in (grounded_context or {}).get("preliminary_claims", [])
                 if isinstance(claim, dict) and claim.get("id") is not None
@@ -322,7 +311,8 @@ class MCPToolClient:
                         "Model call finished",
                         f"{alias} · agent tool loop turn {turn_number} · "
                         f"{time.monotonic() - turn_started:.1f}s · "
-                        + (f"{len(requested)} tool calls" if requested else "final answer"),
+                        + (f"{len(requested)} tool calls" if requested else "final answer")
+                        + (f" · prompt {self.prompt_ref}" if turn_number == 1 and self.prompt_ref else ""),
                     )
                     if not requested:
                         final = str(message.get("content") or "")
@@ -335,11 +325,8 @@ class MCPToolClient:
                             emit_model_event("Agent decision sent back", "; ".join(problems)[:400])
                             conversation.add_exchange(
                                 {"role": "assistant", "content": final},
-                                [{"role": "user", "content": (
-                                    "Your decision was not accepted. Fix exactly these problems and "
-                                    "return the corrected JSON (call tools first if you need more "
-                                    "evidence):\n- " + "\n- ".join(problems)
-                                )}],
+                                [{"role": "user", "content": text(
+                                    "agent/decision_rejected", problems=problems)}],
                             )
                             continue
                         return final
@@ -438,7 +425,7 @@ class MCPToolClient:
             # The supervisor phase has its own deadline. A slow model turn
             # must not consume the entire research run; observations already
             # returned by tools can still seed the shared pipeline.
-            timeout_s = float(os.getenv("HARNESS_MCP_AGENT_TIMEOUT_S", "90"))
+            timeout_s = settings().mcp_agent_timeout_s
             # Never outlive the run itself.
             timeout_s = bounded_timeout(timeout_s)
             return asyncio.run(asyncio.wait_for(

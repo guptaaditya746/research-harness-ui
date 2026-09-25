@@ -5,26 +5,15 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import httpx
+from harness_config import settings
+from harness_prompts import render
 from mcp.server.fastmcp.exceptions import ToolError
 
 from harness_mcp_corpus.server import create_server
-
-SYSTEM = (
-    "You answer questions using only the corpus tools provided. "
-    "Call tools to check evidence before answering. "
-    "For citation questions, call citations with direction=in. If total is zero, report that no "
-    "indexed paper cites the target and do not cite unrelated outgoing facts. Otherwise call facts "
-    "on each citing paper and cite the exact cites fact_id. A reference title names the cited target, "
-    "not the citing paper. For citation answers, give paper IDs and fact IDs only; omit titles. "
-    "For introduction questions, search passages, read the relevant passage, and cite its passage_id. "
-    "Use page limits from 1 to 50 and nonnegative offsets. "
-    "If the indexed corpus does not establish an answer, say so."
-)
 
 
 def serialise_result(value: Any) -> Any:
@@ -54,7 +43,7 @@ async def ask(
         for tool in tools
     ]
     messages: list[dict] = [
-        {"role": "system", "content": SYSTEM},
+        {"role": "system", "content": render("mcp_corpus/probe").system},
         {"role": "user", "content": question},
     ]
     calls: list[dict] = []
@@ -107,13 +96,13 @@ async def ask(
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("question")
-    parser.add_argument("--root", type=Path, default=Path(os.getenv("CORPUS_ROOT", "corpus_data")))
+    parser.add_argument("--root", type=Path, default=settings().corpus_root or Path("corpus_data"))
     parser.add_argument(
         "--base-url",
-        default=os.getenv("HARNESS_MODEL_AGENT_URL"),
-        required="HARNESS_MODEL_AGENT_URL" not in os.environ,
+        default=settings().model_agent_url,
+        required=settings().model_agent_url is None,
     )
-    parser.add_argument("--model", default=os.getenv("HARNESS_MODEL_AGENT", "lite-model"))
+    parser.add_argument("--model", default=settings().model_agent)
     args = parser.parse_args()
     result = asyncio.run(
         ask(
@@ -121,7 +110,7 @@ def main() -> None:
             args.question,
             args.base_url,
             args.model,
-            os.getenv("VLLM_API_KEY", "sk-local-vllm"),
+            settings().api_key,
         )
     )
     print(json.dumps(result, ensure_ascii=False, indent=2))

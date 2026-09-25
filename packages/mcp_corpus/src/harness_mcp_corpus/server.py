@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import os
 import re
 from pathlib import Path
 from typing import Any
 
+from harness_config import settings
 from harness_corpus.store import CorpusStore
 from mcp.server.fastmcp import FastMCP
 
@@ -249,12 +249,13 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
 
 
 def main() -> None:
+    config = settings()
     mcp = create_server(
-        Path(os.getenv("CORPUS_ROOT", "./corpus_data")),
-        os.getenv("MCP_CORPUS_HOST", "127.0.0.1"),
-        int(os.getenv("MCP_CORPUS_PORT", "8765")),
+        config.corpus_root or Path("./corpus_data"),
+        config.mcp_corpus_host,
+        config.mcp_corpus_port,
     )
-    transport = os.getenv("MCP_CORPUS_TRANSPORT", "streamable-http")
+    transport = config.mcp_corpus_transport
     if transport not in {"stdio", "streamable-http"}:
         raise ValueError("MCP_CORPUS_TRANSPORT must be stdio or streamable-http")
     mcp.run(transport=transport)

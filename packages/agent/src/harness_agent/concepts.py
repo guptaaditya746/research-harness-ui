@@ -2,27 +2,17 @@
 
 from __future__ import annotations
 
-import json
-import os
 import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from harness_extraction import model_purpose
+from harness_config import settings
+from harness_extraction import model_purpose, using_prompt
+from harness_prompts import render
 
 MIN_CONCEPTS = 3
 MAX_CONCEPTS = 4
 
-SYSTEM_PROMPT = (
-    "You are the planning agent of a research harness over a fixed corpus of scientific papers. "
-    "Before any research runs, propose between {min} and {max} distinct concept readings of the "
-    "user's question. Each reading is one way to interpret what the question is asking for: which "
-    "concept, criterion, or relation should be researched. Readings must differ in substance, not "
-    "wording. Use only the allowed ontology classes. Return strict JSON: "
-    '{{"concepts": [{{"label": str (<= 8 words), "gloss": str (one sentence saying what will be '
-    'researched and how it is measured), "classes": [allowed class names], '
-    '"search_terms": [2-5 short corpus search phrases]}}]}}'
-)
 
 
 class ConceptProposalError(RuntimeError):
@@ -121,10 +111,9 @@ def propose_concepts(
     complete = getattr(model, "complete_json", None)
     if complete is None:
         raise ConceptProposalError("agent model cannot produce structured output")
-    minimum = int(os.getenv("READINGS_MIN", MIN_CONCEPTS))
-    maximum = int(os.getenv("READINGS_MAX", MAX_CONCEPTS))
-    minimum, maximum = max(MIN_CONCEPTS, minimum), min(MAX_CONCEPTS, max(maximum, MIN_CONCEPTS))
-    system = SYSTEM_PROMPT.format(min=minimum, max=maximum)
+    config = settings()
+    minimum = max(MIN_CONCEPTS, config.readings_min)
+    maximum = min(MAX_CONCEPTS, max(config.readings_max, MIN_CONCEPTS))
     last_error = "no concepts returned"
     request: dict[str, Any] = {"question": question, "allowed_classes": sorted(allowed_classes)}
     for attempt in range(attempts):
@@ -132,10 +121,10 @@ def propose_concepts(
             # Tell the model what was wrong instead of repeating an identical
             # deterministic request.
             request["previous_attempt_problem"] = last_error
-        user = json.dumps(request)
+        prompt = render("agent/concept_proposal", dict(request), minimum=minimum, maximum=maximum)
         try:
-            with model_purpose("concept proposal"):
-                concepts = _parse(complete(system, user), allowed_classes)
+            with model_purpose("concept proposal"), using_prompt(prompt.ref):
+                concepts = _parse(complete(prompt.system, prompt.user), allowed_classes)
         except Exception as exc:  # noqa: BLE001 - provider errors are reported below
             last_error = f"{type(exc).__name__}: {exc}"
             continue
