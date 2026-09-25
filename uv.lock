@@ -3881,7 +3881,9 @@ dev = [
     { name = "import-linter" },
     { name = "mypy" },
     { name = "pytest" },
+    { name = "rich" },
     { name = "ruff" },
+    { name = "typer" },
     { name = "watchfiles" },
 ]
 
@@ -3915,7 +3917,9 @@ dev = [
     { name = "import-linter", specifier = ">=2.1" },
     { name = "mypy", specifier = ">=1.13" },
     { name = "pytest", specifier = ">=8" },
+    { name = "rich", specifier = ">=13" },
     { name = "ruff", specifier = ">=0.8" },
+    { name = "typer", specifier = ">=0.12" },
     { name = "watchfiles", specifier = ">=0.21" },
 ]
 

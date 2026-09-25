@@ -466,3 +466,14 @@ def test_public_capacity_reservation_is_loopback_only_and_one_use(tmp_path: Path
 
     assert main.PUBLIC_MODEL_SLOT.acquire(blocking=False)
     main.PUBLIC_MODEL_SLOT.release()
+
+
+def test_prompt_versions_are_collected_from_model_call_rows() -> None:
+    from runtime import prompt_versions
+
+    rows = [
+        TraceRow(atS=0.1, action="Model call finished",
+                 returned="heavy-model · schema inference · 3.2s · prompt extraction/schema_inference@v2:1a2b3c4d"),
+        TraceRow(atS=0.2, action="Model call finished", returned="lite-model · agent tool loop turn 2"),
+    ]
+    assert prompt_versions(rows) == {"extraction/schema_inference": "v2:1a2b3c4d"}

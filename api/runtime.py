@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import threading
 import uuid
 from collections.abc import Callable
@@ -35,6 +36,16 @@ from paths import corpus_root, fixtures_dir
 from sse_starlette import JSONServerSentEvent
 
 LOGGER = logging.getLogger(__name__)
+_PROMPT_REF = re.compile(r"prompt ([\w/]+)@(v\d+):([0-9a-f]{8})")
+
+
+def prompt_versions(trace: list[TraceRow]) -> dict[str, str]:
+    """Prompt templates used in a run, from its model-call rows: name -> "set:hash"."""
+    found: dict[str, str] = {}
+    for row in trace:
+        for name, prompt_set, digest in _PROMPT_REF.findall(row.returned or ""):
+            found[name] = f"{prompt_set}:{digest}"
+    return found
 
 
 class RunCancelled(BaseException):
@@ -248,6 +259,7 @@ class RunRuntime:
                         "snapshot": request.snapshot,
                         "parent_run_id": request.parent_run_id,
                         "trace": trace,
+                        "prompt_hashes": {**result["run"].prompt_hashes, **prompt_versions(trace)},
                     }
                 )
                 result["run"] = run
