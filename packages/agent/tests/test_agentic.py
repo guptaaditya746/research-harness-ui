@@ -71,12 +71,12 @@ def test_agent_always_proposes_three_to_four_concepts_before_research() -> None:
     assert run.status == "awaiting_reading"
     assert run.path == "agentic"
     assert run.chosen_reading is None
-    assert [r.label for r in run.readings] == [
-        "Introducing paper", "Benchmark results", "Citation influence", "Quantum angle"
-    ]
+    # The reading without any supporting passage is hidden (HARNESS_HIDE_UNGROUNDED_READINGS).
+    assert [r.label for r in run.readings] == ["Introducing paper", "Benchmark results", "Citation influence"]
     assert all(r.classes == ["Paper"] for r in run.readings)
     plans = json.loads(result["artifacts"]["plans.json"])
-    assert plans[0]["evidence_hits"] == 4 and plans[-1]["evidence_hits"] == 0
+    assert plans[0]["evidence_hits"] == 4
+    assert json.loads(result["artifacts"]["disagreement.json"])["hidden_ungrounded"] == ["Quantum angle"]
     assert set(result["artifacts"]) == set(required_artifacts("agentic")) - {"run.json"}
 
 
@@ -312,3 +312,76 @@ def test_independent_verifier_sees_only_cited_evidence_and_never_gates(monkeypat
     verification = json.loads(result["artifacts"]["verification.json"])
     assert verification["independent_verification"]["supported_ids"] == ["p4-intro"]
     assert verification["independent_verification"]["unsupported_ids"] == ["p4-related"]
+
+
+def test_ungrounded_readings_stay_when_hiding_is_off(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_HIDE_UNGROUNDED_READINGS", "false")
+    baseline = StubBaseline()
+    baseline.corpus = SearchCorpus()
+    model = ConceptModel([{"concepts": [concept("Quantum angle", "quantum"), concept("Introducing paper"),
+                                        concept("Benchmark results")]}])
+    run = AgenticResearch(baseline, agent_model=model).run("Q?", "slow", "r-keep")["run"]
+    assert [r.label for r in run.readings][-1] == "Quantum angle"
+
+
+class RankedCorpus:
+    """A corpus with ranked retrieval: the concept proposal retrieves before it proposes."""
+
+    def __init__(self) -> None:
+        self.passages = {
+            "p1-a": {"passage_id": "p1-a", "paper_id": "p1", "text": "SafeRAG tests attack tasks such as silver noise."},
+            "p1-b": {"passage_id": "p1-b", "paper_id": "p1", "text": "Security benchmarks for retrieval augmented generation."},
+            "p2-a": {"passage_id": "p2-a", "paper_id": "p2", "text": "HydraRAG verifies evidence across sources."},
+        }
+        self.by_passage = self.passages
+        self.queries: list[str] = []
+
+    def hybrid_rank(self, query: str, scope=None, passage_ids=None, offset: int = 0, limit: int = 10) -> dict:
+        self.queries.append(query)
+        return {"items": list(self.passages.values())[:limit], "total": len(self.passages)}
+
+    def keyphrases(self, scope=None, offset: int = 0, limit: int = 10) -> dict:
+        return {"items": [{"phrase": "attack tasks"}, {"phrase": "silver noise"}]}
+
+    def paper_title(self, paper_id: str) -> str:
+        return {"p1": "SafeRAG", "p2": "HydraRAG"}[paper_id]
+
+
+class RecordingConceptModel(ConceptModel):
+    def complete_json(self, system: str, user: str) -> dict:
+        self.user = json.loads(user)
+        return super().complete_json(system, user)
+
+
+def test_retrieve_first_shows_evidence_and_grounds_by_words_not_exact_phrases() -> None:
+    baseline = StubBaseline()
+    baseline.corpus = RankedCorpus()
+    model = RecordingConceptModel([{"concepts": [
+        {"label": "Attack tasks in SafeRAG", "gloss": "Which attacks are tested.", "classes": ["Paper"],
+         "search_terms": ["attack task"], "evidence_ids": ["p1-a", "p9-invented"]},
+        {"label": "Security benchmark scope", "gloss": "What the benchmark covers.", "classes": ["Paper"],
+         "search_terms": ["security benchmark"]},
+        {"label": "Quantum annealing", "gloss": "Unrelated.", "classes": ["Paper"],
+         "search_terms": ["quantum annealing"]},
+    ]}])
+    result = AgenticResearch(baseline, agent_model=model).run("What does SafeRAG test?", "slow", "r-rf")
+    assert [row["passage_id"] for row in model.user["passages"]] == ["p1-a", "p1-b", "p2-a"]
+    assert model.user["keyphrases"] == ["attack tasks", "silver noise"]
+    assert list(model.user)[-1] == "question"
+    run = result["run"]
+    assert [c.label for c in run.concepts] == ["Attack tasks in SafeRAG", "Security benchmark scope"]
+    first = run.concepts[0]
+    # "attack task" matches "attack tasks" (no exact phrase needed); the invented id is dropped.
+    assert first.sample_sources[0] == "p1-a" and "p9-invented" not in first.sample_sources
+    assert run.concepts[1].evidence_hits == 1
+    assert json.loads(result["artifacts"]["disagreement.json"])["evidence_shown"] == ["p1-a", "p1-b", "p2-a"]
+
+
+def test_research_starts_from_the_reading_s_supporting_passages() -> None:
+    baseline = StubBaseline()
+    baseline.corpus = RankedCorpus()
+    runner = AgenticResearch(baseline, agent_model=HighModel())
+    context = runner._grounded_context(None, {**CONCEPT, "sample_sources": ["p1-a", "missing"]})
+    assert context["concept_evidence"] == [
+        {"passage_id": "p1-a", "paper_id": "p1", "excerpt": "SafeRAG tests attack tasks such as silver noise."}]
+    assert "p1-a" in runner._evidence_ids(context)

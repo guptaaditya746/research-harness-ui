@@ -66,6 +66,12 @@ class RetrievalStep:
                 "passage_ids": [str(row["passage_id"]) for row in hits],
                 "duration_ms": round((time.monotonic() - query_started) * 1000, 1),
             })
+        # Passages that grounded the chosen reading are candidates too (they are ranked like
+        # any other candidate, not forced in).
+        for source_id in concept.get("sample_sources") or []:
+            passage = self.corpus.by_passage.get(str(source_id))
+            if passage is not None:
+                found.setdefault(str(source_id), passage)
         reused_claims = self.claim_lookup(question) if self.claim_lookup else []
         for claim in reused_claims:
             for source_id in claim.source_ids:

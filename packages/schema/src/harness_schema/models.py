@@ -180,6 +180,8 @@ class ConceptChoice(Contract):
     classes: list[str] = Field(default_factory=list)
     search_terms: list[str] = Field(default_factory=list, alias="searchTerms")
     evidence_hits: int | None = Field(default=None, alias="evidenceHits")
+    # Passages that support this reading (grounding); research starts from them.
+    sample_sources: list[str] = Field(default_factory=list, alias="sampleSources")
     auto_selected: bool = Field(default=False, alias="autoSelected")
 
 

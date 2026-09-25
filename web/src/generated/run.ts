@@ -52,6 +52,7 @@ export interface ConceptChoice {
   classes: Array<string>;
   searchTerms: Array<string>;
   evidenceHits: number | null;
+  sampleSources: Array<string>;
   autoSelected: boolean;
 }
 

@@ -596,6 +596,13 @@ class AgenticResearch(ConceptProposalStep):
         for paper_id in sorted(mentioned):
             title = corpus.paper_title(paper_id) if corpus is not None else None
             papers.append({"paper_id": paper_id, "title": title})
+        # The passages that grounded the chosen reading: research starts from them.
+        by_passage = getattr(corpus, "by_passage", None) or {}
+        concept_evidence = [
+            {"passage_id": pid, "paper_id": str(by_passage[pid].get("paper_id")),
+             "excerpt": " ".join(str(by_passage[pid].get("text", "")).split())[:300]}
+            for pid in (concept or {}).get("sample_sources") or [] if pid in by_passage
+        ]
         context: dict = {
             "preliminary_answer": reading.answer if reading else None,
             "answer_source": (
@@ -610,6 +617,8 @@ class AgenticResearch(ConceptProposalStep):
                 for claim in claims
             ],
         }
+        if concept_evidence:
+            context["concept_evidence"] = concept_evidence
         if reading and not claims:
             context["preliminary_triples"] = [
                 {"subject": t.s, "predicate": t.p, "object": t.o, "source_id": t.source}

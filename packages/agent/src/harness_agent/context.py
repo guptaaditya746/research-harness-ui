@@ -84,7 +84,7 @@ def discover_window(model: Any) -> int:
     return DEFAULT_WINDOW
 
 
-SHRINKABLE = ("preliminary_claims", "preliminary_triples", "papers")
+SHRINKABLE = ("preliminary_claims", "preliminary_triples", "papers", "concept_evidence")
 
 
 @dataclass

@@ -295,6 +295,13 @@
           "default": null,
           "title": "Evidencehits"
         },
+        "sampleSources": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Samplesources",
+          "type": "array"
+        },
         "autoSelected": {
           "default": false,
           "title": "Autoselected",

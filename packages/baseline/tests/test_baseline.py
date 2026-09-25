@@ -614,3 +614,11 @@ def test_hybrid_mode_adds_dense_candidates_lexical_retrieval_misses(tmp_path: Pa
     assert [passage["passage_id"] for passage in result["passages"]] == ["p4-abstract"]
     assert result["retrieval"]["retrieval_mode"] == "hybrid"
     assert result["retrieval"]["queries"][-1]["retrieval"] == "dense"
+
+
+def test_reading_support_passages_become_retrieval_candidates(tmp_path: Path) -> None:
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(RecordedModel(), hand_written_subschema()), enhanced=True)
+    concept = {"label": "Video prediction", "gloss": "Methods that predict video.", "sample_sources": ["p4-abstract"]}
+    result = runner._retrieve({"question": "Unfindable zxqvterm", "plan": QueryPlan(operation="research"),
+                               "paper_ids": [], "concept": concept})
+    assert [passage["passage_id"] for passage in result["passages"]] == ["p4-abstract"]

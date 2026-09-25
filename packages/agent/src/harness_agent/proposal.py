@@ -10,7 +10,7 @@ from typing import Any
 
 from harness_schema.models import ConceptChoice, Metrics, Reading, Run, TraceRow, required_artifacts
 
-from .concepts import ConceptProposalError, propose_concepts
+from .concepts import ConceptProposalError, propose_grounded
 
 DEFAULT_CLASSES = {"Paper", "Author", "Venue", "Dataset", "Metric", "Claim"}
 
@@ -42,10 +42,11 @@ class ConceptProposalStep:
         emit("Agent proposing concepts", "Interpreting the question before research")
         model_name = getattr(self.agent_model, "model", "recorded")
         try:
-            concepts = propose_concepts(
+            proposal = propose_grounded(
                 self.high_model, question, self._allowed_classes(),
                 corpus=getattr(self.baseline, "corpus", None),
             )
+            concepts = proposal.concepts
         except ConceptProposalError as exc:
             emit("Concept proposal failed", str(exc))
             run = Run(
@@ -61,11 +62,18 @@ class ConceptProposalStep:
             ).encode()
             return {"run": run, "artifacts": artifacts}
 
+        if proposal.evidence:
+            emit("Retrieved evidence before readings",
+                 f"{len(proposal.evidence)} passages from "
+                 f"{len({row['paper_id'] for row in proposal.evidence})} papers · "
+                 f"{len(proposal.keyphrases)} keyphrases")
         for index, item in enumerate(concepts, start=1):
             emit(
                 "Agent concept",
-                f"{index}. {item.label} · {item.evidence_hits} corpus passages",
+                f"{index}. {item.label} · {item.evidence_hits} supporting passages",
             )
+        if proposal.hidden:
+            emit("Readings hidden", "no supporting passage: " + "; ".join(proposal.hidden))
         readings = [
             Reading(
                 label=item.label, gloss=item.gloss, classes=item.classes, axioms=[],
@@ -82,6 +90,7 @@ class ConceptProposalStep:
                 ConceptChoice(
                     label=item.label, gloss=item.gloss, classes=item.classes,
                     searchTerms=item.search_terms, evidenceHits=item.evidence_hits,
+                    sampleSources=item.sample_sources,
                 )
                 for item in concepts
             ],
@@ -95,7 +104,10 @@ class ConceptProposalStep:
             [reading.model_dump(by_alias=True) for reading in readings], indent=2
         ).encode()
         artifacts["disagreement.json"] = json.dumps(
-            {"proposed_concepts": len(concepts), "awaiting_reading": True}, indent=2
+            {"proposed_concepts": len(concepts), "awaiting_reading": True,
+             "hidden_ungrounded": proposal.hidden,
+             "evidence_shown": [row["passage_id"] for row in proposal.evidence],
+             "keyphrases_shown": proposal.keyphrases}, indent=2
         ).encode()
         artifacts["answer.md"] = b"Choose one of the agent's concept readings to continue."
         artifacts["trace.json"] = json.dumps(

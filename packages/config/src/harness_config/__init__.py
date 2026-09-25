@@ -102,6 +102,9 @@ class Settings(BaseSettings):
     mcp_agent_timeout_s: float = Field(90, validation_alias=_env("HARNESS_MCP_AGENT_TIMEOUT_S"))
     readings_min: int = Field(3, validation_alias=_env("READINGS_MIN"))
     readings_max: int = Field(4, validation_alias=_env("READINGS_MAX"))
+    concept_grounding: Literal["retrieve_first", "legacy"] = Field(
+        "retrieve_first", validation_alias=_env("HARNESS_CONCEPT_GROUNDING"))
+    hide_ungrounded_readings: bool = Field(True, validation_alias=_env("HARNESS_HIDE_UNGROUNDED_READINGS"))
 
     # ─── Paths and datasets (None = the repository default) ──────────────────
     corpus_root: Path | None = Field(None, validation_alias=_env("CORPUS_ROOT"))
