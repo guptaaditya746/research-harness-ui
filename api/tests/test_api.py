@@ -4,7 +4,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
+import app_state
 import main
+import runtime as runtime_module
 from fastapi.testclient import TestClient
 from harness_schema.models import Metrics, Reading, Run, TraceRow, Triple, required_artifacts
 from main import RunRuntime, app
@@ -107,8 +109,8 @@ def test_agentic_routes_mcp_to_lite_and_quality_roles_to_heavy(
         captured["runner_args"] = {"enhanced": enhanced, **kwargs}
         return object()
 
-    monkeypatch.setattr(main, "OpenAICompatibleModel", FakeModel)
-    monkeypatch.setattr(main, "AgenticResearch", FakeAgenticResearch)
+    monkeypatch.setattr(runtime_module, "OpenAICompatibleModel", FakeModel)
+    monkeypatch.setattr(runtime_module, "AgenticResearch", FakeAgenticResearch)
     monkeypatch.setattr(test_runtime, "_runner", fake_runner)
 
     result = test_runtime._execute(
@@ -180,7 +182,7 @@ def test_live_run_sse_rating_promotion_and_editor(tmp_path: Path, monkeypatch) -
         tmp_path / "datasets",
         runner_factory=lambda sink: FakeRunner(sink),
     )
-    monkeypatch.setattr(main, "runtime", test_runtime)
+    monkeypatch.setattr(app_state, "runtime", test_runtime)
     client = TestClient(app)
 
     created = client.post(
@@ -219,7 +221,7 @@ def test_benchmark_endpoint_aggregates_approved_question(tmp_path: Path, monkeyp
         tmp_path / "datasets",
         runner_factory=lambda sink: FakeRunner(sink),
     )
-    monkeypatch.setattr(main, "runtime", test_runtime)
+    monkeypatch.setattr(app_state, "runtime", test_runtime)
     client = TestClient(app)
     created = client.post(
         "/runs",
@@ -259,7 +261,7 @@ def test_benchmark_execute_validates_and_launches_repetitions(tmp_path: Path, mo
         tmp_path / "datasets",
         runner_factory=lambda sink: FakeRunner(sink),
     )
-    monkeypatch.setattr(main, "runtime", test_runtime)
+    monkeypatch.setattr(app_state, "runtime", test_runtime)
     client = TestClient(app)
     response = client.post(
         "/benchmark/execute",
@@ -397,7 +399,7 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
         ]
     )
     monkeypatch.setenv("DATASETS_ROOT", str(datasets))
-    monkeypatch.setattr(main, "runtime", test_runtime)
+    monkeypatch.setattr(app_state, "runtime", test_runtime)
     body = TestClient(app).get("/questions").json()["questions"]
     assert [(item["question"], item["category"]) for item in body] == [
         ("Which paper introduced Video Prediction Policy?", "metadata"),
@@ -435,7 +437,7 @@ def test_public_capacity_reservation_is_loopback_only_and_one_use(tmp_path: Path
         tmp_path / "datasets",
         runner_factory=lambda sink: FakeRunner(sink),
     )
-    monkeypatch.setattr(main, "runtime", runtime)
+    monkeypatch.setattr(app_state, "runtime", runtime)
     client = TestClient(app, client=("127.0.0.1", 1234))
     response = client.post("/internal/public/reservations")
     assert response.status_code == 200

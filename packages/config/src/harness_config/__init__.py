@@ -2,9 +2,10 @@
 
 Call :func:`settings` where a value is needed. It reads the current process
 environment each time (no caching), so a changed variable takes effect on
-the next call and tests can use ``monkeypatch.setenv``. Entry points load
-``.env`` into the environment first (python-dotenv); this module never reads
-files itself.
+the next call and tests can use ``monkeypatch.setenv``. On import, the
+nearest ``.env`` (searched from the working directory upwards) is loaded
+into the environment without overriding variables that are already set, so
+every entry point (API, MCP server, scripts) sees the same configuration.
 
 Adding a setting: add a field below with its default, document it in
 ``.env.example``, and read it through ``settings().<field>``. The test in
@@ -18,8 +19,11 @@ import json
 from pathlib import Path
 from typing import Any
 
+from dotenv import find_dotenv, load_dotenv
 from pydantic import AliasChoices, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+load_dotenv(find_dotenv(usecwd=True), override=False)
 
 
 def _env(name: str, *more: str) -> Any:

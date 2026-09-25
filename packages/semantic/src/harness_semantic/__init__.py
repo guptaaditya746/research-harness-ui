@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness_config import settings
 from owlrl import DeductiveClosure, OWLRL_Semantics
 from pyshacl import validate
 from rdflib import OWL, RDF, RDFS, SH, XSD, Graph, Literal, Namespace, URIRef
@@ -46,7 +46,7 @@ def _add_property(graph: Graph, iri: URIRef, domain: URIRef, range_: URIRef) -> 
 
 
 def _default_dblp_schema_path() -> Path:
-    configured = os.getenv("DBLP_SCHEMA_PATH", "").strip()
+    configured = settings().dblp_schema_path.strip()
     if configured:
         return Path(configured)
     for parent in Path(__file__).resolve().parents:

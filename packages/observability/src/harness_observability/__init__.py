@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from threading import Lock
 from typing import Any
 
+from harness_config import settings
 from opentelemetry import trace
 
 _lock = Lock()
@@ -24,9 +25,10 @@ def init() -> bool:
             return True
         os.environ.pop("LANGSMITH_TRACING", None)
         os.environ.pop("LANGCHAIN_TRACING_V2", None)
-        public_key = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
-        secret_key = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
-        base_url = os.getenv("LANGFUSE_BASE_URL", "").strip()
+        config = settings()
+        public_key = config.langfuse_public_key.strip()
+        secret_key = config.langfuse_secret_key.strip()
+        base_url = config.langfuse_base_url.strip()
         if not (public_key and secret_key):
             return False
         from langfuse import Langfuse
@@ -35,7 +37,7 @@ def init() -> bool:
             public_key=public_key,
             secret_key=secret_key,
             base_url=base_url or None,
-            environment=os.getenv("HARNESS_ENV", "development"),
+            environment=config.harness_env,
             additional_headers={"x-langfuse-ingestion-version": "4"},
         )
         _ready = True

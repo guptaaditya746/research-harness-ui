@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -12,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+from harness_config import settings
 from harness_schema.models import ClaimSubgraph, Run, Triple
 
 
@@ -86,8 +86,8 @@ def _predicate_key(value: object) -> str:
 
 @lru_cache(maxsize=1)
 def _shared_vocabulary() -> tuple[object, dict] | None:
-    normalizer_path = os.getenv("LABELLING_NORMALIZATION_FILE")
-    vocabulary_path = os.getenv("LABELLING_VOCABULARY_FILE")
+    normalizer_path = settings().labelling_normalization_file
+    vocabulary_path = settings().labelling_vocabulary_file
     if not normalizer_path or not vocabulary_path:
         return None
     module_spec = importlib.util.spec_from_file_location("labelling_shared_normalization", normalizer_path)
@@ -114,7 +114,7 @@ def canonical_triple_key(
             return module.canonical_triple_key(
                 {"s": subject, "p": predicate, "o": object_}, question_id, vocabulary
             )
-    elif question_id and os.getenv("LABELLING_VOCABULARY_FILE"):
+    elif question_id and settings().labelling_vocabulary_file:
         raise RuntimeError("shared corpus_10 normalization could not be loaded")
     predicate_key = _predicate_key(predicate)
     return (

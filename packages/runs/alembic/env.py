@@ -1,10 +1,10 @@
-import os
 
 from alembic import context
+from harness_config import settings
 from sqlalchemy import engine_from_config, pool
 
 config = context.config
-url = os.getenv("DATABASE_URL")
+url = settings().database_url
 if url:
     config.set_main_option("sqlalchemy.url", url)
 

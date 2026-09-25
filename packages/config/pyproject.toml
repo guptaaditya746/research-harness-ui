@@ -3,7 +3,7 @@ name = "harness-config"
 version = "0.1.0"
 description = "Typed settings for the research harness, read from the environment."
 requires-python = ">=3.12"
-dependencies = ["pydantic>=2.9", "pydantic-settings>=2.6"]
+dependencies = ["pydantic>=2.9", "pydantic-settings>=2.6", "python-dotenv>=1.0"]
 
 [build-system]
 requires = ["hatchling"]

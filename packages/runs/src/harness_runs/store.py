@@ -10,6 +10,7 @@ from tempfile import NamedTemporaryFile
 from threading import RLock
 from uuid import uuid4
 
+from harness_config import settings
 from harness_schema.models import ClaimSubgraph, Run, required_artifacts
 from pydantic import ValidationError
 
@@ -189,8 +190,8 @@ class GoldCandidateStore:
                 "status": "draft",
                 "category": "uncategorized",
                 "gold_version": "draft-1",
-                "corpus_fingerprint": os.getenv("CORPUS_FINGERPRINT", "unknown"),
-                "ontology_hash": os.getenv("ONTOLOGY_HASH", "unknown"),
+                "corpus_fingerprint": settings().corpus_fingerprint,
+                "ontology_hash": settings().ontology_hash,
                 "reviewer": None,
                 "reviewed_at": None,
                 "created_by": "run_rating",

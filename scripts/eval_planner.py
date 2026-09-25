@@ -12,13 +12,13 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
 from dotenv import load_dotenv
 from harness_baseline.planner import PaperResolver, QueryPlanner
+from harness_config import settings
 from harness_corpus.store import CorpusStore
 from harness_extraction import OpenAICompatibleModel
 
@@ -29,7 +29,7 @@ def main() -> int:
     load_dotenv(ROOT / ".env")
     parser = argparse.ArgumentParser()
     parser.add_argument("--cases", default=str(ROOT / "datasets" / "planner_cases.json"))
-    parser.add_argument("--corpus", default=os.getenv("CORPUS_ROOT", str(ROOT / "corpus_data")))
+    parser.add_argument("--corpus", default=str(settings().corpus_root or ROOT / "corpus_data"))
     parser.add_argument("--min-accuracy", type=float, default=0.85)
     args = parser.parse_args()
 
@@ -37,7 +37,7 @@ def main() -> int:
     titles = {str(r["subject"]): str(r["object"]) for r in corpus.seed_facts() if r.get("predicate") == "title"}
     titles.update({pid: str(p.get("title") or "") for pid, p in corpus.by_paper.items() if pid not in titles})
     resolver = PaperResolver(titles)
-    model = OpenAICompatibleModel(timeout_s=float(os.getenv("BUDGET_BASELINE_SLOW_SECONDS", "90")))
+    model = OpenAICompatibleModel(timeout_s=settings().budget_baseline_slow_seconds)
     planner = QueryPlanner(model)
     print(f"model={model.model} base={model.base_url} papers={len(titles)}")
 
