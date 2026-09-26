@@ -4,9 +4,10 @@
     uv run python scripts/question_coverage.py --questions datasets/question_library_2025.json
     uv run python scripts/question_coverage.py --ids nlp32,nlp44 --show 10
 
-For each question: the distinct papers among the top passages of a BM25 search for the question
-(plus dense embeddings when HARNESS_RETRIEVAL_MODE=hybrid and the index exists), and the titles of the
-best-ranked papers. A corpus-wide question whose top papers are off-topic, or that reaches only one or
+For each question: the distinct papers among the top passages of a BM25 search for its topic words
+(question words such as "which", "indexed", "papers" are dropped; plus dense embeddings when
+HARNESS_RETRIEVAL_MODE=hybrid and the index exists), limited to the venue when the question names
+one ("EMNLP 2025"), and the titles of the best-ranked papers. A corpus-wide question whose top papers are off-topic, or that reaches only one or
 two papers, should be reworded or replaced before gold is built. Questions answered from DBLP facts
 (metadata, citation, aggregation) are checked by `labelling validate` instead, which computes their gold.
 """
@@ -14,15 +15,31 @@ two papers, should be reworded or replaced before gold is built. Questions answe
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Annotated
 
 import typer
+from harness_baseline.facts import venue_matches
 from harness_config import settings
 from harness_corpus.store import CorpusStore
 
 ROOT = Path(__file__).resolve().parents[1]
 FACT_CATEGORIES = {"metadata", "citation", "aggregation"}
+QUESTION_WORDS = {
+    "which", "what", "who", "whose", "how", "do", "does", "did", "is", "are", "the", "a", "an", "of", "in", "on",
+    "for", "to", "and", "or", "this", "these", "indexed", "paper", "papers", "corpus", "their", "each", "one",
+    "among", "across", "most", "that", "they", "use", "report", "propose", "study", "work", "2025",
+}
+VENUES = ("ACL 2025", "EMNLP 2025")
+
+
+def topic(question: str) -> str:
+    """The question without question words and venue names: what BM25 should match."""
+    text = question
+    for venue in VENUES:
+        text = text.replace(venue, " ")
+    return " ".join(word for word in re.findall(r"[A-Za-z0-9-]+", text) if word.casefold() not in QUESTION_WORDS)
 
 
 def main(
@@ -42,12 +59,21 @@ def main(
         if row.get("category") in FACT_CATEGORIES:
             typer.echo(f"{row['id']}  (answered from DBLP facts: check with `labelling validate`)  {row['question']}\n")
             continue
-        items = corpus.hybrid_rank(row["question"], limit=depth)["items"]
+        named = [venue for venue in VENUES if venue in row["question"]]
+        facts = {str(fact["subject"]): fact for fact in corpus.fact_rows if fact.get("predicate") == "venue"}
+        years = {str(fact["subject"]): fact.get("object") for fact in corpus.fact_rows if fact.get("predicate") == "year"}
+        scope = None
+        if named:
+            scope = {"paper_ids": [paper for paper in corpus.by_paper if paper in facts and any(
+                venue_matches(facts[paper]["object"], years.get(paper), venue) for venue in named)]}
+        items = corpus.hybrid_rank(topic(row["question"]), scope=scope, limit=depth)["items"]
         papers: list[str] = []
         for item in items:
             if str(item["paper_id"]) not in papers:
                 papers.append(str(item["paper_id"]))
-        typer.echo(f"{row['id']}  {len(papers)} papers in the top {len(items)} passages  {row['question']}")
+        where = f" (only {' / '.join(named)})" if named else ""
+        typer.echo(f"{row['id']}  {len(papers)} papers in the top {len(items)} passages{where}  {row['question']}")
+        typer.echo(f"    searched: {topic(row['question'])}")
         for paper in papers[:show]:
             typer.echo(f"    {paper}: {(corpus.paper_title(paper) or '')[:100]}")
         typer.echo("")
