@@ -82,3 +82,18 @@ def test_adaptive_extraction_batches_run_in_parallel(monkeypatch: pytest.MonkeyP
     triples, reports = engine.extract_batches("q", inferred, passages, batch_size=2)
     assert [item.object for item in triples] == [f"p4-{index}" for index in range(8)]
     assert [report["batch"] for report in reports] == [1, 2, 3, 4]
+
+
+def test_parallel_map_starts_nothing_new_after_a_failure() -> None:
+    started: list[int] = []
+
+    def work(value: int) -> int:
+        started.append(value)
+        if value == 1:
+            raise RuntimeError("batch 1 failed")
+        time.sleep(0.2 if value == 0 else 0.01)
+        return value
+
+    with pytest.raises(RuntimeError, match="batch 1"):
+        parallel_map(work, list(range(12)), workers=3)
+    assert len(started) < 12                     # queued batches were cancelled, not run

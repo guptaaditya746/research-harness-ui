@@ -225,3 +225,21 @@ def test_an_answer_emptied_with_notes_is_written_again_from_the_triples_alone() 
     assert report == {"retried_without_notes": True}
     assert "research_notes" in composer.payloads[0] and "research_notes" not in composer.payloads[1]
     assert result.cited_source_ids == ["p4-abstract"] and "hrn:usesDataset" in result.sparql
+
+
+def test_a_citation_outside_the_evidence_is_not_retried_without_notes() -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference, UnsupportedAnswer
+
+    class Composer:
+        calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            Composer.calls += 1
+            return {"answer": "p9 does it [p9-abstract].", "cited_source_ids": ["p9-abstract"]}
+
+    engine = ExtractionEngine(Composer(), hand_written_subschema())
+    triples = [ExtractedTriple(subject="p4", predicate="usesDataset", object="x", source_id="p4-abstract", evidence="x")]
+    inferred = SchemaInference(label="l", gloss="g", classes=["Paper"], properties=["usesDataset"])
+    with pytest.raises(UnsupportedAnswer) as caught:
+        engine.answer(QUESTION, inferred, triples, notes=["a note"], report={})
+    assert caught.value.stage == "citation" and Composer.calls == 1

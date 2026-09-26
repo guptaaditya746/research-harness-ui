@@ -170,7 +170,7 @@ class QueryPlan(BaseModel):
         if self.operation == "authors_in_venues":
             return len(self.venues) >= 2
         if self.operation == "papers_in_venue":
-            return len(self.venues) >= 1
+            return len(self.venues) == 1                 # several venues: research (no silent first-only count)
         if self.operation == "papers_with_title_term":
             return self.term is not None and (self.year is None or 1900 <= self.year <= 2100)
         return True

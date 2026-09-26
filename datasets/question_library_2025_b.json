@@ -43,7 +43,7 @@
     "id": "nlp37",
     "type": "corpus_llm_judges",
     "category": "synthesis",
-    "question": "Which indexed papers use large language models as judges or evaluators, and what limitations of LLM judges do they report?",
+    "question": "Which indexed papers report limitations of using large language models as judges or evaluators, and what are those limitations?",
     "anchor": "",
     "expected": "evidence_bounded_answer"
   },
@@ -99,7 +99,7 @@
     "id": "nlp44",
     "type": "corpus_new_resources",
     "category": "synthesis",
-    "question": "Which indexed papers introduce a new benchmark or dataset, and what does each one measure?",
+    "question": "Which indexed EMNLP 2025 papers introduce a new benchmark for evaluating large language models, and what does each benchmark measure?",
     "anchor": "",
     "expected": "evidence_bounded_answer"
   },
@@ -115,7 +115,7 @@
     "id": "nlp46",
     "type": "corpus_human_evaluation",
     "category": "synthesis",
-    "question": "Which indexed papers evaluate with human judges, and what do the human annotators rate?",
+    "question": "Which indexed summarization or dialogue papers evaluate with human judges, and what do the annotators rate?",
     "anchor": "",
     "expected": "evidence_bounded_answer"
   },
@@ -171,7 +171,7 @@
     "id": "nlp53",
     "type": "ambiguous_superlative",
     "category": "ambiguity",
-    "question": "Which method for multilingual safety performs best among the indexed papers?",
+    "question": "Which evaluation benchmark is the most popular among the indexed papers?",
     "anchor": "",
     "expected": "clarification_or_scoped_answer"
   },

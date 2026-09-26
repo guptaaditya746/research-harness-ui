@@ -20,7 +20,7 @@ Check `.env` against `.env.example`. These settings matter for a live session:
 | `HARNESS_RUN_DEADLINE_FAST_S` / `_SLOW_S` | `300` / `900` | hard limit per run |
 | `HARNESS_RUN_DEADLINE_AGENTIC_SLOW_S` | `300` | agentic presentation run ends within five minutes |
 | `HARNESS_ADAPTIVE_MAX_PASSAGES` / `HARNESS_AGENTIC_MAX_PASSAGES` | `16` / `24` | bounds the number of open extraction batches |
-| `HARNESS_EXTRACTION_CONCURRENCY` | `3` | extraction and evidence-review batches sent to the model at once |
+| `HARNESS_EXTRACTION_CONCURRENCY` | `3` | extraction and evidence-review batches one run sends at once; the model server sees up to `MAX_CONCURRENT_RUNS` times this |
 | `HARNESS_AGENTIC_MAX_MCP_SEEDS` | `12` | limits MCP passages entering extraction and heavy-model verification |
 | `HARNESS_AGENT_CONTEXT_TOKENS` | `32768` | the served Granite `max_model_len` in thesis-llm-setup; the agent's conversation is fitted to this window. A larger value makes the first long turn fail before the harness learns the real limit |
 | `LLM_STATUS_URL` | `http://127.0.0.1:8010/v1/status` | thesis-llm-setup status API; the harness defers heavy calls when Heavy is saturated |

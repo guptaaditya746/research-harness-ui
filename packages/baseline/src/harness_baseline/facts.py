@@ -24,6 +24,9 @@ def normal_text(text: object) -> str:
     return " ".join(re.findall(r"[a-z0-9]+", str(text).casefold()))
 
 
+VENUE_FILLER = {"main", "long", "short", "conference", "papers", "paper", "proceedings", "track"}
+
+
 def venue_matches(venue_fact: object, paper_year: object, mention: str) -> bool:
     """Whether a venue fact matches a venue as the question names it.
 
@@ -32,9 +35,10 @@ def venue_matches(venue_fact: object, paper_year: object, mention: str) -> bool:
     publication year (DBLP often keeps the year out of the venue string). labelling computes gold
     with the same rule (``structural.venue_matches``).
     """
-    words = normal_text(mention).split()
+    # "ACL2025" reads as "ACL 2025"; words like "main conference" or "long papers" are not part of the name.
+    words = normal_text(re.sub(r"(?<=[A-Za-z])(?=(?:19|20)\d{2}\b)", " ", str(mention))).split()
     years = [word for word in words if re.fullmatch(r"(?:19|20)\d{2}", word)]
-    name = " ".join(word for word in words if word not in years)
+    name = " ".join(word for word in words if word not in years and word not in VENUE_FILLER)
     fact = f" {normal_text(venue_fact)} "
     if name and f" {name} " not in fact:
         return False
@@ -188,10 +192,11 @@ class FactAnswers:
             return self._fact_answer(triples, f"{len({item.subject for item in triples})} corpus papers were published in {plan.year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
 
         year_of = {str(row["subject"]): str(row["object"]) for row in years}
-        venue_rows = [row for row in facts if row["predicate"] == "venue"]
+        # Only indexed papers (papers.jsonl) count; labelling computes gold over the same set.
+        venue_rows = [row for row in facts if row["predicate"] == "venue" and str(row["subject"]) in self.corpus.by_paper]
 
         if op == "papers_with_title_term" and plan.term:
-            titles = [row for row in facts if row["predicate"] == "title"]
+            titles = [row for row in facts if row["predicate"] == "title" and str(row["subject"]) in self.corpus.by_paper]
             rows = [row for row in titles if title_has_term(row["object"], plan.term)
                     and (plan.year is None or year_of.get(str(row["subject"])) == str(plan.year))]
             scope = f" from {plan.year}" if plan.year is not None else ""
@@ -228,7 +233,7 @@ class FactAnswers:
                                      + "; ".join(names) + f" [{', '.join(item.source_id for item in triples)}].")
 
         if op == "authors_in_venues" and len(plan.venues) >= 2:
-            author_rows = [row for row in facts if row["predicate"] == "author"]
+            author_rows = [row for row in facts if row["predicate"] == "author" and str(row["subject"]) in self.corpus.by_paper]
             papers_by_venue = {
                 venue: {str(row["subject"]) for row in venue_rows
                         if venue_matches(row["object"], year_of.get(str(row["subject"])), venue)}

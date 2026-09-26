@@ -138,3 +138,9 @@ def test_paper_citation_counts_ranks_the_most_cited_paper(tmp_path: Path) -> Non
     assert run.readings[0].answer.startswith("Most cited by other indexed papers: Hallucination Detection in Long "
                                              "Answers (2 citing papers)")
     assert {triple.p for triple in run.readings[0].triples} == {"cites"}
+
+
+def test_venue_wording_variants_and_one_venue_counts() -> None:
+    assert venue_matches("EMNLP", "2025", "EMNLP 2025 main conference")
+    assert venue_matches("ACL (1)", "2025", "ACL2025 long papers")
+    assert not QueryPlan(operation="papers_in_venue", venues=["ACL 2025", "EMNLP 2025"]).requirements_met()

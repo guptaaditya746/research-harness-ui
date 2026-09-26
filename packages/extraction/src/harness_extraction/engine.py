@@ -524,7 +524,7 @@ class ExtractionEngine:
         try:
             return self._compose(question, inferred, triples, verify, verifier, notes)
         except UnsupportedAnswer as first:
-            if not notes:
+            if not notes or first.stage != "verification":
                 raise
             emit_model_event("Answer unsupported", "writing the answer again from the triples only, "
                                                    "without the research notes")
@@ -566,7 +566,8 @@ class ExtractionEngine:
         if not set(result.cited_source_ids) <= sources:
             raise UnsupportedAnswer(
                 f"answer cites a source outside the extracted evidence "
-                f"({sorted(set(result.cited_source_ids) - sources)[:3]}; {len(triples)} triples available)")
+                f"({sorted(set(result.cited_source_ids) - sources)[:3]}; {len(triples)} triples available)",
+                stage="citation")
         if verify:
             reviewed = complete(verifier or self.model, render(
                 "extraction/answer_verification",
@@ -587,7 +588,7 @@ class ExtractionEngine:
                     f"{', research notes used by composition' if notes else ''})")
             verified_sources = reviewed.get("cited_source_ids", [])
             if not isinstance(verified_sources, list) or not verified_sources or not set(verified_sources) <= sources:
-                raise UnsupportedAnswer("verified answer lacks valid triple provenance")
+                raise UnsupportedAnswer("verified answer lacks valid triple provenance", stage="provenance")
             cited = [str(source) for source in verified_sources]
             result = result.model_copy(update={
                 "answer": str(reviewed["answer"]), "cited_source_ids": cited,
