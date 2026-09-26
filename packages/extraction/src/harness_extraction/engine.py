@@ -83,7 +83,9 @@ class ExtractionEngine:
     def _resolve_parent_property(self, parent: str | None, kind: str, own: URIRef) -> URIRef:
         """The named parent when it exists and has the same kind (object/datatype), else the generic one."""
         fallback = TOP_ATTRIBUTE if kind == "datatype" else TOP_RELATION
-        iri = self.parent_properties().get(str(parent or "").strip())
+        # Accept the name as listed ("dblp:authoredBy (object)") or with an hrn: prefix.
+        name = re.sub(r"\s*\((object|datatype)\)\s*$", "", str(parent or "").strip()).removeprefix("hrn:")
+        iri = self.parent_properties().get(name)
         if iri is None or iri == own or property_kind(self.schema.graph, iri) != kind:
             return fallback
         return iri
@@ -134,6 +136,9 @@ class ExtractionEngine:
         iri = URIRef(HRN[name])
         if iri in self.schema.properties:
             return iri
+        if property_kind(self.schema.graph, iri) is not None:
+            # Already declared (e.g. a generic parent): never declare a property twice.
+            return iri
         self._ensure_local_schema()
         graph = self.schema.graph
         range_ = self.class_names.get(range_name, XSD.string)
@@ -176,6 +181,13 @@ class ExtractionEngine:
             raise ValueError("schema inference returned no classes or properties")
         if settings().schema_new_classes == "off":
             result = self._without_new_classes(result)
+        # The generic parents are abstract: they are parents, not predicates to extract.
+        abstract = {local_name(TOP_RELATION), local_name(TOP_ATTRIBUTE)}
+        if abstract & set(result.properties):
+            kept = [name for name in result.properties if name not in abstract]
+            if not kept:
+                raise ValueError("schema inference returned only abstract parent properties")
+            result = result.model_copy(update={"properties": kept})
         class_defs = {
             item["name"]: item for item in result.class_definitions
             if isinstance(item, dict) and isinstance(item.get("name"), str)

@@ -9,8 +9,8 @@ reading it reports:
 - **Connectivity** of the knowledge part of the graph (fact, claim and derived edges; evidence
   edges and passage nodes are provenance, not knowledge; literal value nodes do not link): connected
   pieces, the largest piece's share of nodes, and the share of paper pairs connected at all.
-- **Backbone**: fact edges from verified corpus facts (evidence "Corpus fact ...": DBLP authors,
-  venue, citations added since Phase 4), counted apart from what the run extracted.
+- **Backbone**: the DBLP facts added to research answers since Phase 4 (authors, venue, citations;
+  edge ids "b-..."), counted apart from what the run extracted.
 - **Dead ends**: invented edges whose object no other edge touches (a lone paper → phrase
   triple), and edges whose object is a whole statement (more than 8 words).
 - **Near duplicates**: entity/value nodes that are the same words up to plurals and word order
@@ -34,10 +34,11 @@ from statistics import median
 from typing import Any
 
 from harness_schema.models import AnswerGraph, GraphEdge, GraphNode, Reading, Run
-from harness_semantic import DBLP, HRN, hand_written_subschema
+from harness_semantic import CORE_TERMS, DBLP, HRN, hand_written_subschema
 from rdflib import OWL, RDF, RDFS, Graph
 
 KNOWLEDGE_EDGES = {"fact", "claim", "derived"}
+BACKBONE_PREFIX = "b-"   # edge ids of DBLP backbone facts (harness_baseline.backbone)
 STATEMENT_WORDS = 8
 STOP = {"a", "an", "the", "of", "for", "in", "on", "and", "to", "with", "by", "from"}
 
@@ -60,8 +61,9 @@ def vocabulary() -> Vocabulary:
     dblp_props = {_local(p) for p in graph.subjects(RDF.type, RDF.Property) if str(p).startswith(str(DBLP))}
     equivalent = {_local(p) for p, _ in graph.subject_objects(OWL.equivalentProperty)
                   if str(p).startswith(str(HRN))}
-    seed = {_local(p) for p in schema.properties} - equivalent
-    classes = {_local(c) for c in schema.classes}
+    # The harness core, including the generic parents (researchRelation, ResearchEntity, ...).
+    seed = ({_local(p) for p in schema.properties} | {_local(t) for t in CORE_TERMS}) - equivalent
+    classes = {_local(c) for c in schema.classes} | {_local(t) for t in CORE_TERMS if _local(t)[:1].isupper()}
     classes |= {_local(c) for c in graph.subjects(RDF.type, OWL.Class) if str(c).startswith(str(DBLP))}
     return Vocabulary(
         dblp=frozenset(name.casefold() for name in dblp_props | equivalent | {"author"}),
@@ -187,10 +189,13 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         degree[edge.source] += 1
         degree[edge.target] += 1
     touched = {node for node in knowledge_nodes if degree[node]}
-    # Literal values (a year, a number) do not connect papers, even when two edges share one.
-    # They count as attributes of their node, not as nodes of their own.
-    linking = [edge for edge in edges if kinds.get(edge.target) != "value" and kinds.get(edge.source) != "value"]
-    structural = {node for node in touched if kinds.get(node) != "value"}
+    # Literal values of facts (a year, a number, a phrase) do not connect papers, even when two
+    # edges share one: they are attributes of their node. Claim context nodes (a benchmark, a metric)
+    # are also "value" nodes, but they are meant to join results, so they do link.
+    claim_touched = {node for edge in edges if edge.kind != "fact" for node in (edge.source, edge.target)}
+    literals = {node for node in touched if kinds.get(node) == "value" and node not in claim_touched}
+    linking = [edge for edge in edges if edge.target not in literals and edge.source not in literals]
+    structural = touched - literals
     pieces = _components(structural, ((edge.source, edge.target) for edge in linking))
     papers = [node for node in touched if kinds.get(node) == "paper"]
     paper_pairs = len(papers) * (len(papers) - 1) // 2
@@ -207,7 +212,7 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
 
     origin = Counter(origin_of(edge) for edge in facts)
     invented = [edge for edge in facts if origin_of(edge) == "invented"]
-    backbone = [edge for edge in facts if (edge.evidence or "").startswith("Corpus fact")]
+    backbone = [edge for edge in facts if edge.id.startswith(BACKBONE_PREFIX)]
     dead_ends = [edge for edge in invented if degree[edge.target] <= 1]
     statements = [edge for edge in facts if len(labels.get(edge.target, "").split()) > STATEMENT_WORDS]
     literal_objects = [edge for edge in facts if kinds.get(edge.target) == "value"]

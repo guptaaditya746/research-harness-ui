@@ -71,7 +71,8 @@ recent runs.
 The corpus has 337 DBLP-verified papers: the original 37, 150 ACL 2025 long
 papers, and 150 EMNLP 2025 main papers. The evaluation questions are
 `datasets/question_library_2025.json`; `datasets/question_matrix_20.json` and `corpus_10.json` stay
-available through `HARNESS_QUESTION_SETS`.
+available through `HARNESS_QUESTION_SETS`. Several rows of the table below (the `q..` questions) come
+from `question_matrix_20.json`: add it to `HARNESS_QUESTION_SETS` to list them, or type them.
 
 | Show | Path | Question | Expected |
 |---|---|---|---|

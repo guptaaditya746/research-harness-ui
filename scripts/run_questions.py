@@ -75,9 +75,12 @@ def main(
     wanted = {part.strip() for part in ids.split(",")} if ids else None
     rows = [row for row in rows if wanted is None or row["id"] in wanted]
     done: set[tuple[str, str]] = set()
+    proposals: dict[str, str] = {}
     if resume and resume.exists():
         for line in resume.read_text().splitlines():
             item = json.loads(line)
+            if item.get("proposal_id"):
+                proposals.setdefault(item["question_id"], item["proposal_id"])
             if item.get("status") == "answered":
                 done.add((item["question_id"], item.get("reading") or ""))
     out = resume or ROOT / "results" / f"run_questions-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.jsonl"
@@ -93,18 +96,24 @@ def main(
 
     def one(row: dict[str, Any]) -> None:
         base = {"question_id": row["id"], "question": row["question"], "path": path, "budget": budget}
+        if (row["id"], "") in done:
+            return                                   # answered without readings in the resumed file
         with httpx.Client(base_url=api, timeout=60) as client:
             try:
-                first = start(client, {"question": row["question"], "path": path, "budget": budget})
-                run = wait(client, first, timeout)
+                # On resume, reuse the earlier proposal: its readings (and their labels) stay the same.
+                earlier = client.get(f"/runs/{proposals[row['id']]}") if row["id"] in proposals else None
+                if earlier is not None and earlier.status_code == 200 and earlier.json().get("concepts"):
+                    first, run = proposals[row["id"]], earlier.json()
+                else:
+                    first = start(client, {"question": row["question"], "path": path, "budget": budget})
+                    run = wait(client, first, timeout)
             except (httpx.HTTPError, TimeoutError) as exc:
                 record({**base, "reading": None, "run_id": None, "status": "error", "reason": str(exc)[:300]})
                 return
             concepts = run.get("concepts") or []
             if path != "agentic" or run.get("status") != "awaiting_reading" or not concepts:
                 # Fast/Adaptive, or an agentic question answered without readings (verified facts).
-                record({**base, "reading": run.get("concept", {}) and run["concept"].get("label"), "run_id": first,
-                        **summary(run)})
+                record({**base, "reading": None, "run_id": first, **summary(run)})
                 return
             for index, concept in enumerate(concepts):
                 label = str(concept.get("label") or f"reading {index + 1}")
@@ -127,7 +136,7 @@ def main(
     statuses: dict[str, int] = {}
     for item in results:
         statuses[str(item.get("status"))] = statuses.get(str(item.get("status")), 0) + 1
-    typer.echo(f"done in {(time.monotonic() - started) / 60:.1f} min: "
+    typer.echo(f"done in {(time.monotonic() - started) / 60:.1f} min; results file now holds: "
                + ", ".join(f"{count} {status}" for status, count in sorted(statuses.items())))
     typer.echo('Next: make graph-shape ARGS="-n 200 --path agentic"')
 

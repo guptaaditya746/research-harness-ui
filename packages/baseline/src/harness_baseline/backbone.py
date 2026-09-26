@@ -23,16 +23,25 @@ from rdflib import OWL, RDF, RDFS, XSD, Graph, URIRef
 
 BACKBONE_PAPERS = 25          # at most this many papers get backbone edges
 BACKBONE_AUTHORS = 8          # per paper
+BACKBONE_PREFIX = "b-"        # edge ids of backbone facts in the answer graph
 PREFIXES = {"hrn": str(HRN), "dblp": str(DBLP), "xsd": str(XSD), "owl": str(OWL), "rdfs": str(RDFS)}
 FOLLOW = {RDFS.subClassOf, RDFS.subPropertyOf, OWL.equivalentProperty, RDFS.domain, RDFS.range}
 
 
 def prefixed(iri: object) -> str:
+    """A prefixed name for known namespaces, else the IRI in angle brackets (valid Turtle either way)."""
     text = str(iri)
     for prefix, namespace in PREFIXES.items():
         if text.startswith(namespace):
             return f"{prefix}:{text[len(namespace):]}"
-    return text
+    return f"<{text}>"
+
+
+def _parent(graph: Graph, iri: URIRef, predicate: URIRef) -> URIRef | None:
+    """One parent, preferring harness/DBLP ones (DBLP terms often have several external parents)."""
+    parents = sorted(graph.objects(iri, predicate), key=str)
+    known = [item for item in parents if str(item).startswith((str(HRN), str(DBLP)))]
+    return (known or parents or [None])[0]
 
 
 def _paper_key(corpus: Any, value: str) -> str | None:
@@ -42,11 +51,15 @@ def _paper_key(corpus: Any, value: str) -> str | None:
         return None
 
 
-def answer_paper_keys(corpus: Any, subjects: Iterable[str], objects: Iterable[str] = ()) -> list[str]:
-    """Local keys of the papers an answer is about (subjects, and objects that are papers)."""
+def answer_paper_keys(corpus: Any, subjects: Iterable[str], objects: Iterable[str] = (),
+                      sources: Iterable[str] = ()) -> list[str]:
+    """Local keys of the papers an answer is about: subjects, objects that are papers, and the
+    papers of the passages its triples come from."""
     keys: list[str] = []
+    by_passage = getattr(corpus, "by_passage", {}) or {}
     candidates = [*subjects, *(value for value in objects
-                               if corpus.canonical_paper_iri(value) or value in corpus.by_paper)]
+                               if corpus.canonical_paper_iri(value) or value in corpus.by_paper),
+                  *(str(by_passage[source]["paper_id"]) for source in sources if source in by_passage)]
     for value in candidates:
         key = _paper_key(corpus, str(value))
         if key and key not in keys:
@@ -82,7 +95,9 @@ def backbone_triples(corpus: Any, keys: list[str]) -> list[Triple]:
         elif predicate == "cites" and row.get("in_corpus") is True and obj in wanted and obj != subject:
             out.append(Triple(s=iri[subject], p="cites", o=iri[obj], support="corpus fact",
                               evidence=evidence, source=source))
-    return out
+    # Own ids ("b-001"): extracted triples are "t-001"..., and the graph needs unique edge ids.
+    return [triple.model_copy(update={"triple_id": f"{BACKBONE_PREFIX}{index:03d}"})
+            for index, triple in enumerate(out, start=1)]
 
 
 def resolve_property(graph: Graph, name: str) -> URIRef | None:
@@ -103,7 +118,8 @@ def origin_of(graph: Graph, name: str) -> str:
 
 def _term(graph: Graph, iri: URIRef, kind: str) -> SchemaTerm:
     shown = DBLP_EQUIVALENTS.get(iri, iri)          # harness equivalents are shown by their DBLP name
-    parent = graph.value(iri, RDFS.subClassOf if kind == "class" else RDFS.subPropertyOf)
+    relation = RDFS.subClassOf if kind == "class" else RDFS.subPropertyOf
+    parent = _parent(graph, iri, relation) or _parent(graph, shown, relation)
     domain, range_ = graph.value(shown, RDFS.domain), graph.value(shown, RDFS.range)
     comment = graph.value(iri, RDFS.comment) or graph.value(shown, RDFS.comment)
     return SchemaTerm(
@@ -154,5 +170,5 @@ def subschema_slice(graph: Graph, terms: Iterable[SchemaTerm]) -> Graph:
     return out
 
 
-__all__ = ["answer_paper_keys", "backbone_triples", "origin_of", "prefixed", "resolve_property",
+__all__ = ["BACKBONE_PREFIX", "answer_paper_keys", "backbone_triples", "origin_of", "prefixed", "resolve_property",
            "schema_terms", "subschema_slice"]

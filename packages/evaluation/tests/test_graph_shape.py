@@ -75,3 +75,18 @@ def test_answers_from_verified_facts_are_their_own_kind() -> None:
     row = shape(run)
     assert row["kind"] == "facts"
     assert [(item["kind"], item["path"]) for item in summarize([row])] == [("facts", "agentic"), ("facts", "all")]
+
+
+def test_claim_context_nodes_connect_papers_and_backbone_is_recognised_by_id() -> None:
+    graph = AnswerGraph(
+        nodes=[node("paper:a", "paper"), node("paper:b", "paper"), node("claim:1", "claim"), node("claim:2", "claim"),
+               node("value:calvin", "value", "CALVIN"), node("author:x", "author")],
+        edges=[edge("paper:a", "claim:1", "reports", kind="claim"), edge("paper:b", "claim:2", "reports", kind="claim"),
+               edge("claim:1", "value:calvin", "benchmark", kind="claim"),
+               edge("claim:2", "value:calvin", "benchmark", kind="claim"),
+               GraphEdge(id="b-001", source="paper:a", target="author:x", label="authoredBy", kind="fact",
+                         origin="dblp")],
+    )
+    row = shape(run_with(graph, [], []))
+    assert row["paper_pairs_connected"] == 1.0          # both results on the same benchmark
+    assert row["backbone_edges"] == 1

@@ -141,3 +141,29 @@ def test_backbone_and_new_classes_can_be_switched_off(tmp_path: Path, monkeypatc
     assert not any(edge.label in {"authoredBy", "publishedInStream"} for edge in reading.graph.edges)
     assert "Task" not in reading.classes and "ResearchEntity" in reading.classes
     assert "Someone%20Else" in result["artifacts"]["triples.ttl"].decode()   # the old corpus-wide export
+
+
+def test_graph_edge_ids_are_unique_with_the_backbone(tmp_path: Path) -> None:
+    result, _ = run(tmp_path)
+    ids = [edge.id for edge in result["run"].readings[0].graph.edges]
+    assert len(ids) == len(set(ids))                                     # cytoscape refuses duplicates
+    assert any(edge_id.startswith("b-") for edge_id in ids)
+
+
+def test_generic_parents_are_not_predicates_and_parent_names_are_normalised(tmp_path: Path) -> None:
+    from harness_semantic import property_kind
+
+    class ParentsAsProperties(SchemaModel):
+        def complete_json(self, system: str, user: str) -> dict:
+            reply = super().complete_json(system, user)
+            reply["properties"] = [*reply["properties"], "researchAttribute"]
+            reply["property_definitions"][0]["parent"] = "hrn:usesDataset (object)"
+            return reply
+
+    engine = ExtractionEngine(AnswerModel(), hand_written_subschema(), schema_model=ParentsAsProperties())
+    inferred = engine.infer_schema(QUESTION, [{"passage_id": "p4-abstract", "paper_id": "p4", "text": "robot"}])
+    assert "researchAttribute" not in inferred.properties
+    graph = engine.schema.graph
+    attribute = URIRef(HRN + "researchAttribute")
+    assert property_kind(graph, attribute) == "datatype" and (attribute, RDF.type, OWL.ObjectProperty) not in graph
+    assert (URIRef(HRN + "addresses"), RDFS.subPropertyOf, URIRef(HRN + "usesDataset")) in graph

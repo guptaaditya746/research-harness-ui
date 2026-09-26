@@ -47,3 +47,18 @@ def test_seed_is_declared_in_owl2_with_generic_parents_and_origins() -> None:
     assert [term_origin(i) for i in (DBLP.authoredBy, HRN.title, HRN.usesDataset, HRN.evaluatesAttack)] == [
         "dblp", "dblp", "core", "invented"]
     assert validate_subschema(graph).conforms
+
+
+def test_no_property_is_both_object_and_datatype_in_the_merged_graph() -> None:
+    from harness_semantic import hand_written_subschema, property_kind
+    from rdflib import OWL, RDF
+
+    graph = hand_written_subschema().graph
+    both = set(graph.subjects(RDF.type, OWL.ObjectProperty)) & set(graph.subjects(RDF.type, OWL.DatatypeProperty))
+    assert both == set()
+    # Linked properties have the same kind (OWL 2 DL): equivalents and sub-properties.
+    from rdflib import RDFS
+    for link in (OWL.equivalentProperty, RDFS.subPropertyOf):
+        for left, right in graph.subject_objects(link):
+            kinds = {property_kind(graph, left), property_kind(graph, right)} - {None}
+            assert len(kinds) <= 1, (left, link, right)

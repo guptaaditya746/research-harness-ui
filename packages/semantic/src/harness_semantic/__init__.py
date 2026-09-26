@@ -147,7 +147,8 @@ def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
         HRN.title: (HRN.Paper, XSD.string),
         HRN.authoredBy: (HRN.Paper, HRN.Author),
         HRN.year: (HRN.Paper, XSD.gYear),
-        HRN.venue: (HRN.Paper, HRN.Venue),
+        # Equivalent to dblp:publishedIn (a string), so a datatype property too (OWL 2 DL: one kind).
+        HRN.venue: (HRN.Paper, XSD.string),
         HRN.cites: (HRN.Paper, HRN.Paper),
         HRN.citesTitle: (HRN.Paper, XSD.string),
         HRN.sectionOf: (HRN.Claim, HRN.Paper),
@@ -166,7 +167,7 @@ def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
     structural = frozenset(
         {HRN.title, HRN.authoredBy, HRN.year, HRN.venue, HRN.cites, HRN.citesTitle, HRN.sectionOf, HRN.hasTable}
     )
-    return Subschema(graph, classes, frozenset(specs), structural, dblp_graph, seed_version, seed_hash)
+    return Subschema(graph, classes | {TOP_CLASS}, frozenset(specs), structural, dblp_graph, seed_version, seed_hash)
 
 
 CORE_TERMS = frozenset({

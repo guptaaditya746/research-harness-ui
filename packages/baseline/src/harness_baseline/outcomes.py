@@ -146,7 +146,8 @@ class RunOutcomes:
         backbone_on = settings().dblp_backbone
         # The papers this answer is about: the export and the backbone are limited to them.
         answer_keys = answer_paper_keys(self.corpus, [item.subject for item in extracted],
-                                        [item.object for item in extracted]) if backbone_on else []
+                                        [item.object for item in extracted],
+                                        [item.source_id for item in extracted]) if backbone_on else []
         seed_rows = self.corpus.seed_facts()
         if backbone_on:
             wanted = set(answer_keys)
