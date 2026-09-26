@@ -33,7 +33,7 @@
         ]
       ],
       "sparql": "PREFIX hrn: <https://harness.local/schema#>\nSELECT ?author (COUNT(?citing) AS ?n) WHERE { ?paper hrn:author_of ?author . ?citing hrn:cites ?paper . } GROUP BY ?author ORDER BY DESC(?n) LIMIT 10",
-      "answer": "Jonathan Berant is the most successful author in this corpus, with 214 citations across 6 papers.",
+      "answer": "Jonathan Berant is the most successful author in this corpus, with 214 citations across 6 papers [Fixture · aggregation].",
       "triples": [
         {
           "s": "Jonathan Berant",
@@ -292,12 +292,88 @@
           "definition": null
         }
       ],
-      "answerSentences": []
+      "answerSentences": [
+        {
+          "text": "Jonathan Berant is the most successful author in this corpus, with 214 citations across 6 papers [Fixture · aggregation].",
+          "sourceIds": [
+            "Fixture · aggregation"
+          ],
+          "verdict": "accepted",
+          "reason": ""
+        },
+        {
+          "text": "His work defines the field.",
+          "sourceIds": [],
+          "verdict": "removed",
+          "reason": "no triple supports it"
+        }
+      ]
     }
   ],
   "chosenReading": 0,
   "plans": [],
-  "trace": [],
+  "trace": [
+    {
+      "atS": 1.3,
+      "action": "Model call finished",
+      "returned": "heavy-model · question understanding · 1.2s",
+      "reading": null,
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
+    },
+    {
+      "atS": 1.3,
+      "action": "Understanding question",
+      "returned": "author_citation_counts",
+      "reading": null,
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
+    },
+    {
+      "atS": 3.6,
+      "action": "Model call finished",
+      "returned": "heavy-model · schema inference · 2.1s",
+      "reading": null,
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
+    },
+    {
+      "atS": 5.1,
+      "action": "Model call finished",
+      "returned": "heavy-model · open extraction · 1.4s",
+      "reading": null,
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
+    },
+    {
+      "atS": 5.2,
+      "action": "Extracting triples",
+      "returned": "3 supported triples",
+      "reading": null,
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
+    },
+    {
+      "atS": 5.9,
+      "action": "Model call finished",
+      "returned": "heavy-model · answer composition and verification · 0.7s",
+      "reading": null,
+      "spanId": null,
+      "purpose": null,
+      "targetClaim": null,
+      "expectedEvidenceType": null
+    }
+  ],
   "rating": null,
   "reason": null,
   "producingPath": null,

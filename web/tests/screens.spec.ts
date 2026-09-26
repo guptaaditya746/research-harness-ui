@@ -80,3 +80,13 @@ test('question library runs a question without typing', async ({ page }) => {
   await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue(/Which ACL 2025 paper introduced SafeRAG/);
   await expect(page.getByText('Fast baseline').first()).toBeVisible();
 });
+
+test('results show numbered references, removed sentences and the run timeline', async ({ page }) => {
+  await page.goto('/?screen=baseline_result');
+  const answer = page.getByRole('region', { name: 'Answer' });
+  await expect(answer.locator('sup.ref a')).toHaveText('1');
+  await answer.getByRole('button', { name: /sentence the verifier removed/ }).click();
+  await expect(answer.getByText('His work defines the field.')).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Run timeline' })).toContainText('4 model calls');
+  await expect(page.getByRole('button', { name: /Model status|Models|Harness API|Checking models/ })).toBeVisible();
+});

@@ -2,6 +2,8 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import type { Check, ClaimSubgraph, Reading, Run, SchemaTerm, Triple } from './generated/run';
 import { Mascot, type MascotState } from './Mascot';
 import { ModelStatus } from './ModelStatus';
+import { Answer } from './Answer';
+import { RunTimeline } from './RunTimeline';
 
 // The graph library is large; load it only when a graph is shown.
 const AnswerGraphView = lazy(() => import('./AnswerGraph').then(module => ({ default: module.AnswerGraphView })));
@@ -190,6 +192,8 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
     ? `A model call failed: ${modelFailure || 'the provider did not return a usable reply'}. The trace below the question shows every model call with its duration.`
     : reason === 'no_results'
       ? `The ${pathLabel} could not find enough supported evidence in the corpus to answer this question.`
+      : reason === 'answer_unsupported'
+        ? `The ${pathLabel} found evidence, but the answer it wrote was not supported by the extracted triples. The checks below say how many claims the verifier removed.`
       : reason === 'deadline_exceeded'
         ? `The ${pathLabel} exceeded its time limit and was stopped. The model service may be overloaded; try again or use the fast budget.`
         : reason.startsWith('concept_proposal_failed')
@@ -204,12 +208,13 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
     {failed && <button className="btn btn-secondary" style={{ marginTop: 24 }} onClick={onDeeper}>Try agentic research</button>}
     {!failed && run.path === 'agentic' && run.readings.length > 1 && <div style={{ marginTop: 20 }}><div className="muted micro" style={{ marginBottom: 8 }}>Re-answer under another reading</div><div style={{ display: 'flex', gap: '12px 24px', flexWrap: 'wrap' }}>{run.readings.map((r, i) => i !== pick && <button key={i} className="text-button" style={{ fontSize: 13 }} onClick={() => setPick(i)}>{r.label}</button>)}</div></div>}
     {(absent || noEvidence) && <section className="section" aria-label="Research result"><div className="section-top"><span className="section-title">Research result</span></div><p className="answer">{run.reason}</p><pre className="code">{JSON.stringify(run.searchCoverage, null, 2)}</pre></section>}
-    {!failed && !absent && !noEvidence && reading && <><section className="section" aria-label="Subschema"><div className="section-top"><span className="section-title">Subschema</span><div className="section-links"><button className="text-button micro" onClick={() => setShowOntology(!showOntology)}>{showOntology ? 'Hide ontology' : 'Ontology (Turtle)'}</button><button className="text-button micro" onClick={() => setShowQuery(!showQuery)}>{showQuery ? 'Hide query' : 'SPARQL'}</button></div></div>
+    {!failed && !absent && !noEvidence && reading && <><Answer reading={reading} labels={labels} /><section className="section" aria-label="Subschema"><div className="section-top"><span className="section-title">Subschema</span><div className="section-links"><button className="text-button micro" onClick={() => setShowOntology(!showOntology)}>{showOntology ? 'Hide ontology' : 'Ontology (Turtle)'}</button><button className="text-button micro" onClick={() => setShowQuery(!showQuery)}>{showQuery ? 'Hide query' : 'SPARQL'}</button></div></div>
       <p className="muted" style={{ fontSize: 14, margin: '10px 0 16px' }}>{run.path === 'baseline' ? 'Unstated — inferred by the extractor. ' : ''}The answer is computed over {reading.classes.map(c => c.toLowerCase() + 's').join(', ')} only. Nothing outside these is read.</p>
       {reading.schemaTerms.length > 0 ? <SchemaTerms terms={reading.schemaTerms} /> : <div style={{ display: 'grid', gap: 12 }}>{reading.axioms.map(([property, domain, range]) => <div key={property}><div style={{ fontSize: 14.5 }}>A {domain.toLowerCase()} has {property.replaceAll('_', ' ')} relating it to {range.replace('xsd:', '')}.</div><div className="muted" style={{ font: '11.5px ui-monospace, Menlo, monospace' }}>{`hrn:${property}  rdfs:domain hrn:${domain}  rdfs:range ${range.includes(':') ? range : `hrn:${range}`}`}</div></div>)}</div>}
       {showOntology && <pre className="code">{ontology(reading)}</pre>}{showQuery && <pre className="code">{reading.sparql}</pre>}
-    </section><Claims reading={reading} labels={labels} /><Triples key={pick} reading={reading} labels={labels} /><section className="section" aria-label="Natural-language answer" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span><span className="muted micro">Downstream of accepted claims</span></div><p className="answer">{reading.answer}</p></section></>}
+    </section><Claims reading={reading} labels={labels} /><Triples key={pick} reading={reading} labels={labels} /></>}
     {failed && <section className="section" aria-label="Run result" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span></div><p className="answer">{failure}</p></section>}
+    <RunTimeline run={run} />
     <Checks checks={run.checks} />
   </div>;
 }

@@ -155,3 +155,28 @@
 @media (prefers-reduced-motion: reduce) {
   .mascot *, .model-dot { animation: none !important; transition: none !important; }
 }
+
+/* — answer with references (Answer.tsx) — */
+.answer .ref { font-size: .68em; margin-left: 1px; }
+.answer .ref a { color: var(--color-accent); text-decoration: none; }
+.references { margin: 14px 0 0; padding-left: 22px; display: grid; gap: 8px; font-size: 13.5px; }
+.references .ref-source { font-weight: 600; }
+.references li:target { background: color-mix(in srgb, var(--color-process-yellow) 22%, transparent); }
+.removed { margin-top: 12px; }
+.removed-list { margin: 8px 0 0; padding-left: 18px; display: grid; gap: 6px; font-size: 13.5px; color: var(--color-neutral-700); }
+
+/* — run timeline (RunTimeline.tsx) — */
+.timeline-scroll { overflow-x: auto; margin-top: 10px; }
+.timeline { width: 100%; min-width: 520px; height: auto; display: block; }
+.timeline-grid { stroke: var(--color-divider); stroke-width: 1; }
+.timeline-axis, .timeline-lane { fill: var(--color-neutral-700); font-size: 11px; font-family: var(--font-body); font-variant-numeric: tabular-nums; }
+.timeline-bar { fill: var(--color-accent); opacity: .85; }
+.timeline-bar.lane-agent { fill: var(--color-accent-2); }
+.timeline-bar.lane-schema { fill: var(--color-accent-700); }
+.timeline-bar.lane-extraction { fill: var(--color-accent-500); }
+.timeline-bar.lane-review { fill: var(--color-process-yellow); }
+.timeline-bar.lane-answer { fill: var(--color-neutral-800); }
+.timeline-bar.lane-planning { fill: var(--color-accent-300); }
+.timeline-bar.failed { fill: none; stroke: var(--color-accent-2); stroke-width: 1.5; stroke-dasharray: 3 2; }
+.timeline-tick { stroke: var(--color-accent-2-700); stroke-width: 1.4; }
+.timeline-mark { fill: var(--color-text); }

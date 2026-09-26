@@ -7,6 +7,7 @@ from typing import Any
 
 from .models import (
     AnswerGraph,
+    AnswerSentence,
     Check,
     ComputedResult,
     GraphEdge,
@@ -288,13 +289,31 @@ def fixture_runs() -> list[Run]:
         update={
             "label": "Unstated — inferred by the extractor",
             "metrics": Metrics(disagreement=None, precision=(1, 2), recall=(1, 3)),
-            "answer": "Jonathan Berant is the most successful author in this corpus, with 214 citations across 6 papers.",
+            "answer": "Jonathan Berant is the most successful author in this corpus, with 214 citations across 6 "
+                      "papers [Fixture · aggregation].",
+            # A verified answer: one accepted sentence and one the verifier removed (Answer panel).
+            "answer_sentences": [
+                AnswerSentence(text="Jonathan Berant is the most successful author in this corpus, with 214 citations "
+                                    "across 6 papers [Fixture · aggregation].",
+                               sourceIds=["Fixture · aggregation"], verdict="accepted"),
+                AnswerSentence(text="His work defines the field.", verdict="removed", reason="no triple supports it"),
+            ],
         }
     )
+    # Model calls as the trace records them, so the run timeline has something to draw.
+    baseline_trace = [
+        TraceRow(atS=1.3, action="Model call finished", returned="heavy-model · question understanding · 1.2s"),
+        TraceRow(atS=1.3, action="Understanding question", returned="author_citation_counts"),
+        TraceRow(atS=3.6, action="Model call finished", returned="heavy-model · schema inference · 2.1s"),
+        TraceRow(atS=5.1, action="Model call finished", returned="heavy-model · open extraction · 1.4s"),
+        TraceRow(atS=5.2, action="Extracting triples", returned="3 supported triples"),
+        TraceRow(atS=5.9, action="Model call finished", returned="heavy-model · answer composition and verification · 0.7s"),
+    ]
     baseline = Run.model_validate(
         {
             **shared,
             "id": "r-0411",
+            "trace": [row.model_dump(by_alias=True) for row in baseline_trace],
             "durationS": 6,
             "path": "baseline",
             "budget": "fast",
