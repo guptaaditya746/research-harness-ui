@@ -276,14 +276,21 @@ AGENTIC_ARTIFACTS = (
     "trace.json",
     "tool_calls.jsonl",
     "agent_draft.md",
+    # The agent's pipeline is the enhanced one: keep its retrieval and extraction reports
+    # (graph-shape reads the extraction funnel from extraction_batches.json).
+    "retrieval.json",
+    "extraction_batches.json",
+    "seed_manifest.json",
     "run.json",
 )
+ENHANCED_ONLY = ("retrieval.json", "extraction_batches.json", "seed_manifest.json")
 BASELINE_ARTIFACTS = tuple(
     name
     for name in AGENTIC_ARTIFACTS
-    if name not in {"plans.json", "disagreement.json", "readings.json", "research_ledger.json", "context_checkpoints.json", "verification.json", "agent_draft.md"}
+    if name not in {"plans.json", "disagreement.json", "readings.json", "research_ledger.json", "context_checkpoints.json",
+                    "verification.json", "agent_draft.md", *ENHANCED_ONLY}
 )
-ENHANCED_BASELINE_ARTIFACTS = BASELINE_ARTIFACTS + ("retrieval.json", "extraction_batches.json", "seed_manifest.json")
+ENHANCED_BASELINE_ARTIFACTS = BASELINE_ARTIFACTS + ENHANCED_ONLY
 
 
 def required_artifacts(path: str) -> tuple[str, ...]:

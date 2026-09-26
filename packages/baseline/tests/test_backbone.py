@@ -167,3 +167,25 @@ def test_generic_parents_are_not_predicates_and_parent_names_are_normalised(tmp_
     attribute = URIRef(HRN + "researchAttribute")
     assert property_kind(graph, attribute) == "datatype" and (attribute, RDF.type, OWL.ObjectProperty) not in graph
     assert (URIRef(HRN + "addresses"), RDFS.subPropertyOf, URIRef(HRN + "usesDataset")) in graph
+
+
+
+def test_an_answer_the_verifier_empties_is_answer_unsupported_not_schema_rejected() -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference, UnsupportedAnswer
+
+    class Composer:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {"sparql": "SELECT * WHERE { ?s ?p ?o }", "answer": "Both address robot learning [p4-abstract].",
+                    "cited_source_ids": ["p4-abstract"]}
+
+    class Verifier:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {"removed_claims": ["Both address robot learning."], "supported": False, "answer": "",
+                    "cited_source_ids": []}
+
+    engine = ExtractionEngine(Composer(), hand_written_subschema())
+    triples = [ExtractedTriple(subject="p4", predicate="addresses", object="robot learning",
+                               source_id="p4-abstract", evidence="for robot learning")]
+    inferred = SchemaInference(label="Tasks", gloss="Which task", classes=["Paper"], properties=["addresses"])
+    with pytest.raises(UnsupportedAnswer, match=r"verifier removed 1 claims.*1 triples available"):
+        engine.answer(QUESTION, inferred, triples, verify=True, verifier=Verifier())

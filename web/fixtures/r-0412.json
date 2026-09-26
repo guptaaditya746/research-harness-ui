@@ -1211,6 +1211,9 @@
     "trace.json",
     "tool_calls.jsonl",
     "agent_draft.md",
+    "retrieval.json",
+    "extraction_batches.json",
+    "seed_manifest.json",
     "run.json"
   ]
 }

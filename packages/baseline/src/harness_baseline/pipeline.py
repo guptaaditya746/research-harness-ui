@@ -20,6 +20,7 @@ from harness_extraction import (
     ExtractionEngine,
     ModelFailure,
     SchemaInference,
+    UnsupportedAnswer,
 )
 from harness_observability import record_stage
 from harness_schema.models import (
@@ -229,6 +230,11 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
             self._check(self.stage, "fail", f"model call failed: {exc}")
             run, artifacts = self._failure(
                 run_id, started_at, question, budget, "provider_error", str(exc)
+            )
+        except UnsupportedAnswer as exc:
+            self._check(self.stage, "fail", f"answer_unsupported: {exc}")
+            run, artifacts = self._failure(
+                run_id, started_at, question, budget, "answer_unsupported", str(exc)
             )
         except ValueError as exc:
             reason = (

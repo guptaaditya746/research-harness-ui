@@ -26,7 +26,7 @@ from harness_semantic import (
 )
 from rdflib import OWL, RDF, RDFS, XSD, Literal, URIRef
 
-from .errors import ModelFailure
+from .errors import ModelFailure, UnsupportedAnswer
 from .events import emit_model_event, labelled
 from .model_client import ModelClient, complete
 from .schemas import (
@@ -527,7 +527,9 @@ class ExtractionEngine:
         result = AnswerResult.model_validate(reply)
         sources = {triple.source_id for triple in triples}
         if not set(result.cited_source_ids) <= sources:
-            raise ValueError("answer cites a source outside the extracted evidence")
+            raise UnsupportedAnswer(
+                f"answer cites a source outside the extracted evidence "
+                f"({sorted(set(result.cited_source_ids) - sources)[:3]}; {len(triples)} triples available)")
         if verify:
             reviewed = complete(verifier or self.model, render(
                 "extraction/answer_verification",
@@ -539,10 +541,16 @@ class ExtractionEngine:
                 ensure_ascii=False,
             ))
             if reviewed.get("supported") is not True or not str(reviewed.get("answer", "")).strip():
-                raise ValueError("answer has no fully supported factual claim")
+                removed = reviewed.get("removed_claims")
+                removed = [str(item) for item in removed] if isinstance(removed, list) else []
+                example = f", e.g. {removed[0][:120]!r}" if removed else ""
+                raise UnsupportedAnswer(
+                    f"answer has no fully supported factual claim (verifier removed {len(removed)} "
+                    f"claims{example}; {len(triples)} triples available"
+                    f"{', research notes used by composition' if notes else ''})")
             verified_sources = reviewed.get("cited_source_ids", [])
             if not isinstance(verified_sources, list) or not verified_sources or not set(verified_sources) <= sources:
-                raise ValueError("verified answer lacks valid triple provenance")
+                raise UnsupportedAnswer("verified answer lacks valid triple provenance")
             result = result.model_copy(update={
                 "answer": str(reviewed["answer"]),
                 "cited_source_ids": [str(source) for source in verified_sources],

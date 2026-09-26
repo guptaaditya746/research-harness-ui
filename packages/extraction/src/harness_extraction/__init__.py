@@ -23,7 +23,7 @@ from .call_control import (
     run_interruptible,
 )
 from .engine import ExtractionEngine, local_name
-from .errors import ModelFailure
+from .errors import ModelFailure, UnsupportedAnswer
 from .events import (
     current_prompt,
     current_purpose,
@@ -62,6 +62,7 @@ __all__ = [
     "ModelFailure",
     "OpenAICompatibleModel",
     "SchemaInference",
+    "UnsupportedAnswer",
     "bounded_timeout",
     "call_budget",
     "call_interrupted",
