@@ -428,7 +428,7 @@
     },
     "GraphEdge": {
       "additionalProperties": false,
-      "description": "A source fact or claim field (``fact``/``claim``/``evidence``) or a computed step (``derived``).",
+      "description": "A source fact or claim field (``fact``/``claim``/``evidence``) or a computed step (``derived``).\n\n``origin`` says where a fact edge's predicate comes from: the DBLP ontology, the harness core\nvocabulary, or invented for this question (None for claim, evidence and derived edges).",
       "properties": {
         "id": {
           "title": "Id",
@@ -474,6 +474,23 @@
           ],
           "default": null,
           "title": "Evidence"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "enum": [
+                "dblp",
+                "core",
+                "invented"
+              ],
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Origin"
         }
       },
       "required": [
@@ -716,6 +733,13 @@
             }
           ],
           "default": null
+        },
+        "schemaTerms": {
+          "items": {
+            "$ref": "#/$defs/SchemaTerm"
+          },
+          "title": "Schematerms",
+          "type": "array"
         }
       },
       "required": [
@@ -729,6 +753,94 @@
         "metrics"
       ],
       "title": "Reading",
+      "type": "object"
+    },
+    "SchemaTerm": {
+      "additionalProperties": false,
+      "description": "One class or property of a reading's subschema, as declared in OWL 2, with its origin.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "iri": {
+          "title": "Iri",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "class",
+            "object",
+            "datatype"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "origin": {
+          "enum": [
+            "dblp",
+            "core",
+            "invented"
+          ],
+          "title": "Origin",
+          "type": "string"
+        },
+        "parent": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Parent"
+        },
+        "domain": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Domain"
+        },
+        "range": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Range"
+        },
+        "definition": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Definition"
+        }
+      },
+      "required": [
+        "name",
+        "iri",
+        "kind",
+        "origin"
+      ],
+      "title": "SchemaTerm",
       "type": "object"
     },
     "TraceRow": {

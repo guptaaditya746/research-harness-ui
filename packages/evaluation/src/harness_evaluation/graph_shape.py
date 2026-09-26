@@ -7,8 +7,10 @@ reading it reports:
   terms declared equivalent to one: title, authoredBy, year, venue), a harness seed term (cites,
   usesDataset, reportsMetric, ...), or invented in the run.
 - **Connectivity** of the knowledge part of the graph (fact, claim and derived edges; evidence
-  edges and passage nodes are provenance, not knowledge): connected pieces, the largest piece's
-  share of nodes, and the share of paper pairs that are connected at all.
+  edges and passage nodes are provenance, not knowledge; literal value nodes do not link): connected
+  pieces, the largest piece's share of nodes, and the share of paper pairs connected at all.
+- **Backbone**: fact edges from verified corpus facts (evidence "Corpus fact ...": DBLP authors,
+  venue, citations added since Phase 4), counted apart from what the run extracted.
 - **Dead ends**: invented edges whose object no other edge touches (a lone paper → phrase
   triple), and edges whose object is a whole statement (more than 8 words).
 - **Near duplicates**: entity/value nodes that are the same words up to plurals and word order
@@ -185,15 +187,27 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         degree[edge.source] += 1
         degree[edge.target] += 1
     touched = {node for node in knowledge_nodes if degree[node]}
-    pieces = _components(touched, ((edge.source, edge.target) for edge in edges))
+    # Literal values (a year, a number) do not connect papers, even when two edges share one.
+    # They count as attributes of their node, not as nodes of their own.
+    linking = [edge for edge in edges if kinds.get(edge.target) != "value" and kinds.get(edge.source) != "value"]
+    structural = {node for node in touched if kinds.get(node) != "value"}
+    pieces = _components(structural, ((edge.source, edge.target) for edge in linking))
     papers = [node for node in touched if kinds.get(node) == "paper"]
     paper_pairs = len(papers) * (len(papers) - 1) // 2
     connected_pairs = sum(len([n for n in piece if kinds.get(n) == "paper"]) *
                           (len([n for n in piece if kinds.get(n) == "paper"]) - 1) // 2 for piece in pieces)
 
     facts = [edge for edge in edges if edge.kind == "fact"]
-    origin = Counter(predicate_origin(edge.label, vocab) for edge in facts)
-    invented = [edge for edge in facts if predicate_origin(edge.label, vocab) == "invented"]
+
+    def origin_of(edge: GraphEdge) -> str:
+        # Runs since Phase 4 carry the origin on the edge; older ones are classified by label.
+        if edge.origin is not None:
+            return "seed" if edge.origin == "core" else edge.origin
+        return predicate_origin(edge.label, vocab)
+
+    origin = Counter(origin_of(edge) for edge in facts)
+    invented = [edge for edge in facts if origin_of(edge) == "invented"]
+    backbone = [edge for edge in facts if (edge.evidence or "").startswith("Corpus fact")]
     dead_ends = [edge for edge in invented if degree[edge.target] <= 1]
     statements = [edge for edge in facts if len(labels.get(edge.target, "").split()) > STATEMENT_WORDS]
     literal_objects = [edge for edge in facts if kinds.get(edge.target) == "value"]
@@ -211,12 +225,13 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         "kind": "facts" if answered_from_facts else "research",
         "reading": reading.label,
         "nodes": len(touched), "edges": len(edges), "fact_edges": len(facts),
+        "backbone_edges": len(backbone),
         "claim_edges": sum(edge.kind == "claim" for edge in edges),
         "dblp": origin["dblp"], "seed": origin["seed"], "invented": origin["invented"],
         "dblp_share": _share(origin["dblp"], len(facts)),
         "invented_share": _share(origin["invented"], len(facts)),
         "pieces": len(pieces),
-        "largest_piece_share": _share(max((len(piece) for piece in pieces), default=0), len(touched)),
+        "largest_piece_share": _share(max((len(piece) for piece in pieces), default=0), len(structural)),
         "papers": len(papers),
         "paper_pairs_connected": _share(connected_pairs, paper_pairs),
         "invented_dead_end_share": _share(len(dead_ends), len(invented)),
@@ -236,7 +251,7 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
     }
 
 
-SUMMARY_FIELDS = ("fact_edges", "dblp_share", "invented_share", "pieces", "largest_piece_share",
+SUMMARY_FIELDS = ("fact_edges", "backbone_edges", "dblp_share", "invented_share", "pieces", "largest_piece_share",
                   "paper_pairs_connected", "invented_dead_end_share", "literal_object_share",
                   "statement_object_share", "near_duplicate_nodes")
 

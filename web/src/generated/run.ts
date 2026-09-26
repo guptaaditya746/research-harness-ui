@@ -81,6 +81,7 @@ export interface GraphEdge {
   kind: "fact" | "claim" | "evidence" | "derived";
   sourceIds: Array<string>;
   evidence: string | null;
+  origin: "dblp" | "core" | "invented" | null;
 }
 
 export interface GraphNode {
@@ -113,6 +114,18 @@ export interface Reading {
   properties: Array<string>;
   measure: string | null;
   graph: AnswerGraph | null;
+  schemaTerms: Array<SchemaTerm>;
+}
+
+export interface SchemaTerm {
+  name: string;
+  iri: string;
+  kind: "class" | "object" | "datatype";
+  origin: "dblp" | "core" | "invented";
+  parent: string | null;
+  domain: string | null;
+  range: string | null;
+  definition: string | null;
 }
 
 export interface TraceRow {

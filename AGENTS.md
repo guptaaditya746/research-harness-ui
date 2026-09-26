@@ -52,6 +52,8 @@ harness_schema | harness_config
 - `make evaluate` — runs against approved gold: strict / entailed / soft by complexity and path; `ARGS="--judge"` fills the soft-match judge cache.
 - `make fewshot ARGS="--dev <ids>"` — few-shot example candidates from gold errors on development questions (`docs/PROMPTS.md`).
 - `make embed` — dense passage index for hybrid retrieval, after every ingest (needs `qwen-embed`).
+- `make graph-shape` — answer-graph shape of recent runs (read-only; Phase 4 diagnostics).
+- `make run-questions` — the 30 evaluation questions through the running API; Agentic runs every proposed reading.
 - `make fixtures` — regenerate `web/src/generated/run.ts`, JSON Schema and fixture runs after changing `harness_schema`.
 - `make dev` / `make demo` — MCP server, API and UI (needs the models from thesis-llm-setup).
 - `make preflight` — checks config, corpus, models, model status, MCP and API on the live node.

@@ -12,9 +12,19 @@ from dataclasses import replace
 from difflib import SequenceMatcher
 from typing import Any
 
+from harness_config import settings
 from harness_prompts import render
-from harness_semantic import HRN, Subschema
-from rdflib import RDF, RDFS, XSD, Literal, URIRef
+from harness_semantic import (
+    DBLP,
+    HRN,
+    TOP_ATTRIBUTE,
+    TOP_CLASS,
+    TOP_RELATION,
+    Subschema,
+    is_datatype_range,
+    property_kind,
+)
+from rdflib import OWL, RDF, RDFS, XSD, Literal, URIRef
 
 from .errors import ModelFailure
 from .events import emit_model_event, labelled
@@ -34,6 +44,11 @@ def local_name(value: URIRef) -> str:
     return str(value).rsplit("#", 1)[-1]
 
 
+# DBLP properties offered as parents of invented properties (e.g. firstAuthor under dblp:authoredBy).
+DBLP_PARENTS = ("authoredBy", "createdBy", "publishedIn", "publishedInStream", "publishedAsPartOf",
+                "isVersionOf", "yearOfPublication", "title", "affiliation")
+
+
 class ExtractionEngine:
     """One interface shared by baseline and the later agentic path."""
 
@@ -50,7 +65,36 @@ class ExtractionEngine:
         self.schema = schema
         self.class_names = {local_name(iri): iri for iri in schema.classes}
         self.property_names = {local_name(iri): iri for iri in schema.properties}
+        # The generic parent class is usable as a class (and is where "off" mode maps new classes).
+        self.class_names.setdefault(local_name(TOP_CLASS), TOP_CLASS)
         self._local_schema = False
+
+    def parent_properties(self) -> dict[str, URIRef]:
+        """Properties an invented property may specialise: the harness terms, the two generic parents
+        and a few DBLP properties (prefixed ``dblp:``)."""
+        parents = {**self.property_names, local_name(TOP_RELATION): TOP_RELATION,
+                   local_name(TOP_ATTRIBUTE): TOP_ATTRIBUTE}
+        for name in DBLP_PARENTS:
+            iri = URIRef(DBLP[name])
+            if property_kind(self.schema.graph, iri) is not None:
+                parents[f"dblp:{name}"] = iri
+        return parents
+
+    def _resolve_parent_property(self, parent: str | None, kind: str, own: URIRef) -> URIRef:
+        """The named parent when it exists and has the same kind (object/datatype), else the generic one."""
+        fallback = TOP_ATTRIBUTE if kind == "datatype" else TOP_RELATION
+        iri = self.parent_properties().get(str(parent or "").strip())
+        if iri is None or iri == own or property_kind(self.schema.graph, iri) != kind:
+            return fallback
+        return iri
+
+    def _resolve_parent_class(self, parent: str | None, own: URIRef) -> URIRef:
+        name = str(parent or "").strip()
+        iri = self.class_names.get(name)
+        if iri is None and name.startswith("dblp:"):
+            candidate = URIRef(DBLP[name.removeprefix("dblp:")])
+            iri = candidate if (candidate, RDF.type, OWL.Class) in self.schema.graph else None
+        return TOP_CLASS if iri is None or iri == own else iri
 
     def _ensure_local_schema(self) -> None:
         if self._local_schema:
@@ -63,26 +107,28 @@ class ExtractionEngine:
         self.schema = replace(self.schema, graph=graph)
         self._local_schema = True
 
-    def register_local_class(self, name: str, definition: str) -> URIRef:
-        """Introduce one query-local class without changing the seed ontology."""
+    def register_local_class(self, name: str, definition: str, parent: str | None = None) -> URIRef:
+        """Introduce one query-local OWL 2 class, a subclass of an existing class, without changing the seed."""
         if not re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,63}", name):
             raise ValueError(f"invalid proposed class name: {name!r}")
         if name in self.class_names:
             return self.class_names[name]
         self._ensure_local_schema()
         iri = URIRef(HRN[name])
-        self.schema.graph.add((iri, RDF.type, RDFS.Class))
+        self.schema.graph.add((iri, RDF.type, OWL.Class))
         self.schema.graph.add((iri, RDFS.label, Literal(name)))
         self.schema.graph.add((iri, RDFS.comment, Literal(definition)))
+        self.schema.graph.add((iri, RDFS.subClassOf, self._resolve_parent_class(parent, iri)))
         self.schema = replace(self.schema, classes=self.schema.classes | {iri})
         self.class_names[name] = iri
         return iri
 
     def register_local_relation(
         self, name: str, definition: str, *, domain_name: str = "Paper",
-        range_name: str = "xsd:string",
+        range_name: str = "xsd:string", parent: str | None = None,
     ) -> URIRef:
-        """Add a query-local relation with an explicit domain and range."""
+        """Add a query-local OWL 2 property: object or datatype by its range, with one domain, one
+        range and a parent property (the named one when it fits, else the generic one)."""
         if not re.fullmatch(r"[a-z][A-Za-z0-9_]{0,63}", name):
             raise ValueError(f"invalid proposed relation name: {name!r}")
         iri = URIRef(HRN[name])
@@ -90,11 +136,14 @@ class ExtractionEngine:
             return iri
         self._ensure_local_schema()
         graph = self.schema.graph
-        graph.add((iri, RDF.type, RDF.Property))
+        range_ = self.class_names.get(range_name, XSD.string)
+        kind = "datatype" if is_datatype_range(range_) else "object"
+        graph.add((iri, RDF.type, OWL.DatatypeProperty if kind == "datatype" else OWL.ObjectProperty))
         graph.add((iri, RDFS.label, Literal(name)))
         graph.add((iri, RDFS.comment, Literal(definition)))
         graph.add((iri, RDFS.domain, self.class_names.get(domain_name, HRN.Paper)))
-        graph.add((iri, RDFS.range, self.class_names.get(range_name, XSD.string)))
+        graph.add((iri, RDFS.range, range_))
+        graph.add((iri, RDFS.subPropertyOf, self._resolve_parent_property(parent, kind, iri)))
         self.schema = replace(self.schema, properties=self.schema.properties | {iri})
         self.property_names[name] = iri
         return iri
@@ -106,10 +155,13 @@ class ExtractionEngine:
         never become part of a definition or the question text."""
         allowed_classes = sorted(self.class_names)
         allowed_properties = sorted(self.property_names)
+        parents = self.parent_properties()
         payload: dict[str, Any] = {
             "question": question,
             "allowed_classes": allowed_classes,
             "allowed_properties": allowed_properties,
+            "parent_properties": [f"{name} ({property_kind(self.schema.graph, iri) or 'object'})"
+                                  for name, iri in sorted(parents.items())],
             "passages": [
                 {"source_id": row["passage_id"], "text": row["text"][:1200]}
                 for row in passages
@@ -122,6 +174,8 @@ class ExtractionEngine:
         )))
         if not result.classes or not result.properties:
             raise ValueError("schema inference returned no classes or properties")
+        if settings().schema_new_classes == "off":
+            result = self._without_new_classes(result)
         class_defs = {
             item["name"]: item for item in result.class_definitions
             if isinstance(item, dict) and isinstance(item.get("name"), str)
@@ -134,7 +188,7 @@ class ExtractionEngine:
             if name not in self.class_names:
                 definition = str(class_defs.get(name, {}).get("definition") or
                                  f"Run-local research concept {name} for: {question}")
-                self.register_local_class(name, definition)
+                self.register_local_class(name, definition, parent=class_defs.get(name, {}).get("parent"))
         for name in result.properties:
             if name in self.property_names:
                 continue
@@ -150,7 +204,7 @@ class ExtractionEngine:
                              f"Run-local research relation {name} for: {question}")
             self.register_local_relation(
                 name, definition, domain_name=str(spec.get("domain") or "Paper"),
-                range_name=range_name,
+                range_name=range_name, parent=spec.get("parent"),
             )
         new_classes = set(result.classes) - set(allowed_classes)
         new_properties = set(result.properties) - set(allowed_properties)
@@ -161,6 +215,23 @@ class ExtractionEngine:
                 f"properties: {', '.join(sorted(new_properties)) or 'none'}",
             )
         return result
+
+    def _without_new_classes(self, result: SchemaInference) -> SchemaInference:
+        """HARNESS_SCHEMA_NEW_CLASSES=off: an invented class becomes the generic ResearchEntity."""
+        generic = local_name(TOP_CLASS)
+        rename = {name: generic for name in result.classes if name not in self.class_names}
+        if not rename:
+            return result
+        properties = [
+            {**item, **{key: rename.get(str(item.get(key)), item.get(key)) for key in ("domain", "range")
+                        if key in item}}
+            for item in result.property_definitions if isinstance(item, dict)
+        ]
+        return result.model_copy(update={
+            "classes": list(dict.fromkeys(rename.get(name, name) for name in result.classes)),
+            "class_definitions": [],
+            "property_definitions": properties,
+        })
 
     @labelled("triple extraction")
     def extract(

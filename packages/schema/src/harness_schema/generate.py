@@ -14,6 +14,7 @@ from .models import (
     Metrics,
     Reading,
     Run,
+    SchemaTerm,
     TraceRow,
     Triple,
     required_artifacts,
@@ -143,7 +144,37 @@ def reading(label: str, gloss: str, op: str) -> Reading:
         status="answered",
         measure=measure,
         graph=fixture_graph(rows, measure),
+        schemaTerms=fixture_terms(classes, axioms),
     )
+
+
+def fixture_terms(classes: list[str], axioms: list[tuple[str, str, str]]) -> list[SchemaTerm]:
+    """Illustrative subschema terms with origins (Phase 4): DBLP, harness core and invented."""
+    hrn, dblp = "https://harness.local/schema#", "https://dblp.org/rdf/schema#"
+    terms = [
+        SchemaTerm(name=f"hrn:{name}", iri=f"{hrn}{name}", kind="class",
+                   origin="core" if name in {"Author", "Paper", "Venue"} else "invented",
+                   parent=None if name in {"Author", "Paper", "Venue"} else "hrn:ResearchEntity",
+                   definition=None if name in {"Author", "Paper", "Venue"} else f"Run-local class {name} (fixture).")
+        for name in classes
+    ]
+    for name, domain, range_ in axioms:
+        literal = range_.startswith("xsd:")
+        if name == "cites":
+            terms.append(SchemaTerm(name="hrn:cites", iri=f"{hrn}cites", kind="object", origin="core",
+                                    domain="hrn:Paper", range="hrn:Paper"))
+        elif name == "year":
+            terms.append(SchemaTerm(name="dblp:yearOfPublication", iri=f"{dblp}yearOfPublication", kind="datatype",
+                                    origin="dblp", domain="dblp:Publication", range="xsd:gYear"))
+        else:
+            terms.append(SchemaTerm(
+                name=f"hrn:{name}", iri=f"{hrn}{name}", kind="datatype" if literal else "object", origin="invented",
+                parent="hrn:researchAttribute" if literal else "hrn:researchRelation",
+                domain=f"hrn:{domain}", range=range_ if literal else f"hrn:{range_}",
+                definition=f"Run-local relation {name} (fixture)."))
+    terms.append(SchemaTerm(name="dblp:authoredBy", iri=f"{dblp}authoredBy", kind="object", origin="dblp",
+                            parent="dblp:createdBy", domain="dblp:Publication", range="dblp:Creator"))
+    return terms
 
 
 def fixture_graph(rows: list[tuple[str, str, str]], measure: str) -> AnswerGraph:
@@ -163,7 +194,7 @@ def fixture_graph(rows: list[tuple[str, str, str]], measure: str) -> AnswerGraph
             edge_id = f"t-{index:02d}{k}"
             edges.append(GraphEdge(id=edge_id, source=paper, target=author_id, label="authoredBy", kind="fact",
                                    sourceIds=[f"p{index * 2 + k + 1}-metadata"],
-                                   evidence="DBLP author list (fixture)"))
+                                   evidence="DBLP author list (fixture)", origin="dblp"))
             derived.append(edge_id)
         computed_id = f"computed:{index}"
         label = f"{value} {measure}"

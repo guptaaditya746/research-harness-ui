@@ -70,7 +70,8 @@ def _question_sets() -> list[Path]:
 
 @router.get("/questions")
 def questions() -> dict[str, list[dict]]:
-    """Questions the UI offers for one-click runs: curated sets, gold rows, recent runs."""
+    """Questions the UI offers for one-click runs: the question sets, plus gold rows and recent runs
+    when HARNESS_QUESTION_EXTRAS is on."""
     items: list[dict] = []
     seen: set[str] = set()
 
@@ -98,6 +99,8 @@ def questions() -> dict[str, list[dict]]:
                     expected=row.get("expected"),
                     source=path.stem,
                 )
+    if not settings().question_extras:
+        return {"questions": items}
     for row in app_state.runtime.gold.list():
         add(
             row.get("question"),

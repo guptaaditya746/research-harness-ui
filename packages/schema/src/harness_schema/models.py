@@ -97,8 +97,15 @@ class GraphNode(Contract):
     iri: str | None = None
 
 
+Origin = Literal["dblp", "core", "invented"]
+
+
 class GraphEdge(Contract):
-    """A source fact or claim field (``fact``/``claim``/``evidence``) or a computed step (``derived``)."""
+    """A source fact or claim field (``fact``/``claim``/``evidence``) or a computed step (``derived``).
+
+    ``origin`` says where a fact edge's predicate comes from: the DBLP ontology, the harness core
+    vocabulary, or invented for this question (None for claim, evidence and derived edges).
+    """
 
     id: str
     source: str
@@ -107,6 +114,20 @@ class GraphEdge(Contract):
     kind: Literal["fact", "claim", "evidence", "derived"]
     source_ids: list[str] = Field(default_factory=list, alias="sourceIds")
     evidence: str | None = None
+    origin: Origin | None = None
+
+
+class SchemaTerm(Contract):
+    """One class or property of a reading's subschema, as declared in OWL 2, with its origin."""
+
+    name: str                                   # prefixed: dblp:authoredBy, hrn:addresses
+    iri: str
+    kind: Literal["class", "object", "datatype"]
+    origin: Origin
+    parent: str | None = None                   # prefixed name of the superclass / superproperty
+    domain: str | None = None
+    range: str | None = None
+    definition: str | None = None
 
 
 class ComputedResult(Contract):
@@ -151,6 +172,8 @@ class Reading(Contract):
     # What the answer actually computed or asked for (e.g. "distinct papers per author").
     measure: str | None = None
     graph: AnswerGraph | None = None
+    # The subschema's terms with their origin (DBLP / core / invented), for the Subschema panel.
+    schema_terms: list[SchemaTerm] = Field(default_factory=list, alias="schemaTerms")
 
 
 class TraceRow(Contract):

@@ -137,7 +137,8 @@
             "sourceIds": [
               "p1-metadata"
             ],
-            "evidence": "DBLP author list (fixture)"
+            "evidence": "DBLP author list (fixture)",
+            "origin": "dblp"
           },
           {
             "id": "t-001",
@@ -148,7 +149,8 @@
             "sourceIds": [
               "p2-metadata"
             ],
-            "evidence": "DBLP author list (fixture)"
+            "evidence": "DBLP author list (fixture)",
+            "origin": "dblp"
           },
           {
             "id": "d-0",
@@ -157,7 +159,8 @@
             "label": "computed for",
             "kind": "derived",
             "sourceIds": [],
-            "evidence": "count in corpus citations (fixture)"
+            "evidence": "count in corpus citations (fixture)",
+            "origin": null
           },
           {
             "id": "t-010",
@@ -168,7 +171,8 @@
             "sourceIds": [
               "p3-metadata"
             ],
-            "evidence": "DBLP author list (fixture)"
+            "evidence": "DBLP author list (fixture)",
+            "origin": "dblp"
           },
           {
             "id": "t-011",
@@ -179,7 +183,8 @@
             "sourceIds": [
               "p4-metadata"
             ],
-            "evidence": "DBLP author list (fixture)"
+            "evidence": "DBLP author list (fixture)",
+            "origin": "dblp"
           },
           {
             "id": "d-1",
@@ -188,7 +193,8 @@
             "label": "computed for",
             "kind": "derived",
             "sourceIds": [],
-            "evidence": "count in corpus citations (fixture)"
+            "evidence": "count in corpus citations (fixture)",
+            "origin": null
           }
         ],
         "computed": [
@@ -213,7 +219,79 @@
             ]
           }
         ]
-      }
+      },
+      "schemaTerms": [
+        {
+          "name": "hrn:Author",
+          "iri": "https://harness.local/schema#Author",
+          "kind": "class",
+          "origin": "core",
+          "parent": null,
+          "domain": null,
+          "range": null,
+          "definition": null
+        },
+        {
+          "name": "hrn:Paper",
+          "iri": "https://harness.local/schema#Paper",
+          "kind": "class",
+          "origin": "core",
+          "parent": null,
+          "domain": null,
+          "range": null,
+          "definition": null
+        },
+        {
+          "name": "hrn:Citation",
+          "iri": "https://harness.local/schema#Citation",
+          "kind": "class",
+          "origin": "invented",
+          "parent": "hrn:ResearchEntity",
+          "domain": null,
+          "range": null,
+          "definition": "Run-local class Citation (fixture)."
+        },
+        {
+          "name": "hrn:author_of",
+          "iri": "https://harness.local/schema#author_of",
+          "kind": "object",
+          "origin": "invented",
+          "parent": "hrn:researchRelation",
+          "domain": "hrn:Paper",
+          "range": "hrn:Author",
+          "definition": "Run-local relation author_of (fixture)."
+        },
+        {
+          "name": "hrn:cites",
+          "iri": "https://harness.local/schema#cites",
+          "kind": "object",
+          "origin": "core",
+          "parent": null,
+          "domain": "hrn:Paper",
+          "range": "hrn:Paper",
+          "definition": null
+        },
+        {
+          "name": "hrn:citation_count",
+          "iri": "https://harness.local/schema#citation_count",
+          "kind": "datatype",
+          "origin": "invented",
+          "parent": "hrn:researchAttribute",
+          "domain": "hrn:Author",
+          "range": "xsd:integer",
+          "definition": "Run-local relation citation_count (fixture)."
+        },
+        {
+          "name": "dblp:authoredBy",
+          "iri": "https://dblp.org/rdf/schema#authoredBy",
+          "kind": "object",
+          "origin": "dblp",
+          "parent": "dblp:createdBy",
+          "domain": "dblp:Publication",
+          "range": "dblp:Creator",
+          "definition": null
+        }
+      ]
     }
   ],
   "chosenReading": 0,

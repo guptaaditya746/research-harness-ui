@@ -61,16 +61,17 @@ Open `http://127.0.0.1:25173` on the laptop.
 
 ## 2. What to show
 
-No typing is needed. Open **Question library** under the question box. Hover a question to
-run it with **Fast**, **Adaptive**, **Agentic** or **Compare**; click its text to put it in the box and
-edit it first. The library lists the question matrix and 2025 NLP question set
-(`HARNESS_QUESTION_SETS`, default
-`question_matrix_20.json,question_library_2025.json`), gold candidates and your
-recent live runs. Filter by any word.
+No typing is needed. The start screen lists the 30 evaluation questions (nlp01-nlp30, the same
+list as **Question library** under the question box). Hover a question to run it with **Fast**,
+**Adaptive**, **Agentic** or **Compare**; click its text to put it in the box and edit it first.
+Filter by any word. The list comes from `HARNESS_QUESTION_SETS` (default
+`question_library_2025.json`); set `HARNESS_QUESTION_EXTRAS=true` to also list gold candidates and
+recent runs.
 
 The corpus has 337 DBLP-verified papers: the original 37, 150 ACL 2025 long
-papers, and 150 EMNLP 2025 main papers. The two suggested-question sets are
-`datasets/question_matrix_20.json` and `datasets/question_library_2025.json`.
+papers, and 150 EMNLP 2025 main papers. The evaluation questions are
+`datasets/question_library_2025.json`; `datasets/question_matrix_20.json` and `corpus_10.json` stay
+available through `HARNESS_QUESTION_SETS`.
 
 | Show | Path | Question | Expected |
 |---|---|---|---|

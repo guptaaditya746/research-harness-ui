@@ -55,14 +55,16 @@ class _Builder:
         return node_id
 
     def add(self, source: str, target: str, *, label: str, kind: str, source_ids: list[str],
-            evidence: str | None, edge_id: str) -> str:
+            evidence: str | None, edge_id: str, origin: str | None = None) -> str:
         self.graph.add_edge(source, target, key=edge_id, id=edge_id, label=label, kind=kind,
-                            source_ids=source_ids, evidence=evidence)
+                            source_ids=source_ids, evidence=evidence, origin=origin)
         return edge_id
 
 
 def build(triples: list[Triple], claims: list[ClaimSubgraph], computed: list[dict[str, Any]], *,
-          is_paper: Callable[[str], bool], paper_label: Callable[[str], str]) -> AnswerGraph:
+          is_paper: Callable[[str], bool], paper_label: Callable[[str], str],
+          origin_of: Callable[[str], str | None] | None = None) -> AnswerGraph:
+    """``origin_of`` names where a fact edge's predicate comes from (dblp / core / invented)."""
     builder = _Builder(is_paper, paper_label)
     edge_index: dict[tuple[str, str, str], str] = {}
 
@@ -107,7 +109,8 @@ def build(triples: list[Triple], claims: list[ClaimSubgraph], computed: list[dic
         target = builder.node(triple.o, role=role)
         edge_id = triple.triple_id or f"t-{index:03d}"
         builder.add(source, target, label=triple.p, kind="fact", source_ids=[triple.source],
-                    evidence=triple.evidence, edge_id=edge_id)
+                    evidence=triple.evidence, edge_id=edge_id,
+                    origin=origin_of(triple.p) if origin_of else None)
         edge_index[(triple.s, triple.p.casefold(), triple.o)] = edge_id
 
     results: list[ComputedResult] = []
@@ -133,7 +136,7 @@ def build(triples: list[Triple], claims: list[ClaimSubgraph], computed: list[dic
         nodes=[GraphNode(id=node, label=str(data["label"]), kind=data["kind"], iri=data.get("iri"))
                for node, data in sorted(graph.nodes(data=True))],
         edges=[GraphEdge(id=data["id"], source=source, target=target, label=data["label"], kind=data["kind"],
-                         sourceIds=list(data["source_ids"]), evidence=data["evidence"])
+                         sourceIds=list(data["source_ids"]), evidence=data["evidence"], origin=data.get("origin"))
                for source, target, data in sorted(graph.edges(data=True), key=lambda row: row[2]["id"])],
         computed=results,
     )

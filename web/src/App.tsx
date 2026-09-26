@@ -1,5 +1,5 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
-import type { Check, ClaimSubgraph, Reading, Run, Triple } from './generated/run';
+import type { Check, ClaimSubgraph, Reading, Run, SchemaTerm, Triple } from './generated/run';
 
 // The graph library is large; load it only when a graph is shown.
 const AnswerGraphView = lazy(() => import('./AnswerGraph').then(module => ({ default: module.AnswerGraphView })));
@@ -21,17 +21,65 @@ function metric(pair?: [number, number] | null) {
   return `${pair[1] ? (pair[0] / pair[1]).toFixed(2) : '—'}  (${pair[0]} / ${pair[1]})`;
 }
 
+const PREFIXES = ['@prefix hrn: <https://harness.local/schema#> .', '@prefix dblp: <https://dblp.org/rdf/schema#> .',
+  '@prefix owl: <http://www.w3.org/2002/07/owl#> .', '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .',
+  '@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .'];
+// Harness terms declared equivalent to DBLP properties are written with their DBLP name (as in triples.ttl).
+const PREDICATE_ALIAS: Record<string, string> = { author: 'dblp:authoredBy', authoredBy: 'dblp:authoredBy', title: 'dblp:title',
+  year: 'dblp:yearOfPublication', venue: 'dblp:publishedIn', publishedInStream: 'dblp:publishedInStream' };
+const OWL_KIND: Record<SchemaTerm['kind'], string> = { class: 'owl:Class', object: 'owl:ObjectProperty', datatype: 'owl:DatatypeProperty' };
+
+function predicateName(reading: Reading, p: string) {
+  return PREDICATE_ALIAS[p] ?? reading.schemaTerms.find(term => term.kind !== 'class' && term.name.endsWith(`:${p}`))?.name ?? `hrn:${p}`;
+}
+
 function turtle(reading: Reading) {
-  const iri = (text: string) => `hrn:${text.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '')}`;
-  return ['@prefix hrn: <https://harness.local/schema#> .', '@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .', '',
-    ...reading.triples.map(t => `${iri(t.s)} hrn:${t.p} ${/^\d+$/.test(t.o) ? `"${t.o}"^^xsd:integer` : iri(t.o)} .`)].join('\n');
+  const node = (value: string) => /^https?:\/\//.test(value) ? `<${value}>` : `<https://harness.local/resource/${encodeURIComponent(value)}>`;
+  const literalValued = (p: string) => ['title', 'year', 'venue'].includes(p)
+    || reading.schemaTerms.find(term => term.name === predicateName(reading, p))?.kind === 'datatype';
+  return [...PREFIXES, '',
+    ...reading.triples.map(t => `${node(t.s)} ${predicateName(reading, t.p)} ${literalValued(t.p) ? JSON.stringify(t.o) : node(t.o)} .`)].join('\n');
 }
 
 function ontology(reading: Reading) {
-  return ['@prefix hrn: <https://harness.local/schema#> .', '@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .',
-    '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .', '',
-    ...reading.classes.map(c => `hrn:${c} a rdfs:Class .`), '',
-    ...reading.axioms.map(([p, d, r]) => `hrn:${p} a rdf:Property ;\n  rdfs:domain hrn:${d} ;\n  rdfs:range ${r.includes(':') ? r : `hrn:${r}`} .`)].join('\n');
+  if (!reading.schemaTerms.length) {
+    // Runs from before Phase 4 carry no term list; show what they have.
+    return ['@prefix hrn: <https://harness.local/schema#> .', '@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .', '',
+      ...reading.classes.map(c => `hrn:${c} a rdfs:Class .`), '',
+      ...reading.axioms.map(([p, d, r]) => `hrn:${p} rdfs:domain hrn:${d} ;\n  rdfs:range ${r.includes(':') ? r : `hrn:${r}`} .`)].join('\n');
+  }
+  return [...PREFIXES, '', ...reading.schemaTerms.flatMap(term => {
+    const parts = [`${term.name} a ${OWL_KIND[term.kind]}`];
+    if (term.parent) parts.push(`${term.kind === 'class' ? 'rdfs:subClassOf' : 'rdfs:subPropertyOf'} ${term.parent}`);
+    if (term.domain) parts.push(`rdfs:domain ${term.domain}`);
+    if (term.range) parts.push(`rdfs:range ${term.range}`);
+    if (term.definition) parts.push(`rdfs:comment ${JSON.stringify(term.definition)}`);
+    return [`# ${term.origin}`, `${parts.join(' ;\n  ')} .`, ''];
+  })].join('\n');
+}
+
+const ORIGIN_BADGE: Record<SchemaTerm['origin'], { text: string; background: string; color: string; title: string }> = {
+  dblp: { text: 'DBLP', background: '#cbeeff', color: '#004961', title: 'From the DBLP ontology' },
+  core: { text: 'core', background: '#eae7e7', color: '#444141', title: 'Harness core vocabulary' },
+  invented: { text: 'invented', background: '#fcefc0', color: '#5c4600', title: 'Invented for this question' },
+};
+
+function OriginBadge({ origin }: { origin: SchemaTerm['origin'] }) {
+  const style = ORIGIN_BADGE[origin];
+  return <span title={style.title} style={{ background: style.background, color: style.color, borderRadius: 3, padding: '1px 6px', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap' }}>{style.text}</span>;
+}
+
+function SchemaTerms({ terms }: { terms: SchemaTerm[] }) {
+  const order: Record<SchemaTerm['origin'], number> = { dblp: 0, core: 1, invented: 2 };
+  const sorted = [...terms].sort((a, b) => order[a.origin] - order[b.origin] || a.name.localeCompare(b.name));
+  return <div style={{ display: 'grid', gap: 12 }}>
+    <div className="muted micro" aria-label="Terms by origin">{(['dblp', 'core', 'invented'] as const).map(origin => <span key={origin} style={{ marginRight: 14 }}><OriginBadge origin={origin} /> {terms.filter(term => term.origin === origin).length}</span>)}</div>
+    {sorted.map(term => <div key={term.iri}>
+      <div style={{ fontSize: 14.5, display: 'flex', gap: 8, alignItems: 'baseline', flexWrap: 'wrap' }}><OriginBadge origin={term.origin} /><strong>{term.name}</strong><span className="muted micro">{OWL_KIND[term.kind]}</span></div>
+      <div className="muted" style={{ font: '11.5px ui-monospace, Menlo, monospace' }}>{[term.parent && `${term.kind === 'class' ? 'subClassOf' : 'subPropertyOf'} ${term.parent}`, term.domain && `domain ${term.domain}`, term.range && `range ${term.range}`].filter(Boolean).join('  ·  ')}</div>
+      {term.definition && <div className="muted micro">{term.definition}</div>}
+    </div>)}
+  </div>;
 }
 
 function Sidebar({ run, reading, onRate, onPromote }: { run: Run; reading?: Reading; onRate: (rating: string) => void; onPromote: () => void }) {
@@ -156,7 +204,7 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
     {(absent || noEvidence) && <section className="section" aria-label="Research result"><div className="section-top"><span className="section-title">Research result</span></div><p className="answer">{run.reason}</p><pre className="code">{JSON.stringify(run.searchCoverage, null, 2)}</pre></section>}
     {!failed && !absent && !noEvidence && reading && <><section className="section" aria-label="Subschema"><div className="section-top"><span className="section-title">Subschema</span><div className="section-links"><button className="text-button micro" onClick={() => setShowOntology(!showOntology)}>{showOntology ? 'Hide ontology' : 'Ontology (Turtle)'}</button><button className="text-button micro" onClick={() => setShowQuery(!showQuery)}>{showQuery ? 'Hide query' : 'SPARQL'}</button></div></div>
       <p className="muted" style={{ fontSize: 14, margin: '10px 0 16px' }}>{run.path === 'baseline' ? 'Unstated — inferred by the extractor. ' : ''}The answer is computed over {reading.classes.map(c => c.toLowerCase() + 's').join(', ')} only. Nothing outside these is read.</p>
-      <div style={{ display: 'grid', gap: 12 }}>{reading.axioms.map(([property, domain, range]) => <div key={property}><div style={{ fontSize: 14.5 }}>A {domain.toLowerCase()} has {property.replaceAll('_', ' ')} relating it to {range.replace('xsd:', '')}.</div><div className="muted" style={{ font: '11.5px ui-monospace, Menlo, monospace' }}>{`hrn:${property}  rdfs:domain hrn:${domain}  rdfs:range ${range.includes(':') ? range : `hrn:${range}`}`}</div></div>)}</div>
+      {reading.schemaTerms.length > 0 ? <SchemaTerms terms={reading.schemaTerms} /> : <div style={{ display: 'grid', gap: 12 }}>{reading.axioms.map(([property, domain, range]) => <div key={property}><div style={{ fontSize: 14.5 }}>A {domain.toLowerCase()} has {property.replaceAll('_', ' ')} relating it to {range.replace('xsd:', '')}.</div><div className="muted" style={{ font: '11.5px ui-monospace, Menlo, monospace' }}>{`hrn:${property}  rdfs:domain hrn:${domain}  rdfs:range ${range.includes(':') ? range : `hrn:${range}`}`}</div></div>)}</div>}
       {showOntology && <pre className="code">{ontology(reading)}</pre>}{showQuery && <pre className="code">{reading.sparql}</pre>}
     </section><Claims reading={reading} labels={labels} /><Triples key={pick} reading={reading} labels={labels} /><section className="section" aria-label="Natural-language answer" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span><span className="muted micro">Downstream of accepted claims</span></div><p className="answer">{reading.answer}</p></section></>}
     {failed && <section className="section" aria-label="Run result" style={{ marginTop: 34 }}><div className="section-top"><span className="section-title">Natural-language answer</span></div><p className="answer">{failure}</p></section>}
@@ -166,25 +214,13 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
 
 const categoryOrder = ['metadata', 'citation', 'aggregation', 'synthesis', 'ambiguity', 'gold', 'recent'];
 const categoryLabel: Record<string, string> = { metadata: 'Metadata', citation: 'Citations', aggregation: 'Aggregation', synthesis: 'Synthesis over full text', ambiguity: 'Ambiguous — agent interprets', gold: 'Gold candidates', recent: 'Recent runs' };
-const starterQuestions = [
-  { type: 'Themes', question: 'What research themes recur across this corpus, and how are they connected?' },
-  { type: 'Task trends', question: 'Which NLP tasks appear most often, and what kinds of approaches are used for them?' },
-  { type: 'Methods', question: 'How do papers in this corpus use retrieval and evidence to support their results?' },
-  { type: 'Benchmarks', question: 'Which datasets and benchmarks recur across the corpus, and what do they measure?' },
-  { type: 'Evaluation', question: 'How do these studies evaluate their systems: with automatic metrics, human judgments, or real-world tests?' },
-  { type: 'Language coverage', question: 'Which languages are represented in the corpus, and where are the clearest coverage gaps?' },
-  { type: 'Safety', question: 'What safety and reliability risks are studied across the corpus, and how are they tested?' },
-  { type: 'Limitations', question: 'What limitations or open problems recur across multiple papers?' },
-  { type: 'Tradeoffs', question: 'What tradeoffs between performance, robustness, and compute cost do the papers report?' },
-  { type: 'Citation connections', question: 'Which research areas are most connected in the corpus citation network, and what links them?' },
-];
 
-function QuestionLibrary({ items, filter, setFilter, onPick, onRun, onCompare }: { items: LibraryQuestion[]; filter: string; setFilter: (value: string) => void; onPick: (text: string) => void; onRun: (kind: RunPath, text: string) => void; onCompare: (text: string) => void }) {
+function QuestionLibrary({ items, filter, setFilter, onPick, onRun, onCompare, autoFocus = true }: { items: LibraryQuestion[]; filter: string; setFilter: (value: string) => void; onPick: (text: string) => void; onRun: (kind: RunPath, text: string) => void; onCompare: (text: string) => void; autoFocus?: boolean }) {
   const needle = filter.trim().toLowerCase();
   const visible = items.filter(item => !needle || item.question.toLowerCase().includes(needle) || (item.type || '').toLowerCase().includes(needle) || (item.theme || '').toLowerCase().includes(needle));
   const groups = [...new Set(visible.map(item => item.category))].sort((a, b) => (categoryOrder.indexOf(a) + 1 || 99) - (categoryOrder.indexOf(b) + 1 || 99));
   return <section id="question-library" className="library" aria-label="Question library">
-    <input className="input library-filter" autoFocus value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter questions" aria-label="Filter questions" />
+    <input className="input library-filter" autoFocus={autoFocus} value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter questions" aria-label="Filter questions" />
     {visible.length === 0 && <p className="muted micro">No questions match.</p>}
     {groups.map(group => <div key={group} className="library-group"><div className="section-title">{categoryLabel[group] || group}</div>
       {visible.filter(item => item.category === group).map(item => <div key={`${item.source}-${item.id ?? item.question}`} className="library-row">
@@ -408,7 +444,7 @@ export default function App() {
       {notice && <p className="notice" role="alert">{notice}</p>}
       {!['corpus', 'settings', 'runs', 'gold', 'benchmark'].includes(scene) && <><div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div><div className="actions"><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline')}>Fast</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runFixture('baseline-enhanced')}>Adaptive</button><button className="btn btn-primary" disabled={busy || !question.trim()} onClick={() => runFixture('agentic')}>Agentic</button><button className="btn btn-secondary" disabled={busy || !question.trim()} onClick={() => runCompare()}>Compare all</button><button className="text-button micro" aria-expanded={libraryOpen} aria-controls="question-library" disabled={busy} onClick={() => setLibraryOpen(open => !open)}>{libraryOpen ? 'Close question library' : `Question library (${library.length})`}</button><button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button></div>
         {libraryOpen && !busy && <QuestionLibrary items={library} filter={libraryFilter} setFilter={setLibraryFilter} onPick={text => { setQuestion(text); setLibraryOpen(false); }} onRun={(kind, text) => runFixture(kind, text)} onCompare={text => runCompare(text)} />}
-        {scene === 'idle' && !libraryOpen && <section className="starter-section" aria-label="Corpus-wide suggested questions"><div className="starter-heading"><span className="section-title">Explore the corpus</span><span className="muted micro">Ten starting points across themes, methods, evidence, and trends. Select one, then choose a run mode above.</span></div><div className="starter-grid">{starterQuestions.map(item => <button key={item.type} className="starter-question" onClick={() => setQuestion(item.question)}><span className="starter-type">{item.type}</span><span>{item.question}</span><span className="starter-arrow" aria-hidden="true">↗</span></button>)}</div></section>}
+        {scene === 'idle' && !libraryOpen && <section className="starter-section" aria-label="Evaluation questions"><div className="starter-heading"><span className="section-title">Evaluation questions</span><span className="muted micro">The {library.length} questions of the evaluation set. Run one directly, or pick it to edit.</span></div><QuestionLibrary items={library} filter={libraryFilter} setFilter={setLibraryFilter} onPick={text => setQuestion(text)} onRun={(kind, text) => runFixture(kind, text)} onCompare={text => runCompare(text)} autoFocus={false} /></section>}
         {scene === 'idle' && <section style={{ marginTop: 72, display: 'grid', gap: 16 }}><span className="section-title">Recent</span>{runs.filter(r => r.status === 'answered' || r.status === 'corpus_absent' || r.status === 'no_evidence_found' || r.status === 'incomplete').filter((run, index, all) => all.findIndex(other => other.question === run.question) === index).slice(0, 2).map(run => <button key={run.id} className="text-button" style={{ color: 'var(--color-text)' }} onClick={() => openRun(run)}>{run.question}</button>)}</section>}
         {scene === 'running' && <section style={{ marginTop: 60 }}><div className="section-top" style={{ marginBottom: 18 }}><span className="section-title">{path === 'agentic' ? 'Agentic research' : path === 'baseline-enhanced' ? 'Adaptive baseline' : 'Fast baseline'}</span><span className="muted micro">{path === 'agentic' ? 'Concept · shared evidence graph · MCP verification' : path === 'baseline-enhanced' ? 'Iterative retrieval · batched extraction · evidence review' : 'Fixed pipeline · no verification pass'}</span></div><Progress rows={liveTrace} waitingOn={waitingOn} waitedS={waitedS} phase={phase} />{liveTrace.map((step, i) => <div className={`log-row${step.action.startsWith('Model call') ? ' log-model' : ''}${step.action === 'Model call failed' ? ' log-failed' : ''}`} key={i}><span className="log-time muted">{step.atS}s</span><span>{step.action}</span><span className="muted micro">{step.returned}</span></div>)}{waitingOn && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Waiting {waitedS}s</span><span className="muted micro">{waitingOn}</span></div>}{busy && !waitingOn && lastRow && waitedS >= 10 && <div className="log-row log-waiting" role="status"><span className="log-time muted">…</span><span>Working {waitedS}s</span><span className="muted micro">since “{lastRow.action}”</span></div>}<button className="text-button" style={{ marginTop: 24, fontSize: 13 }} onClick={stopRun}>Stop run</button></section>}
         {scene === 'readings' && active && <section style={{ marginTop: 60 }}><p style={{ maxWidth: '56ch' }}>The agent proposed {active.readings.length} interpretations of this question. Choose one to research.</p><p className="muted" style={{ fontSize: 13.5, marginBottom: 34 }}>Each interpretation scopes retrieval and extraction differently; the question itself stays unchanged.</p>{active.readings.map((r, i) => { const concept = active.concepts[i]; return <button key={i} className="reading-row" disabled={picking} onClick={() => chooseReading(i)}><span className="muted micro">{i + 1}</span><span style={{ display: 'grid', gap: 4 }}><strong style={{ fontSize: 16.5 }}>{r.label}</strong><span className="muted" style={{ fontSize: 13.5 }}>{r.gloss}</span><span style={{ color: 'var(--color-accent-700)', fontSize: 12 }}>{[r.classes.join(' · '), r.properties.join(' · '), concept?.evidenceHits != null ? `${concept.evidenceHits} supporting passages` : ''].filter(Boolean).join('  |  ')}</span></span></button>; })}<button className="text-button" style={{ marginTop: 22, fontSize: 13 }} onClick={() => { setScene('idle'); }}>None of these — rephrase the question</button></section>}

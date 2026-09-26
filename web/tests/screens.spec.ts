@@ -7,7 +7,7 @@ async function openScreen(page: Page, scene: string) {
 }
 
 const screens = [
-  ['idle', 'Recent'], ['running', 'Agentic research'], ['readings', 'interpretations of this question'],
+  ['idle', 'Evaluation questions'], ['running', 'Agentic research'], ['readings', 'interpretations of this question'],
   ['agentic_result', 'Subschema'], ['baseline_result', 'Unstated — inferred by the extractor'],
   ['failed', 'Try agentic research'], ['runs', 'Every run keeps its artifacts'],
   ['corpus', 'papers indexed'], ['settings', 'Fast baseline budget'],
@@ -17,7 +17,7 @@ for (const [scene, label] of screens) {
   test(`${scene} screen renders from API fixture`, async ({ page }) => {
     await openScreen(page, scene);
     await expect(page.getByText(label).first()).toBeVisible();
-    if (scene === 'idle') await expect(page.getByRole('button', { name: /Across this corpus, which author/ })).toBeVisible();
+    if (scene === 'idle') await expect(page.getByRole('button', { name: /List the authors of FACT-AUDIT/ })).toBeVisible();
     await expect(page).toHaveScreenshot(`${scene}.png`, { fullPage: true, animations: 'disabled' });
   });
 }
@@ -35,6 +35,8 @@ test('evaluation sidebar is present on result and supports plans and rating', as
 
 test('choosing an interpretation starts research without rewriting the question', async ({ page }) => {
   await openScreen(page, 'readings');
+  // The fixture fills the question after loading; read it only once it is there.
+  await expect(page.getByRole('textbox', { name: 'Question' })).not.toHaveValue('');
   const question = await page.getByRole('textbox', { name: 'Question' }).inputValue();
   await page.getByRole('button', { name: /First-author publication count/ }).click();
   await expect(page.getByText('Stop run').or(page.getByText('Researched as:')).or(page.locator('.notice')).first()).toBeVisible();
@@ -65,14 +67,16 @@ test('runs open an artifact inline from the API', async ({ page }) => {
 
 test('question library runs a question without typing', async ({ page }) => {
   await page.goto('/');
+  // Only the 30 evaluation questions (nlp01-nlp30) are listed by default.
+  await expect(page.getByRole('button', { name: /Question library \(30\)/ })).toBeVisible();
   await page.getByRole('button', { name: /Question library/ }).click();
   const library = page.getByRole('region', { name: 'Question library' });
-  await expect(library.getByText('Which paper introduced Video Prediction Policy?')).toBeVisible();
-  await library.getByRole('textbox', { name: 'Filter questions' }).fill('DayDreamer');
-  const row = library.locator('.library-row').filter({ hasText: 'How many indexed papers cite DayDreamer' });
+  await expect(library.getByText('List the authors of FACT-AUDIT.')).toBeVisible();
+  await library.getByRole('textbox', { name: 'Filter questions' }).fill('SafeRAG');
+  const row = library.locator('.library-row').filter({ hasText: 'Which ACL 2025 paper introduced SafeRAG?' });
   await row.hover();
   await page.screenshot({ path: 'test-results/library-hover.png' });
   await row.getByRole('button', { name: 'Fast', exact: true }).click();
-  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue(/How many indexed papers cite DayDreamer/);
+  await expect(page.getByRole('textbox', { name: 'Question' })).toHaveValue(/Which ACL 2025 paper introduced SafeRAG/);
   await expect(page.getByText('Fast baseline').first()).toBeVisible();
 });

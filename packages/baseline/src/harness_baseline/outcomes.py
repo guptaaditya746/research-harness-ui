@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
+from harness_config import settings
 from harness_extraction import (
     ModelFailure,
 )
@@ -34,6 +35,7 @@ from harness_semantic import DBLP, HRN, validate_subschema
 from rdflib import RDFS, XSD, Literal, URIRef
 
 from . import answer_graph
+from .backbone import answer_paper_keys, backbone_triples, origin_of, schema_terms, subschema_slice
 from .state import (
     BaselineState,
     CorpusAbsent,
@@ -141,7 +143,15 @@ class RunOutcomes:
         source_ids |= {str(row["reference_id"]) for row in self.corpus.references}
         dataset = ProvenanceDataset(schema, source_ids)
         ui_triples: list[Triple] = []
+        backbone_on = settings().dblp_backbone
+        # The papers this answer is about: the export and the backbone are limited to them.
+        answer_keys = answer_paper_keys(self.corpus, [item.subject for item in extracted],
+                                        [item.object for item in extracted]) if backbone_on else []
         seed_rows = self.corpus.seed_facts()
+        if backbone_on:
+            wanted = set(answer_keys)
+            seed_rows = [row for row in seed_rows if str(row.get("subject")) in wanted
+                         and (row.get("predicate") != "cites" or str(row.get("object")) in wanted)]
         seed_rdf: list[tuple[Any, URIRef, Any]] = []
         for row in seed_rows:
             raw_predicate = str(row["predicate"])
@@ -260,12 +270,23 @@ class RunOutcomes:
                 "cited_source_ids": sorted({source for claim in claims for source in claim.source_ids}),
             })
         plan = state.get("plan")
+        from_facts = state.get("retrieval", {}).get("stop_reason") == "verified_facts"
+        backbone: list[Triple] = []
+        if backbone_on and not from_facts:
+            papers = answer_paper_keys(self.corpus, [*answer_keys, *(claim.paper_id for claim in claims)])
+            backbone = backbone_triples(self.corpus, papers)
+            if backbone:
+                self._emit("Adding DBLP backbone", f"{len(backbone)} author, venue and citation facts "
+                           f"for {len(papers)} papers")
         graph = answer_graph.build(
-            ui_triples, claims, state.get("computed") or [],
+            ui_triples + backbone, claims, state.get("computed") or [],
             is_paper=lambda value: bool(self.corpus.canonical_paper_iri(value)) or value in self.corpus.by_paper,
             paper_label=lambda value: self.corpus.paper_title(
                 self.corpus.by_dblp.get(value, value)) or value,
+            origin_of=lambda name: origin_of(schema.graph, name),
         )
+        terms = schema_terms(schema.graph, inferred.classes, inferred.properties,
+                             sorted({triple.p for triple in [*ui_triples, *backbone]}))
         supported = bool(ui_triples) and all(t.source.strip() and t.evidence.strip() for t in ui_triples)
         self._check("triple provenance", "pass" if supported else "fail",
                     f"{len(ui_triples)} triples, each with a source and evidence" if supported
@@ -288,6 +309,7 @@ class RunOutcomes:
             answer=answer.answer,
             triples=ui_triples,
             claims=claims,
+            schemaTerms=terms,
             claimRelations=claim_relations,
             # The prose renderer below only enumerates these source-backed claims.
             answerClaimIds=[claim.id for claim in claims],
@@ -314,7 +336,8 @@ class RunOutcomes:
         )
         report = validate_subschema(schema.graph)
         artifacts = {
-            "subschema.ttl": schema.graph.serialize(format="turtle").encode(),
+            # The question's own terms with their parents, not the whole seed ontology.
+            "subschema.ttl": subschema_slice(schema.graph, terms).serialize(format="turtle").encode(),
             "query.rq": answer.sparql.encode(),
             "coverage_plan.json": json.dumps(
                 {"coverage": None, "reason": "baseline has no ledger"}, indent=2

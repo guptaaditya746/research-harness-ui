@@ -14,6 +14,20 @@ from rdflib import OWL, RDF, RDFS, SH, XSD, Graph, Literal, Namespace, URIRef
 HRN = Namespace("https://harness.local/schema#")
 DBLP = Namespace("https://dblp.org/rdf/schema#")
 
+# Parents for invented terms (Phase 4): every invented property specialises one of these (or a
+# more specific core/DBLP property), every invented class specialises an existing class.
+TOP_RELATION = HRN.researchRelation     # owl:ObjectProperty: a relation between research entities
+TOP_ATTRIBUTE = HRN.researchAttribute   # owl:DatatypeProperty: a literal value of a research entity
+TOP_CLASS = HRN.ResearchEntity          # owl:Class: anything a paper studies, uses or reports
+# Harness terms declared equivalent to DBLP properties: they count as DBLP vocabulary.
+DBLP_EQUIVALENTS = {
+    HRN.title: DBLP.title,
+    HRN.authoredBy: DBLP.authoredBy,
+    HRN.year: DBLP.yearOfPublication,
+    HRN.venue: DBLP.publishedIn,
+}
+ORIGINS = ("dblp", "core", "invented")
+
 
 @dataclass(frozen=True)
 class Subschema:
@@ -33,16 +47,50 @@ class ValidationReport:
     text: str
 
 
-def _add_class(graph: Graph, iri: URIRef) -> None:
-    graph.add((iri, RDF.type, RDFS.Class))
+def is_datatype_range(range_: object) -> bool:
+    """A literal range (XSD datatype or rdfs:Literal) makes a datatype property; anything else an object one."""
+    return str(range_).startswith(str(XSD)) or range_ == RDFS.Literal
+
+
+def property_kind(graph: Graph, iri: URIRef) -> str | None:
+    """"object" or "datatype" from the OWL 2 declaration, else from the range; None when unknown."""
+    if (iri, RDF.type, OWL.DatatypeProperty) in graph:
+        return "datatype"
+    if (iri, RDF.type, OWL.ObjectProperty) in graph:
+        return "object"
+    range_ = graph.value(iri, RDFS.range)
+    return None if range_ is None else ("datatype" if is_datatype_range(range_) else "object")
+
+
+def _add_class(graph: Graph, iri: URIRef, parent: URIRef | None = None) -> None:
+    graph.add((iri, RDF.type, OWL.Class))
     graph.add((iri, RDFS.label, Literal(str(iri).rsplit("#", 1)[-1])))
+    if parent is not None:
+        graph.add((iri, RDFS.subClassOf, parent))
 
 
-def _add_property(graph: Graph, iri: URIRef, domain: URIRef, range_: URIRef) -> None:
-    graph.add((iri, RDF.type, RDF.Property))
+def _add_property(graph: Graph, iri: URIRef, domain: URIRef, range_: URIRef, parent: URIRef | None = None) -> None:
+    """Declare an OWL 2 object or datatype property (by its range), with one domain and one range."""
+    graph.add((iri, RDF.type, OWL.DatatypeProperty if is_datatype_range(range_) else OWL.ObjectProperty))
     graph.add((iri, RDFS.label, Literal(str(iri).rsplit("#", 1)[-1])))
     graph.add((iri, RDFS.domain, domain))
     graph.add((iri, RDFS.range, range_))
+    if parent is not None:
+        graph.add((iri, RDFS.subPropertyOf, parent))
+
+
+def _declare_dblp(graph: Graph) -> None:
+    """OWL 2 declarations for the DBLP seed, which types its properties only as rdf:Property.
+
+    The seed file stays untouched; the declarations are added to the merged graph so every
+    property in a subschema is an owl:ObjectProperty or owl:DatatypeProperty.
+    """
+    for prop in set(graph.subjects(RDF.type, RDF.Property)):
+        if not str(prop).startswith(str(DBLP)):
+            continue
+        kind = property_kind(graph, prop)
+        if kind is not None:
+            graph.add((prop, RDF.type, OWL.DatatypeProperty if kind == "datatype" else OWL.ObjectProperty))
 
 
 def _default_dblp_schema_path() -> Path:
@@ -72,15 +120,28 @@ def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
     graph.bind("hrn", HRN)
     graph.bind("dblp", DBLP)
     graph.bind("xsd", XSD)
+    graph.bind("owl", OWL)
     dblp_graph, seed_version, seed_hash = _load_dblp_seed(schema_path)
     if dblp_graph is not None:
         for triple in dblp_graph:
             graph.add(triple)
+        _declare_dblp(graph)
     classes = frozenset({HRN.Paper, HRN.Author, HRN.Venue, HRN.Dataset, HRN.Metric, HRN.Claim})
+    _add_class(graph, TOP_CLASS)
+    graph.add((TOP_CLASS, RDFS.comment, Literal(
+        "Anything a paper studies, uses, proposes or reports; the parent of invented classes.")))
     for iri in classes:
-        _add_class(graph, iri)
+        _add_class(graph, iri, TOP_CLASS if iri in {HRN.Dataset, HRN.Metric, HRN.Claim} else None)
     graph.add((HRN.Paper, RDFS.subClassOf, DBLP.Publication))
     graph.add((HRN.Author, RDFS.subClassOf, DBLP.Creator))
+    graph.add((HRN.Venue, RDFS.subClassOf, DBLP.Stream))
+    _add_property(graph, TOP_RELATION, OWL.Thing, OWL.Thing)
+    graph.add((TOP_RELATION, RDFS.comment, Literal(
+        "A relation a paper or research entity has to another entity; the parent of invented object properties.")))
+    _add_property(graph, TOP_ATTRIBUTE, OWL.Thing, RDFS.Literal)
+    graph.add((TOP_ATTRIBUTE, RDFS.comment, Literal(
+        "A literal value (number, name, phrase) of a paper or research entity; the parent of invented "
+        "datatype properties.")))
 
     specs = {
         HRN.title: (HRN.Paper, XSD.string),
@@ -96,15 +157,11 @@ def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
         HRN.claims: (HRN.Paper, HRN.Claim),
         HRN.comparesTo: (HRN.Paper, HRN.Paper),
     }
+    research = {HRN.usesDataset, HRN.reportsMetric, HRN.claims, HRN.comparesTo, HRN.hasTable}
     for iri, (domain, range_) in specs.items():
-        _add_property(graph, iri, domain, range_)
-    equivalents = {
-        HRN.title: DBLP.title,
-        HRN.authoredBy: DBLP.authoredBy,
-        HRN.year: DBLP.yearOfPublication,
-        HRN.venue: DBLP.publishedIn,
-    }
-    for local, official in equivalents.items():
+        parent = (TOP_ATTRIBUTE if is_datatype_range(range_) else TOP_RELATION) if iri in research else None
+        _add_property(graph, iri, domain, range_, parent)
+    for local, official in DBLP_EQUIVALENTS.items():
         graph.add((local, OWL.equivalentProperty, official))
     structural = frozenset(
         {HRN.title, HRN.authoredBy, HRN.year, HRN.venue, HRN.cites, HRN.citesTitle, HRN.sectionOf, HRN.hasTable}
@@ -112,11 +169,30 @@ def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
     return Subschema(graph, classes, frozenset(specs), structural, dblp_graph, seed_version, seed_hash)
 
 
+CORE_TERMS = frozenset({
+    HRN.Paper, HRN.Author, HRN.Venue, HRN.Dataset, HRN.Metric, HRN.Claim, TOP_CLASS,
+    HRN.title, HRN.authoredBy, HRN.year, HRN.venue, HRN.cites, HRN.citesTitle, HRN.sectionOf, HRN.hasTable,
+    HRN.usesDataset, HRN.reportsMetric, HRN.claims, HRN.comparesTo, TOP_RELATION, TOP_ATTRIBUTE,
+})
+
+
+def term_origin(iri: object) -> str:
+    """"dblp" (a DBLP term or a harness term declared equivalent to one), "core" (the harness seed)
+    or "invented" (added for one question)."""
+    text = str(iri)
+    if text.startswith(str(DBLP)) or URIRef(text) in DBLP_EQUIVALENTS:
+        return "dblp"
+    if URIRef(text) in CORE_TERMS:
+        return "core"
+    return "invented"
+
+
 def schema_shapes() -> Graph:
     shapes = Graph()
     shape = HRN.PropertyShape
     shapes.add((shape, RDF.type, SH.NodeShape))
-    shapes.add((shape, SH.targetClass, RDF.Property))
+    for target in (RDF.Property, OWL.ObjectProperty, OWL.DatatypeProperty):
+        shapes.add((shape, SH.targetClass, target))
     for index, predicate in enumerate((RDFS.domain, RDFS.range), start=1):
         constraint = URIRef(f"{shape}/constraint/{index}")
         shapes.add((shape, SH.property, constraint))
@@ -147,12 +223,21 @@ def owlrl_closure(graph: Graph) -> Graph:
 
 
 __all__ = [
+    "CORE_TERMS",
     "DBLP",
+    "DBLP_EQUIVALENTS",
     "HRN",
+    "ORIGINS",
+    "TOP_ATTRIBUTE",
+    "TOP_CLASS",
+    "TOP_RELATION",
     "Subschema",
     "ValidationReport",
     "hand_written_subschema",
+    "is_datatype_range",
     "owlrl_closure",
+    "property_kind",
     "schema_shapes",
+    "term_origin",
     "validate_subschema",
 ]

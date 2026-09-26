@@ -25,7 +25,7 @@ from rich.table import Table
 ROOT = Path(__file__).resolve().parents[1]
 console = Console()
 PATHS = {"baseline": "Fast", "baseline-enhanced": "Adapt", "agentic": "Agent"}
-LEGEND = ("Facts = fact edges; DBLP / Inv = share of them using DBLP / invented predicates; Pieces = "
+LEGEND = ("Facts = fact edges (BB = of which DBLP backbone from corpus facts); DBLP / Inv = share of them using DBLP / invented predicates; Pieces = "
           "disconnected parts; Big = largest part's share of nodes; Pairs = paper pairs connected at all; "
           "Dead = invented edges whose object nothing else touches; Lit = literal objects; Stmt = objects "
           "that are whole statements (>8 words); Dup = near-duplicate nodes; Export = triples in triples.ttl.")
@@ -65,13 +65,14 @@ def main(
         return
 
     table = Table(title=f"Answer graphs of {len(rows)} answered runs (chosen reading)")
-    for column in ("Run", "Kind", "Path", "Facts", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit",
+    for column in ("Run", "Kind", "Path", "Facts", "BB", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit",
                    "Stmt", "Dup", "Export"):
         table.add_column(column, justify="left" if column in {"Run", "Kind", "Path"} else "right",
                          no_wrap=column == "Run")
     for row in rows:
         export = row.get("export") or {}
         table.add_row(row["id"], row["kind"], PATHS.get(row["path"], row["path"]), str(row["fact_edges"]),
+                      str(row["backbone_edges"]),
                       _pct(row["dblp_share"]), _pct(row["invented_share"]), str(row["pieces"]),
                       _pct(row["largest_piece_share"]), _pct(row["paper_pairs_connected"]),
                       _pct(row["invented_dead_end_share"]), _pct(row["literal_object_share"]),
@@ -80,12 +81,12 @@ def main(
     console.print(table)
 
     summary = Table(title="Medians per kind and path (research = answered from passages, facts = from DBLP)")
-    for column in ("Kind", "Path", "Runs", "Facts", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit", "Stmt",
+    for column in ("Kind", "Path", "Runs", "Facts", "BB", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit", "Stmt",
                    "New classes"):
         summary.add_column(column, justify="left" if column in {"Kind", "Path"} else "right")
     for item in result["summary"]:
         summary.add_row(item["kind"], PATHS.get(item["path"], item["path"]), str(item["runs"]),
-                        _num(item["fact_edges"]),
+                        _num(item["fact_edges"]), _num(item["backbone_edges"]),
                         _pct(item["dblp_share"]), _pct(item["invented_share"]), _num(item["pieces"]),
                         _pct(item["largest_piece_share"]), _pct(item["paper_pairs_connected"]),
                         _pct(item["invented_dead_end_share"]), _pct(item["literal_object_share"]),

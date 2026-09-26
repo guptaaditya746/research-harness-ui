@@ -26,11 +26,18 @@ export function graphFromTriples(reading: Reading): AnswerGraph {
       : ['year', 'venue', 'title'].includes(predicate) ? 'value' : 'entity';
     return {
       id: t.tripleId || `t-${index}`, source: node(t.s, 'entity'), target: node(t.o, objectKind),
-      label: t.p, kind: 'fact' as const, sourceIds: [t.source], evidence: t.evidence,
+      label: t.p, kind: 'fact' as const, sourceIds: [t.source], evidence: t.evidence, origin: null,
     };
   });
   return { nodes: [...nodes.values()], edges, computed: [] };
 }
+
+/** Where a fact edge's predicate comes from (Phase 4): colour, legend text and the edge detail line. */
+export const ORIGIN_STYLE = {
+  dblp: { color: '#006786', label: 'DBLP ontology' },
+  core: { color: '#7d7979', label: 'harness core vocabulary' },
+  invented: { color: '#c79a00', label: 'invented for this question' },
+} as const;
 
 function token(name: string, fallback: string): string {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -58,7 +65,8 @@ export function AnswerGraphView({ reading, labels }: { reading: Reading; labels:
         return { data: { id: item.id, label, kind: item.kind, boxWidth: Math.max(72, Math.min(260, label.length * 7 + 18)) } };
       }),
       ...graph.edges.map(item => ({
-        data: { id: `edge:${item.id}`, source: item.source, target: item.target, label: item.label, kind: item.kind },
+        data: { id: `edge:${item.id}`, source: item.source, target: item.target, label: item.label, kind: item.kind,
+          origin: item.origin ?? 'none' },
       })),
     ];
     const instance = cytoscape({
@@ -88,6 +96,10 @@ export function AnswerGraphView({ reading, labels }: { reading: Reading; labels:
           'text-rotation': 'autorotate', 'text-background-color': token('--color-bg', '#f3f2f2'),
           'text-background-opacity': 1, 'text-background-padding': '2px',
         } },
+        ...(Object.entries(ORIGIN_STYLE).map(([origin, style]) => ({
+          selector: `edge[origin = "${origin}"]`,
+          style: { 'line-color': style.color, 'target-arrow-color': style.color, width: 2 },
+        }))),
         { selector: 'edge[kind = "evidence"]', style: { 'line-style': 'dotted' } },
         { selector: 'edge[kind = "derived"]', style: { 'line-style': 'dashed', 'line-color': accent2, 'target-arrow-color': accent2 } },
         { selector: '.highlight', style: { 'line-color': accent2, 'target-arrow-color': accent2, width: 3 } },
@@ -125,13 +137,14 @@ export function AnswerGraphView({ reading, labels }: { reading: Reading; labels:
     <div className="muted micro" style={{ display: 'flex', gap: 18, flexWrap: 'wrap', marginBottom: 8 }}>
       <span>{counts}</span>
       <span>solid: source fact · dotted: evidence passage · <span style={{ color: 'var(--color-accent-2)' }}>dashed: computed by the harness</span></span>
+      {graph.edges.some(edge => edge.origin) && <span aria-label="Edge colours">{Object.values(ORIGIN_STYLE).map(style => <span key={style.label} style={{ marginRight: 10 }}><span style={{ display: 'inline-block', width: 14, height: 3, background: style.color, verticalAlign: 'middle', marginRight: 4 }} />{style.label}</span>)}</span>}
       <button className="text-button micro" onClick={() => cy.current?.fit(undefined, 24)}>Fit</button>
     </div>
     <div ref={container} className="answer-graph-canvas" role="img" aria-label="Answer graph" />
     <div className="answer-graph-detail" aria-live="polite">
       {!selected && <span className="muted micro">Click an edge to see its source, or a computed result to see what it was computed from.</span>}
       {selected?.type === 'edge' && <div>
-        <div><strong>{selected.edge.label}</strong> <span className="muted micro">{selected.edge.kind === 'derived' ? 'computed step' : selected.edge.kind}</span></div>
+        <div><strong>{selected.edge.label}</strong> <span className="muted micro">{selected.edge.kind === 'derived' ? 'computed step' : selected.edge.kind}{selected.edge.origin ? ` · ${ORIGIN_STYLE[selected.edge.origin].label}` : ''}</span></div>
         {selected.edge.sourceIds.length > 0 && <div className="micro">Source: {selected.edge.sourceIds.join(', ')}</div>}
         {selected.edge.evidence && <p style={{ fontStyle: 'italic', margin: '6px 0 0' }}>{selected.edge.evidence}</p>}
       </div>}

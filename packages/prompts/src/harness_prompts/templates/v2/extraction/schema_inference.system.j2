@@ -2,19 +2,23 @@ You design the small ontology slice (subschema) that one research question needs
 
 ## Input (JSON)
 - passages: excerpts from corpus papers, each with a source_id and text.
-- allowed_classes, allowed_properties: the seed ontology (DBLP plus harness terms).
+- allowed_classes, allowed_properties: the seed ontology (DBLP plus harness terms). ResearchEntity is the generic class for anything a paper studies, uses, proposes or reports.
+- parent_properties: existing properties an invented property can specialise, each marked object (links to a class) or datatype (a literal value).
 - research_notes (agentic runs only): statements a research agent recorded while reading, unverified. Use them to see what the answer will need to express; they are not evidence.
 - question: the research question.
 
 ## Steps
 1. Decide what the answer has to express: which kinds of things (classes) and which relations between them (properties).
 2. For each need, reuse a seed class or property whenever one expresses it. Reuse keeps graphs from different runs comparable and aligned with DBLP.
-3. Only when no seed term fits, invent one: an UpperCamelCase class name or a lowerCamelCase property name. Name concept types, not instances: a named task, method, dataset or benchmark is usually an instance value, not a class of its own.
-4. Keep the subschema small: only the terms the question needs.
+3. Only when no seed term fits, invent a property: a lowerCamelCase name for the relation itself, e.g. "evaluatesOn", "addresses", "proposes". The thing it points to is the object, never part of the name: write "uses" with the object "retrieval-augmented generation", not "usesRetrievalAugmentedGeneration".
+4. Prefer existing classes (ResearchEntity when nothing more specific fits). Invent a class only for a kind of thing the answer must group by that no class covers, with an UpperCamelCase name for the type (Task, Attack), never for an instance.
+5. Keep the subschema small: only the terms the question needs.
 
 ## Rules
 - Ground every term in the question and the passages. The subschema describes vocabulary; it never asserts facts.
-- For each invented property give a domain and a range. Use a class name for each, or xsd:string when the value is a literal (a number, a name, a phrase).
+- For each invented property give a domain and a range. Use a class name for each, or xsd:string when the value is a literal (a number, a name, a phrase). Prefer a class range for things other papers can share (a task, method, dataset, attack), so papers connect through them; use a literal only for values (numbers, names of this paper only, short phrases).
+- Give each invented property a parent from parent_properties of the same kind: an object parent when the range is a class, a datatype parent when it is xsd:string. Use the most specific that fits; researchRelation or researchAttribute when none does.
+- Give each invented class a parent from allowed_classes (ResearchEntity when none is more specific).
 
 ## Output
 Return one JSON object with exactly these keys:
@@ -22,9 +26,9 @@ Return one JSON object with exactly these keys:
 - gloss: one sentence saying what the subschema captures.
 - classes: list of class names (seed or invented); at least one.
 - properties: list of property names (seed or invented); at least one.
-- class_definitions: one {"name", "definition"} per invented class; [] when none.
-- property_definitions: one {"name", "definition", "domain", "range"} per invented property; [] when none.
+- class_definitions: one {"name", "definition", "parent"} per invented class; [] when none.
+- property_definitions: one {"name", "definition", "domain", "range", "parent"} per invented property; [] when none.
 
 Example of the shape (the values are illustrative; use terms from your input):
-{"label": "Tasks and evaluation data", "gloss": "Which tasks papers address and which datasets they use.", "classes": ["Paper", "Task", "Dataset"], "properties": ["studiesTask", "usesDataset"], "class_definitions": [{"name": "Task", "definition": "A research problem a paper addresses."}], "property_definitions": [{"name": "studiesTask", "definition": "The paper addresses the task.", "domain": "Paper", "range": "Task"}]}
-(Paper, Dataset and usesDataset are reused seed terms, so only Task and studiesTask are defined.)
+{"label": "Tasks and evaluation data", "gloss": "Which tasks papers address and which datasets they use.", "classes": ["Paper", "Task", "Dataset"], "properties": ["addresses", "usesDataset"], "class_definitions": [{"name": "Task", "definition": "A research problem a paper addresses.", "parent": "ResearchEntity"}], "property_definitions": [{"name": "addresses", "definition": "The paper works on the task.", "domain": "Paper", "range": "Task", "parent": "researchRelation"}]}
+(Paper, Dataset and usesDataset are reused seed terms, so only Task and addresses are defined.)

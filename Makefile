@@ -1,4 +1,4 @@
-.PHONY: graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -56,6 +56,11 @@ embed:
 # make evaluate ARGS="--judge" also asks the soft-match judge and caches its answers.
 evaluate:
 	uv run --python 3.12 python scripts/evaluate.py $(ARGS)
+
+# The 30 evaluation questions through the running API; Agentic runs every proposed reading.
+# make run-questions ARGS="--ids nlp07,nlp27" (see scripts/run_questions.py)
+run-questions:
+	uv run --python 3.12 python scripts/run_questions.py $(ARGS)
 
 # Shape of recent answer graphs: DBLP/invented mix, connectivity, dead ends (read-only, Phase 4).
 # make graph-shape ARGS="-n 100 --path agentic"

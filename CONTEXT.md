@@ -59,3 +59,29 @@ _Avoid_: Interpretation disagreement
 **Provenance coverage**:
 The share of predicted claims linked to source passages or graph records that support them.
 _Avoid_: Citation count
+
+## Schema language (Phase 4)
+
+**Subschema**:
+The classes and properties one question's answer uses, declared in OWL 2 (`owl:Class`, `owl:ObjectProperty`, `owl:DatatypeProperty`) with their parents. `subschema.ttl` holds only these terms, not the whole seed ontology.
+_Avoid_: Ontology (for the per-question slice)
+
+**Term origin**:
+Where a schema term or graph edge comes from: **DBLP** (a DBLP ontology term, or a harness term declared `owl:equivalentProperty` to one: title, authoredBy, year, venue), **core** (the harness seed vocabulary: Paper, usesDataset, cites, ...), or **invented** (added for one question). Shown as a badge in the Subschema panel and as the edge colour in the answer graph.
+_Avoid_: New term, custom term
+
+**Invented property**:
+A property created for one question. It is always a sub-property of an existing property of the same kind (object or datatype), falling back to `hrn:researchRelation` / `hrn:researchAttribute`, and it names the relation, not its object (`uses`, not `usesRetrievalAugmentedGeneration`).
+_Avoid_: Predicate per fact
+
+**Invented class**:
+A class created for one question, only when no existing class fits, always a subclass of an existing class (default `hrn:ResearchEntity`). `HARNESS_SCHEMA_NEW_CLASSES=off` forbids them.
+_Avoid_: Instance class (a named method or dataset is a value, not a class)
+
+**DBLP backbone**:
+The verified corpus facts added to a research answer's graph for the papers it uses: authors, venue (one shared node per venue) and the citations among them. It is context: it appears in the answer graph and the export, not in the scored triples. Years are not graph nodes, because a shared year would link unrelated papers.
+_Avoid_: Extracted fact
+
+**Answer export**:
+`triples.ttl`: the answer's extracted triples plus the DBLP facts of its papers only (query-driven), not the whole corpus.
+_Avoid_: Corpus graph

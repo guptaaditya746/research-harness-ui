@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     concept_grounding: Literal["retrieve_first", "legacy"] = Field(
         "retrieve_first", validation_alias=_env("HARNESS_CONCEPT_GROUNDING"))
     hide_ungrounded_readings: bool = Field(True, validation_alias=_env("HARNESS_HIDE_UNGROUNDED_READINGS"))
+    # Phase 4: invented classes are subclasses of an existing class ("subclass"), or not allowed at
+    # all ("off": they become hrn:ResearchEntity). Invented properties always get a parent property.
+    schema_new_classes: Literal["subclass", "off"] = Field(
+        "subclass", validation_alias=_env("HARNESS_SCHEMA_NEW_CLASSES"))
+    # Phase 4: add the DBLP backbone (authors, venue, citations among them) of the answer's papers
+    # to the answer graph and export only the answer's subgraph in triples.ttl.
+    dblp_backbone: bool = Field(True, validation_alias=_env("HARNESS_DBLP_BACKBONE"))
 
     # ─── Paths and datasets (None = the repository default) ──────────────────
     corpus_root: Path | None = Field(None, validation_alias=_env("CORPUS_ROOT"))
@@ -139,10 +146,13 @@ class Settings(BaseSettings):
     datasets_root: Path | None = Field(None, validation_alias=_env("DATASETS_ROOT"))
     fixtures_dir: Path | None = Field(None, validation_alias=_env("FIXTURES_DIR"))
     dblp_schema_path: str = Field("", validation_alias=_env("DBLP_SCHEMA_PATH"))
+    # The question library in the UI: the 30 evaluation questions (nlp01-nlp30) by default.
     question_sets: str = Field(
-        "question_matrix_20.json,question_library_2025.json,corpus_10.json",
+        "question_library_2025.json",
         validation_alias=_env("HARNESS_QUESTION_SETS"),
     )
+    # Also offer gold rows and recent runs in the library (off: only the question sets above).
+    question_extras: bool = Field(False, validation_alias=_env("HARNESS_QUESTION_EXTRAS"))
     include_fixtures: bool = Field(True, validation_alias=_env("HARNESS_INCLUDE_FIXTURES"))
     labelling_normalization_file: str | None = Field(
         None, validation_alias=_env("LABELLING_NORMALIZATION_FILE"))

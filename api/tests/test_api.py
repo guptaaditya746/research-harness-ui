@@ -406,7 +406,11 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
         ]
     )
     monkeypatch.setenv("DATASETS_ROOT", str(datasets))
+    monkeypatch.setenv("HARNESS_QUESTION_SETS", "question_matrix_20.json")
     monkeypatch.setattr(app_state, "runtime", test_runtime)
+    only_sets = TestClient(app).get("/questions").json()["questions"]
+    assert [item["question"] for item in only_sets] == ["Which paper introduced Video Prediction Policy?"]
+    monkeypatch.setenv("HARNESS_QUESTION_EXTRAS", "true")
     body = TestClient(app).get("/questions").json()["questions"]
     assert [(item["question"], item["category"]) for item in body] == [
         ("Which paper introduced Video Prediction Policy?", "metadata"),
@@ -414,22 +418,19 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
     ]
 
 
-def test_default_question_library_includes_existing_and_corpus_ten_sets(monkeypatch) -> None:
+def test_default_question_library_is_the_thirty_evaluation_questions(monkeypatch) -> None:
     monkeypatch.delenv("HARNESS_QUESTION_SETS", raising=False)
     monkeypatch.delenv("DATASETS_ROOT", raising=False)
     paths = main._question_sets()
-    assert [path.name for path in paths] == [
-        "question_matrix_20.json",
-        "question_library_2025.json",
-        "corpus_10.json",
-    ]
-    nlp_rows = json.loads(paths[1].read_text())
+    assert [path.name for path in paths] == ["question_library_2025.json"]
+    nlp_rows = json.loads(paths[0].read_text())
+    assert [row["id"] for row in nlp_rows] == [f"nlp{number:02d}" for number in range(1, 31)]
     assert len(nlp_rows) == 30
     assert len({row["question"] for row in nlp_rows}) == 30
     assert any(row["anchor"].startswith("2025.acl-long.") for row in nlp_rows)
     assert any(row["anchor"].startswith("2025.emnlp-main.") for row in nlp_rows)
     assert {row["category"] for row in nlp_rows} >= {"metadata", "aggregation", "synthesis"}
-    corpus_rows = json.loads(paths[2].read_text())
+    corpus_rows = json.loads((paths[0].parent / "corpus_10.json").read_text())
     assert len(corpus_rows) == 10
     assert [row["id"] for row in corpus_rows] == [f"q{number:02d}" for number in range(1, 11)]
     assert all(row["expected"] == "answer" for row in corpus_rows)

@@ -54,6 +54,25 @@ The agentic run (`harness_agent.research.AgenticResearch`) is a sequence of name
 
 Both chat models are served with a 32k context. Heavy's KV cache is the bottleneck (see thesis-llm-setup `docs/MODEL_PROFILES.md`).
 
+## Schema and answer graph (Phase 4)
+
+Schema inference (`engine.infer_schema`) reuses seed terms first. Every term it adds is OWL 2:
+an invented property is an `owl:ObjectProperty` (class range) or `owl:DatatypeProperty` (literal
+range) and a sub-property of the parent the model names from `parent_properties` when that parent
+has the same kind, else of `hrn:researchRelation` / `hrn:researchAttribute`. An invented class is
+a subclass of an existing class (default `hrn:ResearchEntity`); `HARNESS_SCHEMA_NEW_CLASSES=off`
+maps new classes to `hrn:ResearchEntity`. The DBLP seed gets OWL 2 declarations in the merged graph
+(the seed file only says `rdf:Property`). Each reading lists its terms with their origin (DBLP / core
+/ invented) in `schemaTerms`, and `subschema.ttl` holds only those terms and their parents.
+
+For research answers (not verified-fact answers), `backbone.py` adds the DBLP backbone of the
+answer's papers to the answer graph: authors, venue as one shared node per venue, and citations among
+them (`HARNESS_DBLP_BACKBONE`). The backbone is not part of `Reading.triples`, which gold scoring
+reads. Every fact edge carries its origin, and the UI colours edges by origin. `triples.ttl` holds the
+extracted triples plus the DBLP facts of the answer's papers only; the venue there stays DBLP's venue
+string (`dblp:publishedIn`), because the corpus has no stream IRIs. `make graph-shape` measures the
+result per run.
+
 ## Retrieval
 
 `harness_corpus.store.CorpusStore.hybrid_rank` is the one ranked search (pipeline, concept evidence,
