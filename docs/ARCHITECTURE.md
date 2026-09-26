@@ -139,6 +139,8 @@ to `HARNESS_AGENTIC_MAX_PASSAGES` (24) passages. When a question names two paper
 share of half that budget before seeds and ranking fill the rest. The answer's SPARQL (`query.rq`) is
 built from the predicates of the cited triples, not written by the model.
 
+Phase 5: the agentic path plans the chosen reading first; a fact lookup (authors, venues, counts, citations) is answered from verified facts without starting the MCP agent. The answer verifier returns a verdict per sentence; the answer is the accepted sentences. When nothing passes, the answer is written once more from the triples alone (told what was rejected); when that fails too, the answer states the extracted facts with a warn check instead of failing the run. An unstructured final agent decision no longer degrades a run that recorded validated findings.
+
 ## Prompts and settings
 
 Every model call renders a named template from `harness_prompts` (`docs/PROMPTS.md`); the run records the versions in `Run.prompt_hashes`. Every setting is a field of `harness_config.Settings`, documented in `.env.example`.

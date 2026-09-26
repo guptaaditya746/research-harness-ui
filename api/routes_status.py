@@ -11,7 +11,7 @@ from typing import Any
 
 import app_state
 import httpx
-from capacity import RUN_CAPACITY
+from capacity import MODEL_SLOT, RUN_CAPACITY
 from fastapi import APIRouter
 from harness_config import settings
 
@@ -36,7 +36,8 @@ def run_queue() -> dict[str, int]:
     runtime = app_state.runtime
     with runtime.lock:
         queued = len(runtime.queued)
-        active = max(0, len(runtime.running) - queued)
+    # Slots in use, not runs in the process: proposal and finalisation hold no research slot.
+    active = max(0, RUN_CAPACITY - MODEL_SLOT._value)  # BoundedSemaphore has no public count
     return {"active": active, "queued": queued, "capacity": RUN_CAPACITY}
 
 

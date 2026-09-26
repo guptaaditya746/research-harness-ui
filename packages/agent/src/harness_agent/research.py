@@ -153,6 +153,10 @@ class AgenticResearch(ConceptProposalStep):
                 self._read_papers(session)
             self._select_seeds(session)
         self._run_shared_pipeline(session)
+        if session.fact_route and getattr(self.baseline, "last_route", "verified_facts") != "verified_facts":
+            # The facts did not cover the reading, so the pipeline fell back to full-text research, but
+            # without the agent's evidence: say so and mark the result degraded.
+            session.mcp_error = f"fact_route_fell_back_to_research: {session.fact_route}"
         self._review_decision(session)
         if session.mcp_error:
             self._record_session_error(session)
@@ -173,7 +177,9 @@ class AgenticResearch(ConceptProposalStep):
         plan = planner.plan(session.question, session.concept_input)
         if hasattr(self.baseline, "preset_plan"):
             self.baseline.preset_plan = plan
-        if plan.source == "model" and plan.operation != "research" and plan.requirements_met():
+        resolve = getattr(self.baseline, "_resolve_papers", None)
+        unresolved = resolve(plan)[1] if callable(resolve) and plan.papers else []
+        if plan.source == "model" and plan.operation != "research" and plan.requirements_met() and not unresolved:
             session.fact_route = plan.operation
             self._trace(session, TraceRow(atS=session.elapsed(), action="Routing the reading",
                                           returned=f"{plan.operation}: answered from verified facts, no agent research"))
@@ -537,7 +543,7 @@ class AgenticResearch(ConceptProposalStep):
             for claim in selected
         ) + "."
         reading = reading.model_copy(update={
-            "claims": selected, "triples": triples, "answer": answer,
+            "claims": selected, "triples": triples, "answer": answer, "answer_sentences": [],
             "claim_relations": [link for link in reading.claim_relations
                                 if link.source_claim in verified and link.target_claim in verified],
         })
@@ -569,9 +575,13 @@ class AgenticResearch(ConceptProposalStep):
         base_run, mcp_error, corpus_calls = session.base_run, session.mcp_error, session.corpus_calls
         assert base_run is not None
         checks = list(session.agent_checks)
-        if session.fact_route:
+        if session.fact_route and not (mcp_error or "").startswith("fact_route_fell_back"):
             research = Check(name="agent research (MCP)", status="skipped",
                              detail=f"the reading is a fact lookup ({session.fact_route}); answered from verified facts")
+        elif session.fact_route:
+            research = Check(name="agent research (MCP)", status="skipped",
+                             detail=f"planned as {session.fact_route}, but the facts did not cover it; answered by "
+                                    "full-text research without the agent")
         elif session.heavy_busy:
             research = Check(name="agent research (MCP)", status="skipped", detail=mcp_error or "heavy model busy")
         elif mcp_error and mcp_error.startswith("MCP agent workflow failed"):

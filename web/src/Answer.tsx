@@ -20,13 +20,14 @@ export function Answer({ reading, labels }: { reading: Reading; labels: Record<s
   const kept = sentences.filter(item => item.verdict !== 'removed');
   const removed = sentences.filter(item => item.verdict === 'removed');
   const text = kept.length ? kept.map(item => item.text).join(' ') : reading.answer;
-  const known = new Set(reading.triples.map(triple => triple.source));
+  const known = new Set([...reading.triples.map(triple => triple.source), ...sentences.flatMap(item => item.sourceIds)]);
   const numbers = new Map<string, number>();
   const parts: (string | number[])[] = [];
   let last = 0;
   for (const match of text.matchAll(CITATION)) {
-    const ids = match[1].split(',').map(id => id.trim()).filter(Boolean);
-    if (!ids.length || !ids.every(id => known.has(id) || /[-_]/.test(id))) continue;
+    // Only brackets that name known sources become references; "[0.5-0.7]" stays text.
+    const ids = match[1].split(/[,;]/).map(id => id.trim()).filter(Boolean);
+    if (!ids.length || !ids.every(id => known.has(id))) continue;
     parts.push(text.slice(last, match.index).trimEnd());
     parts.push(ids.map(id => { if (!numbers.has(id)) numbers.set(id, numbers.size + 1); return numbers.get(id)!; }));
     last = (match.index ?? 0) + match[0].length;

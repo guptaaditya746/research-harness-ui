@@ -277,6 +277,19 @@ class RunOutcomes:
         query_claim = derive_query_claim(question, claims)
         if query_claim is not None:
             claims.append(query_claim)
+        if answer.sentences:
+            # Sentences whose triples did not make it into the answer graph lose their support.
+            kept_sources = {triple.source for triple in ui_triples}
+            sentences = [item if item["verdict"] == "removed" or set(item["sourceIds"]) & kept_sources
+                         else {**item, "verdict": "removed", "reason": "its triples did not pass graph building"}
+                         for item in answer.sentences]
+            stated = [item for item in sentences if item["verdict"] != "removed"]
+            if stated:
+                answer = answer.model_copy(update={
+                    "sentences": sentences, "answer": " ".join(item["text"] for item in stated),
+                    "cited_source_ids": list(dict.fromkeys(s for item in stated for s in item["sourceIds"]))})
+            else:
+                answer = answer.model_copy(update={"sentences": []})     # falls back to the claim list below
         # A verified answer (sentences with verdicts) is shown as written; an unverified one (Fast)
         # is replaced by the list of source-backed claims.
         if state.get("retrieval", {}).get("stop_reason") != "verified_facts" and claims and not answer.sentences:
@@ -319,11 +332,13 @@ class RunOutcomes:
                     f"{len(ui_triples)} triples, each with a source and evidence" if supported
                     else "some triples lack a source or evidence")
         if self.refine:
-            self._check("answer verification",
-                        "pass" if state.get("retrieval", {}).get("stop_reason") != "verified_facts" else "skipped",
-                        "every claim in the answer was checked against its triples"
-                        if state.get("retrieval", {}).get("stop_reason") != "verified_facts"
-                        else "answer composed directly from verified facts")
+            if state.get("retrieval", {}).get("stop_reason") == "verified_facts":
+                self._check("answer verification", "skipped", "answer composed directly from verified facts")
+            elif any(item.get("verdict") == "from_facts" for item in answer.sentences):
+                self._check("answer verification", "warn", "no composed sentence passed; the answer states the "
+                            "extracted facts, which evidence review kept")
+            else:
+                self._check("answer verification", "pass", "every sentence in the answer was checked against its triples")
         reading = Reading(
             measure=plan.stated_measure() if plan is not None else None,
             graph=graph,

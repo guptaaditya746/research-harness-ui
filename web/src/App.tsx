@@ -410,7 +410,7 @@ export default function App() {
   const resultScene = ['agentic_result', 'baseline_result'].includes(scene);
   const mascotState: MascotState = busy ? 'researching'
     : scene === 'failed' || (resultScene && active?.status === 'incomplete') ? 'failed'
-    : resultScene && active ? 'answered' : 'idle';
+    : resultScene && active?.status === 'answered' ? 'answered' : 'idle';
   useEffect(() => { if (!busy) return; const timer = window.setInterval(() => setTick(value => value + 1), 1000); return () => window.clearInterval(timer); }, [busy]);
   const lastRow = liveTrace[liveTrace.length - 1];
   const waitingOn = busy && lastRow?.action === 'Model call started' ? lastRow.returned : null;

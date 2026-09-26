@@ -569,3 +569,41 @@ def test_unstructured_decision_with_recorded_findings_is_not_degraded(monkeypatc
     assert result["run"].execution_status == "completed"
     decision = next(check for check in result["run"].checks if check.name == "agent decision")
     assert decision.status == "warn" and "1 recorded findings" in decision.detail
+
+
+def test_routing_needs_resolved_papers_and_reports_a_fallback_honestly() -> None:
+    from harness_baseline.planner import QueryPlan
+
+    class Planner:
+        def plan(self, question: str, concept: dict | None = None) -> QueryPlan:
+            return QueryPlan(operation="paper_authors", papers=["Unknown Paper"])
+
+    class Unresolved(StubBaseline):
+        preset_plan = None
+
+        def _resolve_papers(self, plan):
+            return [], list(plan.papers)
+
+    baseline = Unresolved()
+    baseline.planner = Planner()
+    runner = AgenticResearch(baseline, agent_model=HighModel(), high_model=HighModel())
+    started: list[str] = []
+    runner._mcp_research = lambda session: started.append("mcp")
+    runner.run("Who wrote Unknown Paper?", "slow", "r-route-unresolved", concept=CONCEPT)
+    assert started == ["mcp"]                        # an unresolved paper is not a fact lookup
+
+    class FellBack(StubBaseline):
+        preset_plan = None
+        last_route = "research"
+
+        def _resolve_papers(self, plan):
+            return ["p4"], []
+
+    baseline = FellBack()
+    baseline.planner = Planner()
+    runner = AgenticResearch(baseline, agent_model=HighModel(), high_model=HighModel())
+    runner._mcp_research = lambda session: (_ for _ in ()).throw(AssertionError("agent must not start"))
+    run = runner.run("Who wrote Some Paper?", "slow", "r-route-fellback", concept=CONCEPT)["run"]
+    assert run.execution_status == "degraded"
+    research = next(check for check in run.checks if check.name == "agent research (MCP)")
+    assert "did not cover it" in research.detail

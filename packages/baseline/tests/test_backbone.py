@@ -272,4 +272,4 @@ def test_an_answer_nothing_supports_after_the_repair_states_the_extracted_facts(
     assert answer.answer == "Video Prediction Policy: uses dataset robot videos [p4-abstract]."
     assert [item["verdict"] for item in answer.sentences] == ["removed", "from_facts"]
     warn = [check for check in runner.checks if check.name == "answer composition"]
-    assert warn and warn[0].status == "warn" and "states the 1 extracted facts" in warn[0].detail
+    assert warn and warn[0].status == "warn" and "states 1 of the 1 extracted facts" in warn[0].detail

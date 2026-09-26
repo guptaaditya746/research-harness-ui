@@ -167,8 +167,8 @@ class ResearchSteps:
                 raise
             answer = self._facts_answer(state["extracted"], exc.sentences)
             self._check("answer composition", "warn", f"no composed sentence was supported after one repair "
-                        f"({len(exc.sentences) or len(exc.removed)} removed); the answer states the "
-                        f"{len(state['extracted'])} extracted facts")
+                        f"({len(exc.sentences) or len(exc.removed)} removed); the answer states "
+                        f"{min(12, len(state['extracted']))} of the {len(state['extracted'])} extracted facts")
             report = {}
         if report.get("repaired"):
             self._check("answer composition", "warn", "the verifier removed every claim of the first answer; "

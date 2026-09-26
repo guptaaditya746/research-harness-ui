@@ -31,11 +31,17 @@ export function parseTimeline(run: Run) {
   for (const row of run.trace) {
     const parts = row.returned.split(' · ');
     if (row.action === 'Model call finished' || row.action === 'Model call failed') {
-      const took = parts.map(part => /^(\d+(?:\.\d+)?)s$/.exec(part.trim())).find(Boolean);
-      const seconds = took ? Number(took[1]) : 0;
-      const purpose = parts[1] ?? '';
+      // Finished: "alias · purpose · 12.3s · …"; failed: "alias · purpose · error · 4.1s" or
+      // "timed out after 30s (alias · purpose)" (model_client.py).
+      const timeout = /timed out after (\d+(?:\.\d+)?)s \((.+?) · (.+?)\)/.exec(row.returned);
+      const durations = [...row.returned.matchAll(/(?:^|[\s(])(\d+(?:\.\d+)?)s(?=$|[\s·)])/g)];
+      const seconds = timeout ? Number(timeout[1]) : durations.length ? Number(durations[durations.length - 1][1]) : 0;
+      const alias = timeout ? timeout[2] : parts[0];
+      const purpose = timeout ? timeout[3] : parts[1] ?? '';
+      const failed = row.action === 'Model call failed';
+      const detail = failed ? ` · ${timeout ? 'timed out' : parts.slice(2).filter(part => !/^\d+(\.\d+)?s$/.test(part.trim())).join(' · ')}` : '';
       calls.push({ lane: laneOf(purpose), start: Math.max(0, row.atS - seconds), end: row.atS,
-        label: `${parts[0]} · ${purpose} · ${seconds.toFixed(1)} s`, failed: row.action === 'Model call failed' });
+        label: `${alias} · ${purpose} · ${seconds.toFixed(1)} s${detail}`, failed });
     } else if (row.purpose && / ms$/.test(row.returned) && / items · /.test(row.returned)) {
       ticks.push(row.atS);
     } else if (MILESTONES[row.action]) {

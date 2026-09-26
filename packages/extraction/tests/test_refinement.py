@@ -103,3 +103,25 @@ def test_the_answer_is_the_accepted_sentences_and_every_verdict_is_kept() -> Non
     assert result.answer == "MethodX is introduced by p4 [p4-metadata]."
     assert [item["verdict"] for item in result.sentences] == ["accepted", "removed", "removed"]
     assert result.sentences[2]["reason"] == "cites no source of the supplied triples"   # supported, but no known source
+
+
+def test_sentence_citations_are_checked_and_added_and_provenance_comes_from_them() -> None:
+    class Verifier:
+        calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            Verifier.calls += 1
+            if Verifier.calls == 1:
+                return {"answer": "MethodX is by p4 [p4-metadata].", "cited_source_ids": ["p4-metadata"]}
+            return {"sentences": [
+                {"text": "MethodX is by p4.", "supported": True, "source_ids": ["[p4-metadata]"]},
+                {"text": "It appeared at ACL [p7-venue].", "supported": True, "source_ids": ["p4-metadata"]},
+            ], "supported": True, "answer": "MethodX is by p4.", "cited_source_ids": []}
+
+    engine = ExtractionEngine(Verifier(), hand_written_subschema())
+    inferred = SchemaInference(label="Paper", gloss="Paper", classes=["Paper"], properties=["title"])
+    triple = ExtractedTriple(subject="p4", predicate="title", object="MethodX", source_id="p4-metadata", evidence="MethodX")
+    result = engine.answer("Who made MethodX?", inferred, [triple], verify=True)
+    assert result.answer == "MethodX is by p4 [p4-metadata]."            # bracket added, id normalised
+    assert result.cited_source_ids == ["p4-metadata"]                     # from the accepted sentence
+    assert result.sentences[1]["verdict"] == "removed" and "p7-venue" in result.sentences[1]["reason"]

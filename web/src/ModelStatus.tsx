@@ -30,7 +30,7 @@ export function ModelStatus({ api }: { api: string }) {
     const poll = async () => {
       if (!document.hidden) {
         try {
-          const response = await fetch(`${api}/models/status`);
+          const response = await fetch(`${api}/models/status`, { signal: AbortSignal.timeout(8000) });
           if (!response.ok) throw new Error(String(response.status));
           const body = await response.json() as Status;
           if (!stopped) { setStatus(body); setFailed(false); }

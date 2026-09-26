@@ -525,7 +525,8 @@ class ExtractionEngine:
         try:
             return self._compose(question, inferred, triples, verify, verifier, notes)
         except UnsupportedAnswer as first:
-            if first.stage != "verification":
+            # The v1 templates have no repair section, so a second call would repeat the first.
+            if first.stage != "verification" or settings().prompt_set == "v1":
                 raise
             emit_model_event("Answer unsupported", "writing the answer once more from the triples alone")
             if report is not None:
@@ -533,7 +534,8 @@ class ExtractionEngine:
                 report["notes_dropped"] = bool(notes)
             try:
                 return self._compose(question, inferred, triples, verify, verifier, None,
-                                     repair=first.removed or [item["text"] for item in first.sentences])
+                                     repair=first.removed or [item["text"] for item in first.sentences
+                                                              if item["verdict"] == "removed"])
             except UnsupportedAnswer as second:
                 raise UnsupportedAnswer(f"{first}; after one repair: {second}", stage=second.stage,
                                         removed=second.removed, sentences=second.sentences) from second
@@ -565,6 +567,8 @@ class ExtractionEngine:
             # Cut off (a very long answer or a repetition loop): once more with explicit limits.
             emit_model_event("Answer too long", "retrying answer composition with a shorter format")
             reply = complete(self.model, render("extraction/answer_composition", payload, brief=True, **extra))
+        if isinstance(reply, dict):
+            reply = {key: value for key, value in reply.items() if key != "sentences"}   # set only by verification
         result = AnswerResult.model_validate(reply)
         result = result.model_copy(update={"sparql": self.answer_query(triples, result.cited_source_ids)})
         sources = {triple.source_id for triple in triples}
@@ -596,13 +600,16 @@ class ExtractionEngine:
                     f"claims{example}; {len(triples)} triples available"
                     f"{', research notes used by composition' if notes else ''})",
                     removed=removed, sentences=sentences)
-            verified_sources = reviewed.get("cited_source_ids", [])
-            if not isinstance(verified_sources, list) or not verified_sources or not set(verified_sources) <= sources:
-                raise UnsupportedAnswer("verified answer lacks valid triple provenance", stage="provenance")
-            cited = [str(source) for source in verified_sources]
-            # With per-sentence verdicts the answer is exactly the accepted sentences, in order.
-            text = " ".join(item["text"] for item in accepted) if accepted else str(reviewed["answer"])
-            cited = list(dict.fromkeys([*cited, *(source for item in accepted for source in item["sourceIds"])]))
+            if accepted:
+                # With per-sentence verdicts the answer is exactly the accepted sentences, in order, and
+                # its sources are theirs (each already checked against the supplied triples).
+                text = " ".join(item["text"] for item in accepted)
+                cited = list(dict.fromkeys(source for item in accepted for source in item["sourceIds"]))
+            else:
+                verified_sources = reviewed.get("cited_source_ids", [])
+                if not isinstance(verified_sources, list) or not verified_sources or not set(verified_sources) <= sources:
+                    raise UnsupportedAnswer("verified answer lacks valid triple provenance", stage="provenance")
+                text, cited = str(reviewed["answer"]), [str(source) for source in verified_sources]
             result = result.model_copy(update={
                 "answer": text, "cited_source_ids": cited,
                 "sparql": self.answer_query(triples, cited), "sentences": sentences,
@@ -613,17 +620,30 @@ class ExtractionEngine:
     def _sentence_verdicts(raw: object, sources: set[str]) -> list[dict[str, Any]]:
         """The verifier's per-sentence verdicts; a sentence counts as accepted only when it is marked
         supported and cites at least one source of the supplied triples."""
+        def clean(value: object) -> str:
+            return str(value).strip().strip("[]").strip()
+
         out: list[dict[str, Any]] = []
         for item in raw if isinstance(raw, list) else []:
             if not isinstance(item, dict) or not str(item.get("text") or "").strip():
                 continue
-            ids = [str(value) for value in item.get("source_ids") or [] if str(value) in sources]
+            text = str(item["text"]).strip()
+            ids = list(dict.fromkeys(clean(value) for value in item.get("source_ids") or [] if clean(value) in sources))
             accepted = item.get("supported") is True and bool(ids)
             reason = str(item.get("reason") or "")
             if item.get("supported") is True and not ids:
                 reason = reason or "cites no source of the supplied triples"
-            out.append({"text": str(item["text"]).strip(), "sourceIds": ids,
-                        "verdict": "accepted" if accepted else "removed", "reason": reason})
+            in_text = [clean(part) for group in re.findall(r"\[([^\]]+)\]", text)
+                       for part in re.split(r"[,;]", group) if clean(part)]
+            outside = [value for value in in_text if value not in sources]
+            if accepted and outside:
+                accepted, reason = False, f"cites a source not among the triples: {', '.join(outside[:3])}"
+            if accepted and not in_text:
+                # Keep the sentence traceable in the answer text: its sources in brackets before the full stop.
+                body, stop = (text[:-1], text[-1]) if text[-1] in ".!?" else (text, "")
+                text = f"{body.rstrip()} [{', '.join(ids)}]{stop}"
+            out.append({"text": text, "sourceIds": ids, "verdict": "accepted" if accepted else "removed",
+                        "reason": reason})
         return out
 
     def answer_query(self, triples: list[ExtractedTriple], cited: list[str]) -> str:
