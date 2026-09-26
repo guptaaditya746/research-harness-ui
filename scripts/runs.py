@@ -4,6 +4,7 @@
     uv run python scripts/runs.py show r-1a2b3c4d
     uv run python scripts/runs.py compare r-1a2b3c4d r-5e6f7a8b
     uv run python scripts/runs.py stats -n 50
+    uv run python scripts/runs.py failures -n 200     # every incomplete run with the check that failed
     uv run python scripts/runs.py list --fixtures        # the recorded demo runs
 
 Reads ARTIFACT_ROOT (default ./artifacts). See docs/RUN_ANALYSIS.md.
@@ -168,6 +169,26 @@ def stats(n: Annotated[int, typer.Option("-n", help="Runs to include.")] = 50, f
     for row in stats_by_path(summaries[:n]):
         table.add_row(*(str(row[column]) for column in columns))
     console.print(table)
+
+
+@app.command()
+def failures(n: Annotated[int, typer.Option("-n", help="Latest runs to look through.")] = 200,
+             fixtures: Fixtures = False) -> None:
+    """Incomplete runs with their reason and the full detail of the check that failed, grouped by reason."""
+    _, summaries = _summaries(fixtures)
+    failed = [item.run for item in summaries[:n] if item.run.status == "incomplete"]
+    if not failed:
+        console.print("No incomplete runs.")
+        return
+    by_reason: dict[str, list] = {}
+    for run in failed:
+        by_reason.setdefault(str(run.reason or "unknown").split(":")[0], []).append(run)
+    for reason, runs in sorted(by_reason.items(), key=lambda entry: -len(entry[1])):
+        console.print(f"\n[bold]{reason}[/bold] ({len(runs)})")
+        for run in runs:
+            details = "; ".join(f"{check.name}: {check.detail}" for check in run.checks if check.status == "fail")
+            console.print(f"  {run.id} [{run.path}] {run.question[:60]}")
+            console.print(f"    {details or run.reason}", highlight=False)
 
 
 if __name__ == "__main__":

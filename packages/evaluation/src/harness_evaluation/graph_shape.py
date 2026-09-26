@@ -12,7 +12,9 @@ reading it reports:
 - **Backbone**: the DBLP facts added to research answers since Phase 4 (authors, venue, citations;
   edge ids "b-..."), counted apart from what the run extracted.
 - **Dead ends**: invented edges whose object no other edge touches (a lone paper → phrase
-  triple), and edges whose object is a whole statement (more than 8 words).
+  triple), and extracted edges whose object is a whole statement (more than 8 words).
+- **Funnel** (``extraction_batches.json``): passages read, open propositions extracted, mapped onto
+  the subschema, kept by evidence review; where the facts of a thin answer were lost.
 - **Near duplicates**: entity/value nodes that are the same words up to plurals and word order
   ("attack task" / "attack tasks"), a sign that nodes were not merged.
 - **Schema hygiene** (``subschema.ttl``): invented classes and properties, and how many invented
@@ -24,6 +26,7 @@ Nothing is enforced here; the numbers decide what Phase 4 should change.
 
 from __future__ import annotations
 
+import json
 import re
 from collections import Counter
 from collections.abc import Iterable
@@ -173,6 +176,31 @@ def _export(path: Path) -> dict[str, Any] | None:
     return {"triples": len(graph), "dblp_share": _share(dblp, len(graph))}
 
 
+def funnel(folder: Path) -> dict[str, Any] | None:
+    """Where facts are lost: passages read, open propositions, mapped onto the schema, kept by review."""
+    path = folder / "extraction_batches.json"
+    if not path.exists():
+        return None
+    try:
+        batches = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    passages = opened = mapped = 0
+    kept: int | None = None
+    for entry in batches if isinstance(batches, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        passages += int(entry.get("passages") or 0)
+        for stage in entry.get("edc") or []:
+            if stage.get("stage") == "extract":
+                opened += int(stage.get("open_triples") or 0)
+            elif stage.get("stage") == "canonicalize":
+                mapped += sum(bool(item.get("selected")) for item in stage.get("decisions") or [])
+        if entry.get("stage") == "evidence_review":
+            kept = int(entry.get("kept") or 0)
+    return {"passages": passages, "open": opened, "mapped": mapped, "kept": mapped if kept is None else kept}
+
+
 def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
     """Graph-shape numbers for one run's chosen reading (None when it has no reading)."""
     reading = chosen_reading(run)
@@ -213,9 +241,13 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
     origin = Counter(origin_of(edge) for edge in facts)
     invented = [edge for edge in facts if origin_of(edge) == "invented"]
     backbone = [edge for edge in facts if edge.id.startswith(BACKBONE_PREFIX)]
+    # Shares of what the run extracted itself: the backbone would dilute them.
+    extracted = [edge for edge in facts if not edge.id.startswith(BACKBONE_PREFIX)]
     dead_ends = [edge for edge in invented if degree[edge.target] <= 1]
-    statements = [edge for edge in facts if len(labels.get(edge.target, "").split()) > STATEMENT_WORDS]
-    literal_objects = [edge for edge in facts if kinds.get(edge.target) == "value"]
+    # DBLP values (a paper title) are long by nature; only extracted objects count as statements.
+    statements = [edge for edge in extracted if origin_of(edge) != "dblp"
+                  and len(labels.get(edge.target, "").split()) > STATEMENT_WORDS]
+    literal_objects = [edge for edge in extracted if kinds.get(edge.target) == "value"]
 
     keys = Counter(_key(labels[node]) for node in touched if kinds.get(node) in {"entity", "value"} and _key(labels[node]))
     near_duplicates = sum(count for count in keys.values() if count > 1)
@@ -230,7 +262,8 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         "kind": "facts" if answered_from_facts else "research",
         "reading": reading.label,
         "nodes": len(touched), "edges": len(edges), "fact_edges": len(facts),
-        "backbone_edges": len(backbone),
+        "backbone_edges": len(backbone), "extracted_edges": len(extracted),
+        "extracted_invented_share": _share(sum(origin_of(e) == "invented" for e in extracted), len(extracted)),
         "claim_edges": sum(edge.kind == "claim" for edge in edges),
         "dblp": origin["dblp"], "seed": origin["seed"], "invented": origin["invented"],
         "dblp_share": _share(origin["dblp"], len(facts)),
@@ -240,8 +273,8 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         "papers": len(papers),
         "paper_pairs_connected": _share(connected_pairs, paper_pairs),
         "invented_dead_end_share": _share(len(dead_ends), len(invented)),
-        "literal_object_share": _share(len(literal_objects), len(facts)),
-        "statement_object_share": _share(len(statements), len(facts)),
+        "literal_object_share": _share(len(literal_objects), len(extracted)),
+        "statement_object_share": _share(len(statements), len(extracted)),
         "near_duplicate_nodes": near_duplicates,
         "invented_properties": sorted(set(inferred_props)),
         "invented_classes": sorted(set(inferred_classes)),
@@ -253,10 +286,11 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         },
         "schema": _schema_hygiene(root / "subschema.ttl", vocab) if root else None,
         "export": _export(root / "triples.ttl") if root else None,
+        "funnel": funnel(root) if root else None,
     }
 
 
-SUMMARY_FIELDS = ("fact_edges", "backbone_edges", "dblp_share", "invented_share", "pieces", "largest_piece_share",
+SUMMARY_FIELDS = ("fact_edges", "backbone_edges", "extracted_edges", "dblp_share", "invented_share", "pieces", "largest_piece_share",
                   "paper_pairs_connected", "invented_dead_end_share", "literal_object_share",
                   "statement_object_share", "near_duplicate_nodes")
 
@@ -280,6 +314,9 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             summary[name] = round(median(values), 3) if values else None
         invented = Counter(name for row in group for name in row["invented_properties"])
         summary["top_invented_properties"] = invented.most_common(8)
+        funnels = [row["funnel"] for row in group if row.get("funnel")]
+        summary["funnel"] = {key: round(median(item[key] for item in funnels), 1)
+                             for key in ("passages", "open", "mapped", "kept")} if funnels else None
         summary["runs_with_invented_classes"] = sum(bool(row["invented_classes"]) for row in group)
         out.append(summary)
     return out

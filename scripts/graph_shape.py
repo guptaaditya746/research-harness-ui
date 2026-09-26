@@ -25,10 +25,12 @@ from rich.table import Table
 ROOT = Path(__file__).resolve().parents[1]
 console = Console()
 PATHS = {"baseline": "Fast", "baseline-enhanced": "Adapt", "agentic": "Agent"}
-LEGEND = ("Facts = fact edges (BB = of which DBLP backbone from corpus facts); DBLP / Inv = share of them using DBLP / invented predicates; Pieces = "
-          "disconnected parts; Big = largest part's share of nodes; Pairs = paper pairs connected at all; "
-          "Dead = invented edges whose object nothing else touches; Lit = literal objects; Stmt = objects "
-          "that are whole statements (>8 words); Dup = near-duplicate nodes; Export = triples in triples.ttl.")
+LEGEND = ("Facts = fact edges in the answer graph = BB (DBLP backbone, added) + Ext (extracted by the run); DBLP = share of "
+          "all facts using DBLP predicates; Inv = share of extracted facts using invented predicates; Pieces = "
+          "disconnected parts; Pairs = paper pairs connected at all (– when fewer than 2 papers); Dead = invented "
+          "edges whose object nothing else touches; Stmt = extracted objects that are whole statements (>8 words); "
+          "Funnel = passages read > open propositions > mapped onto the schema > kept by evidence review; "
+          "Export = triples in triples.ttl.")
 
 
 def _pct(value: float | None) -> str:
@@ -65,32 +67,35 @@ def main(
         return
 
     table = Table(title=f"Answer graphs of {len(rows)} answered runs (chosen reading)")
-    for column in ("Run", "Kind", "Path", "Facts", "BB", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit",
-                   "Stmt", "Dup", "Export"):
+    for column in ("Run", "Kind", "Path", "Facts", "BB", "Ext", "DBLP", "Inv", "Pieces", "Pairs", "Dead", "Stmt",
+                   "Funnel P>O>M>K", "Export"):
         table.add_column(column, justify="left" if column in {"Run", "Kind", "Path"} else "right",
                          no_wrap=column == "Run")
     for row in rows:
         export = row.get("export") or {}
+        flow = row.get("funnel")
         table.add_row(row["id"], row["kind"], PATHS.get(row["path"], row["path"]), str(row["fact_edges"]),
-                      str(row["backbone_edges"]),
-                      _pct(row["dblp_share"]), _pct(row["invented_share"]), str(row["pieces"]),
-                      _pct(row["largest_piece_share"]), _pct(row["paper_pairs_connected"]),
-                      _pct(row["invented_dead_end_share"]), _pct(row["literal_object_share"]),
-                      _pct(row["statement_object_share"]), str(row["near_duplicate_nodes"]),
+                      str(row["backbone_edges"]), str(row["extracted_edges"]),
+                      _pct(row["dblp_share"]), _pct(row["extracted_invented_share"]), str(row["pieces"]),
+                      _pct(row["paper_pairs_connected"]), _pct(row["invented_dead_end_share"]),
+                      _pct(row["statement_object_share"]),
+                      f"{flow['passages']}>{flow['open']}>{flow['mapped']}>{flow['kept']}" if flow else "–",
                       str(export.get("triples", "–")))
     console.print(table)
 
     summary = Table(title="Medians per kind and path (research = answered from passages, facts = from DBLP)")
-    for column in ("Kind", "Path", "Runs", "Facts", "BB", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit", "Stmt",
-                   "New classes"):
+    for column in ("Kind", "Path", "Runs", "Facts", "BB", "Ext", "DBLP", "Inv", "Pieces", "Pairs", "Dead", "Stmt",
+                   "Funnel P>O>M>K", "New classes"):
         summary.add_column(column, justify="left" if column in {"Kind", "Path"} else "right")
     for item in result["summary"]:
+        flow = item.get("funnel")
         summary.add_row(item["kind"], PATHS.get(item["path"], item["path"]), str(item["runs"]),
-                        _num(item["fact_edges"]), _num(item["backbone_edges"]),
+                        _num(item["fact_edges"]), _num(item["backbone_edges"]), _num(item["extracted_edges"]),
                         _pct(item["dblp_share"]), _pct(item["invented_share"]), _num(item["pieces"]),
-                        _pct(item["largest_piece_share"]), _pct(item["paper_pairs_connected"]),
-                        _pct(item["invented_dead_end_share"]), _pct(item["literal_object_share"]),
-                        _pct(item["statement_object_share"]), str(item["runs_with_invented_classes"]))
+                        _pct(item["paper_pairs_connected"]), _pct(item["invented_dead_end_share"]),
+                        _pct(item["statement_object_share"]),
+                        f"{_num(flow['passages'])}>{_num(flow['open'])}>{_num(flow['mapped'])}>{_num(flow['kept'])}"
+                        if flow else "–", str(item["runs_with_invented_classes"]))
     console.print(summary)
     console.print(f"[dim]{LEGEND} New classes = runs that invented at least one class.[/dim]")
     everything = next((item for item in result["summary"] if item["kind"] == "research" and item["path"] == "all"),

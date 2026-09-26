@@ -55,9 +55,11 @@ def summary(run: dict[str, Any]) -> dict[str, Any]:
     readings = run.get("readings") or []
     reading = readings[chosen] if isinstance(chosen, int) and 0 <= chosen < len(readings) else {}
     graph = reading.get("graph") or {}
+    failed = [f"{check.get('name')}: {check.get('detail')}" for check in run.get("checks") or []
+              if check.get("status") == "fail"]
     return {"status": run.get("status"), "reason": run.get("reason"), "duration_s": run.get("durationS"),
             "facts": len(reading.get("triples") or []), "graph_edges": len(graph.get("edges") or []),
-            "execution_status": run.get("executionStatus")}
+            "execution_status": run.get("executionStatus"), "failed_check": "; ".join(failed)[:400] or None}
 
 
 def main(
@@ -92,7 +94,8 @@ def main(
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
         typer.echo(f"[{item['question_id']}] {item.get('reading') or '-'} → {item.get('run_id') or '-'} "
                    f"{item.get('status')} {item.get('duration_s') or ''}s {item.get('facts', '')} facts"
-                   + (f" ({item['reason']})" if item.get("reason") else ""))
+                   + (f" ({item['reason']})" if item.get("reason") else "")
+                   + (f"\n    {item['failed_check']}" if item.get("failed_check") else ""))
 
     def one(row: dict[str, Any]) -> None:
         base = {"question_id": row["id"], "question": row["question"], "path": path, "budget": budget}
