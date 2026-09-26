@@ -31,14 +31,12 @@ QUESTION_WORDS = {
     "for", "to", "and", "or", "this", "these", "indexed", "paper", "papers", "corpus", "their", "each", "one",
     "among", "across", "most", "that", "they", "use", "report", "propose", "study", "work", "2025",
 }
-VENUES = ("ACL 2025", "EMNLP 2025")
+VENUE = re.compile(r"\b[A-Z][A-Za-z]*[A-Z][A-Za-z]* (?:19|20)\d{2}\b")     # "EMNLP 2025", "NeurIPS 2024"
 
 
 def topic(question: str) -> str:
     """The question without question words and venue names: what BM25 should match."""
-    text = question
-    for venue in VENUES:
-        text = text.replace(venue, " ")
+    text = VENUE.sub(" ", question)
     return " ".join(word for word in re.findall(r"[A-Za-z0-9-]+", text) if word.casefold() not in QUESTION_WORDS)
 
 
@@ -59,7 +57,7 @@ def main(
         if row.get("category") in FACT_CATEGORIES:
             typer.echo(f"{row['id']}  (answered from DBLP facts: check with `labelling validate`)  {row['question']}\n")
             continue
-        named = [venue for venue in VENUES if venue in row["question"]]
+        named = VENUE.findall(row["question"])
         facts = {str(fact["subject"]): fact for fact in corpus.fact_rows if fact.get("predicate") == "venue"}
         years = {str(fact["subject"]): fact.get("object") for fact in corpus.fact_rows if fact.get("predicate") == "year"}
         scope = None

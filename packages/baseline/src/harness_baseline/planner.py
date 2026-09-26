@@ -45,7 +45,7 @@ Operation = Literal[
     "research",
 ]
 
-EvidenceFocus = Literal["general", "results", "limitations", "methods", "metrics"]
+EvidenceFocus = Literal["general", "results", "limitations", "methods"]
 
 # What each fact operation measures, stated with the answer so an ambiguous
 # question ("best author") never silently answers a different measure.
@@ -85,12 +85,10 @@ OPERATIONS: dict[str, str] = {
                            "the most papers (rank=top) or with at least N papers (min_papers=N).",
     "author_citation_counts": "Authors ranked by how often other corpus papers cite their papers: the most "
                               "cited authors (rank=top) or those with at least N citing papers (min_papers=N).",
-    "authors_in_venues": "Authors who have a corpus paper in each of two or more venues (e.g. both ACL 2025 and "
-                         "EMNLP 2025). venues=[venue, venue, ...].",
-    "papers_with_title_term": "Corpus papers whose title contains a word or phrase (e.g. papers with "
-                              "\"hallucination\" in the title). term=the word; year=YYYY if the question names one.",
-    "papers_in_venue": "Count or list the corpus papers published in one venue (e.g. how many EMNLP 2025 papers). "
-                       "venues=[venue].",
+    "authors_in_venues": "Authors who have a corpus paper in each of two or more named venues. venues=[venue, venue, ...].",
+    "papers_with_title_term": "Corpus papers whose title contains a word or phrase. term=the word or phrase; "
+                              "year=YYYY if the question names one.",
+    "papers_in_venue": "Count or list the corpus papers published in one named venue. venues=[venue].",
     "paper_citation_counts": "Corpus papers ranked by how many other corpus papers cite them: the most cited "
                              "paper (rank=top) or those cited by at least N corpus papers (min_papers=N).",
     "research": "Anything that needs the papers' full text: results, numbers, methods, "
@@ -114,7 +112,6 @@ class QueryPlan(BaseModel):
     venues: list[str] = Field(default_factory=list)
     term: str | None = None
     evidence_focus: EvidenceFocus = "general"
-    benchmark: str | None = None
     measure: str | None = None
     rationale: str = ""
     source: Literal["model", "fallback"] = "model"
@@ -151,7 +148,7 @@ class QueryPlan(BaseModel):
     @classmethod
     def _focus(cls, value: Any) -> str:
         text = str(value or "general").strip().casefold()
-        return text if text in {"general", "results", "limitations", "methods", "metrics"} else "general"
+        return text if text in {"general", "results", "limitations", "methods"} else "general"
 
     def requirements_met(self) -> bool:
         """Whether the plan carries the arguments its operation needs."""

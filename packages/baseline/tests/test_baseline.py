@@ -393,35 +393,6 @@ def test_concept_widens_retrieval_and_reaches_the_model(tmp_path: Path) -> None:
     )
 
 
-def test_conflicting_benchmark_percentages_are_both_reported(tmp_path: Path) -> None:
-    class FailModel:
-        def complete_json(self, system: str, user: str) -> dict:
-            raise AssertionError("the two extracted claims already answer this question")
-
-    runner = Baseline20(corpus(tmp_path), ExtractionEngine(FailModel(), hand_written_subschema()))
-    runner.started = __import__("time").monotonic()
-    state = {
-        "question": "What improvement did Video Prediction Policy report on CALVIN ABC→D?",
-        "plan": plan("research", "Video Prediction Policy", evidence_focus="results",
-                     benchmark="CALVIN ABC→D"),
-        "extracted": [
-            ExtractedTriple(subject="p4", predicate="reportsMetric", object="18.6% relative improvement on CALVIN ABC-D generalization benchmark", source_id="p4-abstract", evidence="18.6% relative improvement"),
-            ExtractedTriple(subject="p4", predicate="reportsMetric", object="41.5% improvement on CALVIN ABC→D benchmark", source_id="p4-results", evidence="41.5% improvement"),
-                ExtractedTriple(subject="p4", predicate="reportsMetric", object="10% of CALVIN ABC training data", source_id="p4-training", evidence="using only 10% of annotated data"),
-                ExtractedTriple(subject="p4", predicate="reportsMetric", object="31.6% improvement in real-world success rate", source_id="p4-real", evidence="31.6% improvement in real-world success rate"),
-        ],
-    }
-
-    result = runner._query_answer(state)
-
-    assert "18.6%" in result["answer"].answer
-    assert "41.5%" in result["answer"].answer
-    assert "10%" not in result["answer"].answer
-    assert "31.6%" not in result["answer"].answer
-    assert result["answer"].cited_source_ids == ["p4-abstract", "p4-results"]
-    assert len(result["extracted"]) == 2
-
-
 # ─── Question understanding ──────────────────────────────────────────────────
 
 class JsonModel:

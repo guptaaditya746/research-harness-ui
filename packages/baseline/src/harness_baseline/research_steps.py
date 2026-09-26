@@ -5,23 +5,16 @@ A mixin of ``Baseline20``: methods use the pipeline's state (``self``).
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 from harness_config import settings
 from harness_extraction import (
-    AnswerResult,
     ExtractedTriple,
     parallel_map,
-)
-from harness_extraction.claims import (
-    CHANGE,
-    NUMERIC,
 )
 from harness_graphstore import sparql_check
 from rdflib import RDFS, XSD
 
-from .planner import QueryPlan
 from .state import (
     BaselineState,
     NoResults,
@@ -126,33 +119,6 @@ class ResearchSteps:
             if all(str(value).strip().casefold() not in {"", "null", "none", "n/a", "undefined"}
                    for value in (item.subject, item.predicate, item.object, item.source_id, item.evidence))
         ]
-        normalized: list[ExtractedTriple] = []
-        added_relations: set[str] = set()
-        for item in extracted:
-            if item.predicate == "usesDataset":
-                object_text = item.object.casefold()
-                evidence_text = item.evidence.casefold()
-                replacement = None
-                if re.search(r"\b(model|representation)\b", object_text):
-                    replacement = ("usesModel", "A paper reports use of a model or representation.")
-                elif "environment" in object_text or re.search(r"\benvironments?\b", evidence_text):
-                    replacement = ("evaluatedInEnvironment", "A paper reports evaluation in an environment.")
-                if replacement:
-                    name, definition = replacement
-                    self.extraction.register_local_relation(name, definition)
-                    if self.relation_proposer:
-                        self.relation_proposer(
-                            name, definition, self.current_run_id, "Paper", "xsd:string"
-                        )
-                    added_relations.add(name)
-                    item = item.model_copy(update={"predicate": name})
-            normalized.append(item)
-        extracted = normalized
-        if added_relations:
-            state["inferred"] = state["inferred"].model_copy(update={
-                "properties": list(dict.fromkeys([*state["inferred"].properties, *sorted(added_relations)])),
-            })
-            reports.append({"stage": "local_subschema", "relations": sorted(added_relations)})
         if not extracted:
             raise NoResults("extraction contained no valid supported propositions")
         if self.refine:
@@ -162,71 +128,12 @@ class ResearchSteps:
             reports.append({"stage": "evidence_review", **review})
             if not extracted:
                 raise NoResults("evidence review kept no extracted triple as relevant to the question")
-        plan = state.get("plan") or QueryPlan.fallback("no plan")
-        mentioned = list(state.get("paper_ids") or [])
-        if self.enhanced and len(mentioned) > 1 and plan.evidence_focus == "metrics":
-            covered = {
-                self.corpus.by_passage[item.source_id]["paper_id"]
-                for item in extracted if item.source_id in self.corpus.by_passage
-            }
-            recovered = 0
-            for paper_id in mentioned:
-                if paper_id in covered:
-                    continue
-                for passage in state["passages"]:
-                    if passage["paper_id"] != paper_id:
-                        continue
-                    for sentence in re.split(r"(?<=[.!?])\s+", passage["text"]):
-                        match = re.search(
-                            r"\b(?:reports?|measures?)\s+(?:both\s+)?(.+?)(?:,\s|\.|$)",
-                            sentence, re.IGNORECASE,
-                        )
-                        if not match or not re.search(
-                            r"\b(metric|quality|accuracy|PSNR|SSIM|rate|score)\b",
-                            match.group(1), re.IGNORECASE,
-                        ):
-                            continue
-                        for criterion in re.split(r"\s+and\s+", match.group(1)):
-                            criterion = criterion.strip(" ,;.")
-                            if not criterion:
-                                continue
-                            extracted.append(ExtractedTriple(
-                                subject=paper_id, predicate="reportsMetric", object=criterion,
-                                source_id=str(passage["passage_id"]), evidence=sentence,
-                            ))
-                            recovered += 1
-                    if recovered:
-                        break
-            if recovered:
-                reports.append({"stage": "missing_paper_metric_coverage", "triples": recovered})
         self._emit("Extracting triples", f"{len(extracted)} supported triples")
         self._check("extraction", "pass", f"{len(extracted)} supported triples")
         return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports}
 
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
         self.stage = "answer composition"
-        plan = state.get("plan") or QueryPlan.fallback("no plan")
-        if plan.evidence_focus == "results":
-            context_terms = (
-                {term.casefold() for term in re.findall(r"[A-Za-z]{4,}", plan.benchmark)}
-                if plan.benchmark else set()
-            )
-            numeric = [
-                item for item in state["extracted"]
-                if item.predicate == "reportsMetric" and NUMERIC.search(item.object)
-                and CHANGE.search(f"{item.object} {item.evidence}")
-                and (not context_terms or any(term in item.object.casefold() for term in context_terms))
-            ]
-            if numeric:
-                selected = list({(item.subject, item.object, item.source_id): item for item in numeric}.values())
-                answer = AnswerResult(
-                    sparql="SELECT ?paper ?result WHERE { ?paper <https://harness.local/schema#reportsMetric> ?result . }",
-                    answer="The indexed evidence reports: " + "; ".join(
-                        f"{item.object} [{item.source_id}]" for item in selected
-                    ) + ".",
-                    cited_source_ids=sorted({item.source_id for item in selected}),
-                )
-                return {"answer": answer, "extracted": selected}
         notes = self._research_notes(state)
         report: dict[str, Any] = {}
         answer = self.extraction.answer(

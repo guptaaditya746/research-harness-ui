@@ -106,6 +106,8 @@ class Settings(BaseSettings):
     # Ranked retrieval everywhere (pipeline, concept evidence, search_evidence, readers): lexical = BM25
     # (the pipeline also keeps its boolean candidates and relative threshold); hybrid = BM25 + dense, fused.
     retrieval_mode: Literal["lexical", "hybrid"] = Field("lexical", validation_alias=_env("HARNESS_RETRIEVAL_MODE"))
+    # Reuse claims accepted in earlier runs as retrieval candidates (off: every run starts from the corpus).
+    claim_reuse: bool = Field(False, validation_alias=_env("HARNESS_CLAIM_REUSE"))
     agentic_max_passages: int = Field(24, validation_alias=_env("HARNESS_AGENTIC_MAX_PASSAGES"))
     agentic_max_mcp_seeds: int = Field(12, validation_alias=_env("HARNESS_AGENTIC_MAX_MCP_SEEDS"))
     # Extraction and evidence-review batches sent to the model at the same time (1 = one after another).

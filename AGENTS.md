@@ -53,7 +53,7 @@ harness_schema | harness_config
 - `make fewshot ARGS="--dev <ids>"` — few-shot example candidates from gold errors on development questions (`docs/PROMPTS.md`).
 - `make embed` — dense passage index for hybrid retrieval, after every ingest (needs `qwen-embed`).
 - `make graph-shape` — answer-graph shape of recent runs (read-only; Phase 4 diagnostics).
-- `make run-questions` — the 30 evaluation questions through the running API; Agentic runs every proposed reading.
+- `make run-questions` — evaluation questions through the running API (`--questions` for nlp32–61); Agentic runs every proposed reading.
 - `make fixtures` — regenerate `web/src/generated/run.ts`, JSON Schema and fixture runs after changing `harness_schema`.
 - `make dev` / `make demo` — MCP server, API and UI (needs the models from thesis-llm-setup).
 - `make preflight` — checks config, corpus, models, model status, MCP and API on the live node.
@@ -72,6 +72,10 @@ harness_schema | harness_config
 ## Do not
 
 - Commit `.env`, tokens or keys, or paste them into logs.
+- Add anything specific to the evaluation questions or their papers: no code paths, regexes or keyword lists
+  keyed on a question, paper, benchmark or metric, and no prompt text or examples that copy or paraphrase an
+  evaluation question (`datasets/question_library_2025*.json`). Prompt examples use made-up entities
+  (p99, MethodX, BenchY); a new capability must be general and tested on wording outside the evaluation set.
 - Edit `web/src/generated/` or fixture runs by hand (use `make fixtures`).
 - Change v1 prompt templates or `packages/prompts/tests/golden/`.
 - Rename `harness_extraction.claims.build_claims` or `harness_schema.models` — `labelling` imports them.

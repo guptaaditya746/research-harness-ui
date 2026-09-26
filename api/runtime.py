@@ -129,7 +129,9 @@ class RunRuntime:
             trace_sink=sink,
             refine=enhanced,
             refinement_model=refinement_model,
-            claim_lookup=self.claims.search,
+            # Claims accepted in earlier runs feed retrieval only when switched on: on by default they
+            # carry earlier runs of the same question into later ones (evaluation leakage).
+            claim_lookup=self.claims.search if settings().claim_reuse else None,
             relation_proposer=lambda name, definition, run_id, domain, range_: (
                 self.relations.propose(
                     name, definition, run_id=run_id, domain=domain, range_=range_
