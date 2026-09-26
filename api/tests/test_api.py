@@ -418,11 +418,15 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
     ]
 
 
-def test_default_question_library_is_the_thirty_evaluation_questions(monkeypatch) -> None:
+def test_default_question_library_is_the_sixty_evaluation_questions(monkeypatch) -> None:
     monkeypatch.delenv("HARNESS_QUESTION_SETS", raising=False)
     monkeypatch.delenv("DATASETS_ROOT", raising=False)
     paths = main._question_sets()
-    assert [path.name for path in paths] == ["question_library_2025.json"]
+    assert [path.name for path in paths] == ["question_library_2025.json", "question_library_2025_b.json"]
+    added = json.loads(paths[1].read_text())
+    assert [row["id"] for row in added] == [f"nlp{number}" for number in range(32, 62)]
+    assert len({row["question"] for row in added}) == 30
+    assert {row["category"] for row in added} == {"synthesis", "ambiguity", "aggregation", "metadata", "citation"}
     nlp_rows = json.loads(paths[0].read_text())
     assert [row["id"] for row in nlp_rows] == [f"nlp{number:02d}" for number in range(1, 31)]
     assert len(nlp_rows) == 30

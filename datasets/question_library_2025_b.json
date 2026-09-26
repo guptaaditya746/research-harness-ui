@@ -1,0 +1,242 @@
+[
+  {
+    "id": "nlp32",
+    "type": "corpus_limitations",
+    "category": "synthesis",
+    "question": "What limitations do the indexed ACL 2025 and EMNLP 2025 papers on retrieval-augmented generation report?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp33",
+    "type": "corpus_benchmarks",
+    "category": "synthesis",
+    "question": "Which benchmarks and datasets do the indexed retrieval-augmented generation papers evaluate on?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp34",
+    "type": "corpus_safety_risks",
+    "category": "synthesis",
+    "question": "What kinds of attacks or safety risks do the indexed LLM safety and red-teaming papers evaluate?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp35",
+    "type": "corpus_languages",
+    "category": "synthesis",
+    "question": "Which low-resource languages do the indexed papers study, and for which tasks?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp36",
+    "type": "corpus_hallucination_methods",
+    "category": "synthesis",
+    "question": "What approaches do the indexed papers propose to detect or reduce hallucinations in large language models?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp37",
+    "type": "corpus_llm_judges",
+    "category": "synthesis",
+    "question": "Which indexed papers use large language models as judges or evaluators, and what limitations of LLM judges do they report?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp38",
+    "type": "corpus_faithfulness",
+    "category": "synthesis",
+    "question": "How do the indexed summarization papers evaluate whether a summary is faithful to its source?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp39",
+    "type": "corpus_multi_agent",
+    "category": "synthesis",
+    "question": "Which indexed papers build multi-agent systems with large language models, and what does each agent do?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp40",
+    "type": "corpus_future_work",
+    "category": "synthesis",
+    "question": "What future work do the indexed retrieval-augmented generation papers propose?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp41",
+    "type": "corpus_clinical",
+    "category": "synthesis",
+    "question": "Which indexed papers work on medical or clinical text, and which tasks do they address?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp42",
+    "type": "corpus_hallucination_metrics",
+    "category": "synthesis",
+    "question": "Which metrics do the indexed papers use to measure hallucination or factual errors?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp43",
+    "type": "corpus_long_context",
+    "category": "synthesis",
+    "question": "How do the indexed papers on long documents or long contexts handle inputs that exceed the model's context window?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp44",
+    "type": "corpus_new_resources",
+    "category": "synthesis",
+    "question": "Which indexed papers introduce a new benchmark or dataset, and what does each one measure?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp45",
+    "type": "corpus_bias",
+    "category": "synthesis",
+    "question": "What kinds of bias or cultural misalignment do the indexed papers measure in language models?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp46",
+    "type": "corpus_human_evaluation",
+    "category": "synthesis",
+    "question": "Which indexed papers evaluate with human judges, and what do the human annotators rate?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp47",
+    "type": "corpus_structured_rag",
+    "category": "synthesis",
+    "question": "Which indexed retrieval-augmented generation methods organise evidence as graphs or trees, and how do they use that structure?",
+    "anchor": "",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp48",
+    "type": "ambiguous_superlative",
+    "category": "ambiguity",
+    "question": "Which paper in this corpus is the most influential?",
+    "anchor": "",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp49",
+    "type": "ambiguous_superlative",
+    "category": "ambiguity",
+    "question": "Who are the leading researchers on retrieval-augmented generation in this corpus?",
+    "anchor": "",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp50",
+    "type": "ambiguous_comparison",
+    "category": "ambiguity",
+    "question": "Does this corpus contain more work on LLM safety or on hallucination?",
+    "anchor": "",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp51",
+    "type": "ambiguous_comparison",
+    "category": "ambiguity",
+    "question": "Which venue in this corpus has more papers on multilingual NLP, ACL 2025 or EMNLP 2025?",
+    "anchor": "",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp52",
+    "type": "ambiguous_superlative",
+    "category": "ambiguity",
+    "question": "What is the biggest open problem that the indexed papers identify?",
+    "anchor": "",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp53",
+    "type": "ambiguous_superlative",
+    "category": "ambiguity",
+    "question": "Which method for multilingual safety performs best among the indexed papers?",
+    "anchor": "",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp54",
+    "type": "venue_count",
+    "category": "aggregation",
+    "question": "How many indexed papers were published at EMNLP 2025?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp55",
+    "type": "venue_count",
+    "category": "aggregation",
+    "question": "How many indexed papers were published at ACL 2025?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp56",
+    "type": "title_search",
+    "category": "metadata",
+    "question": "Which indexed papers have \"benchmark\" in their title?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp57",
+    "type": "title_search",
+    "category": "metadata",
+    "question": "Which indexed papers have \"multilingual\" in their title?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp58",
+    "type": "author_count",
+    "category": "aggregation",
+    "question": "Which authors have at least two indexed papers?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp59",
+    "type": "citation_ranking",
+    "category": "citation",
+    "question": "Which indexed paper is cited by the most other indexed papers?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp60",
+    "type": "citation_ranking",
+    "category": "citation",
+    "question": "Whose papers are cited most often by other indexed papers?",
+    "anchor": "",
+    "expected": "answer"
+  },
+  {
+    "id": "nlp61",
+    "type": "year_extreme",
+    "category": "metadata",
+    "question": "What is the earliest publication year among the indexed papers, and which papers have it?",
+    "anchor": "",
+    "expected": "answer"
+  }
+]

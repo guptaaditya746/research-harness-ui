@@ -148,9 +148,10 @@ class Settings(BaseSettings):
     datasets_root: Path | None = Field(None, validation_alias=_env("DATASETS_ROOT"))
     fixtures_dir: Path | None = Field(None, validation_alias=_env("FIXTURES_DIR"))
     dblp_schema_path: str = Field("", validation_alias=_env("DBLP_SCHEMA_PATH"))
-    # The question library in the UI: the 30 evaluation questions (nlp01-nlp30) by default.
+    # The question library in the UI: the 30 evaluation questions (nlp01-nlp30) and the 30 added for
+    # corpus-wide and professor-style questions (nlp32-nlp61) by default.
     question_sets: str = Field(
-        "question_library_2025.json",
+        "question_library_2025.json,question_library_2025_b.json",
         validation_alias=_env("HARNESS_QUESTION_SETS"),
     )
     # Also offer gold rows and recent runs in the library (off: only the question sets above).

@@ -19,8 +19,9 @@ Check `.env` against `.env.example`. These settings matter for a live session:
 | `HARNESS_MCP_AGENT_TIMEOUT_S` | `90` | time available for MCP research; observed passages can still seed retrieval if the controller times out |
 | `HARNESS_RUN_DEADLINE_FAST_S` / `_SLOW_S` | `300` / `900` | hard limit per run |
 | `HARNESS_RUN_DEADLINE_AGENTIC_SLOW_S` | `300` | agentic presentation run ends within five minutes |
-| `HARNESS_ADAPTIVE_MAX_PASSAGES` / `HARNESS_AGENTIC_MAX_PASSAGES` | `16` / `12` | bounds the number of open extraction batches |
-| `HARNESS_AGENTIC_MAX_MCP_SEEDS` | `6` | limits MCP passages entering extraction and heavy-model verification |
+| `HARNESS_ADAPTIVE_MAX_PASSAGES` / `HARNESS_AGENTIC_MAX_PASSAGES` | `16` / `24` | bounds the number of open extraction batches |
+| `HARNESS_EXTRACTION_CONCURRENCY` | `3` | extraction and evidence-review batches sent to the model at once |
+| `HARNESS_AGENTIC_MAX_MCP_SEEDS` | `12` | limits MCP passages entering extraction and heavy-model verification |
 | `HARNESS_AGENT_CONTEXT_TOKENS` | `32768` | the served Granite `max_model_len` in thesis-llm-setup; the agent's conversation is fitted to this window. A larger value makes the first long turn fail before the harness learns the real limit |
 | `LLM_STATUS_URL` | `http://127.0.0.1:8010/v1/status` | thesis-llm-setup status API; the harness defers heavy calls when Heavy is saturated |
 
@@ -61,16 +62,19 @@ Open `http://127.0.0.1:25173` on the laptop.
 
 ## 2. What to show
 
-No typing is needed. The start screen lists the 30 evaluation questions (nlp01-nlp30, the same
-list as **Question library** under the question box). Hover a question to run it with **Fast**,
+No typing is needed. The start screen lists the 60 evaluation questions (nlp01-nlp30 and nlp32-nlp61,
+the same list as **Question library** under the question box). Hover a question to run it with **Fast**,
 **Adaptive**, **Agentic** or **Compare**; click its text to put it in the box and edit it first.
 Filter by any word. The list comes from `HARNESS_QUESTION_SETS` (default
-`question_library_2025.json`); set `HARNESS_QUESTION_EXTRAS=true` to also list gold candidates and
+`question_library_2025.json,question_library_2025_b.json`); set `HARNESS_QUESTION_EXTRAS=true` to also list gold candidates and
 recent runs.
 
 The corpus has 337 DBLP-verified papers: the original 37, 150 ACL 2025 long
 papers, and 150 EMNLP 2025 main papers. The evaluation questions are
-`datasets/question_library_2025.json`; `datasets/question_matrix_20.json` and `corpus_10.json` stay
+`datasets/question_library_2025.json` (nlp01-nlp30, mostly one paper each) and
+`datasets/question_library_2025_b.json` (nlp32-nlp61: corpus-wide questions over many papers,
+professor-style ambiguous ones, and more questions answered from DBLP facts; check them with
+`uv run python scripts/question_coverage.py` before building gold); `datasets/question_matrix_20.json` and `corpus_10.json` stay
 available through `HARNESS_QUESTION_SETS`. Several rows of the table below (the `q..` questions) come
 from `question_matrix_20.json`: add it to `HARNESS_QUESTION_SETS` to list them, or type them.
 

@@ -307,8 +307,8 @@ structure, and verification roles call them over one session. Complete tool-call
 records are persisted as `tool_calls.jsonl`; compact events are streamed and
 written to `trace.json`; Langfuse receives one child observation per tool call.
 MCP can page through the corpus with a page size of 50. For live response time,
-Adaptive sends at most 16 passages and Agentic at most 12 passages into open
-extraction by default; agent-selected passages take priority. The retrieval
+Adaptive sends at most 16 passages and Agentic at most 24 passages into open
+extraction by default (batches run `HARNESS_EXTRACTION_CONCURRENCY`, 3, at a time); agent-selected passages take priority. The retrieval
 artifact records how many lower-priority passages were deferred. These limits
 can be changed with `HARNESS_ADAPTIVE_MAX_PASSAGES` and
 `HARNESS_AGENTIC_MAX_PASSAGES`.

@@ -314,6 +314,31 @@ class FactAnswers:
                 triples, f"{header} [{', '.join(sorted({item.source_id for item in triples}))}]:\n" + "\n".join(lines)
             )
 
+        if op == "paper_citation_counts":
+            aggregate = self.corpus.aggregate(
+                "count_incoming_citations", top_k=1 if plan.rank == "top" else None,
+                min_count=None if plan.rank == "top" else (plan.min_papers or 1),
+            )
+            chosen = [item for item in aggregate["items"] if item["count"] > 0]
+            if not chosen:
+                raise CorpusAbsent("No indexed paper is cited by another indexed paper.",
+                                   "citation_index", len(self.corpus.references))
+            by_reference = {str(row["reference_id"]): row for row in self.corpus.references}
+            triples, lines = [], []
+            for item in chosen:
+                triples += [self._citation_triple(by_reference[ref]) for ref in item["reference_ids"]]
+                noun = "citing paper" if item["count"] == 1 else "citing papers"
+                lines.append(f"{item['title'] or item['paper_id']} ({item['count']} {noun})")
+                self._computed.append({
+                    "label": f"{item['count']} {noun}",
+                    "operation": "count distinct in-corpus papers citing the paper",
+                    "about": {"role": "subject", "value": self._iri(item["paper_id"])},
+                    "support": [{"p": "cites", "o": self._iri(item["paper_id"])}],
+                })
+            header = ("Most cited by other indexed papers: " if plan.rank == "top" else "In-corpus citations: ")
+            return self._fact_answer(triples, header + "; ".join(lines)
+                                     + f" [{', '.join(sorted({t.source_id for t in triples}))}].")
+
         if op == "author_citation_counts":
             aggregate = self.corpus.aggregate(
                 "count_citations_by_author", top_k=1 if plan.rank == "top" else None,

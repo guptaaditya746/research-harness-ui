@@ -125,11 +125,19 @@ The findings (`HARNESS_AGENT_HANDOFF=findings`) carry a statement and the eviden
 ids the session never observed are rejected. Paper readers (`readers.py`, `HARNESS_SUBAGENT_READERS`)
 then read the papers with the most evidence in parallel threads, one structured call each, and add up to
 four findings per paper. Seeds take one passage per supervisor finding first, then the supervisor's
-decision ids, then one passage per paper from the readers (cap `HARNESS_AGENTIC_MAX_MCP_SEEDS`, 6). The
+decision ids, then one passage per paper from the readers (cap `HARNESS_AGENTIC_MAX_MCP_SEEDS`, 12). The
 finding statements also reach schema inference and answer composition as a separate `research_notes`
 field (no ids, so the answer cannot cite a passage no triple uses; the answer verifier does not see
 them). Extraction and review still work only from passages, so a finding becomes a triple only if the
-passage supports it.
+passage supports it. If the answer verifier removes every claim of an answer written with the notes, the
+answer is written once more from the triples alone (a `warn` check says so); if that also fails the run
+ends `answer_unsupported`.
+
+Extraction batches (EDC, 2 passages each) and evidence-review batches (24 candidates each) are sent to
+the model `HARNESS_EXTRACTION_CONCURRENCY` (3) at a time; results keep batch order. Agentic runs read up
+to `HARNESS_AGENTIC_MAX_PASSAGES` (24) passages. When a question names two papers, each gets an even
+share of half that budget before seeds and ranking fill the rest. The answer's SPARQL (`query.rq`) is
+built from the predicates of the cited triples, not written by the model.
 
 ## Prompts and settings
 

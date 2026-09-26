@@ -33,7 +33,7 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | `extraction/edc_define` | Definitions of open relations |
 | `extraction/edc_map` | Mapping open relations onto ontology properties |
 | `extraction/evidence_review` | Keep only supported, relevant triples |
-| `extraction/answer_composition` | Answer and SPARQL from verified triples |
+| `extraction/answer_composition` | Answer from verified triples (v2: no SPARQL; the query is built from the cited triples) |
 | `extraction/answer_verification` | Remove unsupported claims from the draft answer |
 | `extraction/claim_enrichment` | Missing context fields of result claims, with exact quotes |
 | `mcp_corpus/probe` | M1 corpus-only probe (development tool) |

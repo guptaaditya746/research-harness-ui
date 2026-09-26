@@ -67,8 +67,8 @@ test('runs open an artifact inline from the API', async ({ page }) => {
 
 test('question library runs a question without typing', async ({ page }) => {
   await page.goto('/');
-  // Only the 30 evaluation questions (nlp01-nlp30) are listed by default.
-  await expect(page.getByRole('button', { name: /Question library \(30\)/ })).toBeVisible();
+  // Only the 60 evaluation questions (nlp01-nlp30, nlp32-nlp61) are listed by default.
+  await expect(page.getByRole('button', { name: /Question library \(60\)/ })).toBeVisible();
   await page.getByRole('button', { name: /Question library/ }).click();
   const library = page.getByRole('region', { name: 'Question library' });
   await expect(library.getByText('List the authors of FACT-AUDIT.')).toBeVisible();

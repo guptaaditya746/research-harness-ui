@@ -41,6 +41,7 @@ Operation = Literal[
     "authors_in_venues",
     "papers_with_title_term",
     "papers_in_venue",
+    "paper_citation_counts",
     "research",
 ]
 
@@ -64,6 +65,7 @@ MEASURES: dict[str, str] = {
     "authors_in_venues": "authors with a corpus paper in every named venue (DBLP venue facts)",
     "papers_with_title_term": "corpus papers whose title contains the term (DBLP titles)",
     "papers_in_venue": "number of corpus papers published in the venue (DBLP venue facts)",
+    "paper_citation_counts": "number of distinct corpus papers citing each paper (resolved references)",
 }
 
 OPERATIONS: dict[str, str] = {
@@ -89,6 +91,8 @@ OPERATIONS: dict[str, str] = {
                               "\"hallucination\" in the title). term=the word; year=YYYY if the question names one.",
     "papers_in_venue": "Count or list the corpus papers published in one venue (e.g. how many EMNLP 2025 papers). "
                        "venues=[venue].",
+    "paper_citation_counts": "Corpus papers ranked by how many other corpus papers cite them: the most cited "
+                             "paper (rank=top) or those cited by at least N corpus papers (min_papers=N).",
     "research": "Anything that needs the papers' full text: results, numbers, methods, "
                 "mechanisms, limitations, comparisons, opinions, open questions.",
 }
@@ -161,7 +165,7 @@ class QueryPlan(BaseModel):
             return self.year is not None and 1900 <= self.year <= 2100
         if self.operation == "publication_year_extreme":
             return self.extreme is not None
-        if self.operation in {"author_paper_counts", "author_citation_counts"}:
+        if self.operation in {"author_paper_counts", "author_citation_counts", "paper_citation_counts"}:
             return self.rank == "top" or (self.min_papers is not None and self.min_papers >= 1)
         if self.operation == "authors_in_venues":
             return len(self.venues) >= 2

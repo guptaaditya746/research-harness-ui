@@ -1,6 +1,7 @@
 """Run the evaluation questions through a running harness API; agentic runs cover every proposed reading.
 
-    make run-questions                                   # the 30 questions, Agentic, every reading
+    make run-questions                                   # nlp01-30, Agentic, every reading
+    make run-questions ARGS="--questions datasets/question_library_2025_b.json"   # nlp32-61
     make run-questions ARGS="--ids nlp07,nlp27"          # a few questions
     make run-questions ARGS="--path baseline"            # Fast (baseline-enhanced = Adaptive)
     make run-questions ARGS="--parallel 3"               # questions at a time (default 2)

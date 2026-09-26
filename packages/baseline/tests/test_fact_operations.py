@@ -122,3 +122,19 @@ def test_named_papers_share_the_passage_budget(tmp_path: Path) -> None:
                               "plan": QueryPlan(operation="research"), "paper_ids": ["p4", "p5"], "concept": None})
     papers = [row["paper_id"] for row in state["passages"]]
     assert len(papers) == 8 and papers.count("p5") >= 2              # 8 // (2 * 2) = 2 reserved for HydraRAG
+
+
+def test_paper_citation_counts_ranks_the_most_cited_paper(tmp_path: Path) -> None:
+    corpus_store = store(tmp_path)
+    (tmp_path / "references.jsonl").write_text("".join(json.dumps(row) + "\n" for row in [
+        {"reference_id": "e1-ref-1", "paper_id": "e1", "title": "Hallucination Detection", "resolved_paper_id": "a1"},
+        {"reference_id": "e2-ref-1", "paper_id": "e2", "title": "Hallucination Detection", "resolved_paper_id": "a1"},
+        {"reference_id": "e2-ref-2", "paper_id": "e2", "title": "Findings on Retrieval", "resolved_paper_id": "a2"},
+    ]))
+    corpus_store = CorpusStore(tmp_path)
+    runner = Baseline20(corpus_store, ExtractionEngine(RecordedModel(), hand_written_subschema()),
+                        planner=StubPlanner({"q": QueryPlan(operation="paper_citation_counts", rank="top")}))
+    run = runner.run("q", run_id="r-cited")["run"]
+    assert run.readings[0].answer.startswith("Most cited by other indexed papers: Hallucination Detection in Long "
+                                             "Answers (2 citing papers)")
+    assert {triple.p for triple in run.readings[0].triples} == {"cites"}
