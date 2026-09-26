@@ -27,5 +27,8 @@
   {"question": "How does FOCUS use objects and their interactions in its world model for robotic manipulation?", "operation": ["research"], "papers": ["p6"]},
   {"question": "What limitation of learning on physical robots does the DayDreamer paper report?", "operation": ["research"], "papers": ["p28"], "evidence_focus": "limitations"},
   {"question": "Do ACROSSVAM1.0 and Video Prediction Policy establish one shared best metric for robotic video prediction?", "operation": ["research"], "papers": []},
-  {"question": "Who is the best author in the corpus?", "operation": ["research", "author_paper_counts"], "papers": []}
+  {"question": "Who is the best author in the corpus?", "operation": ["research", "author_paper_counts"], "papers": []},
+  {"question": "Which authors have an indexed paper in both ACL 2025 and EMNLP 2025?", "operation": ["authors_in_venues"], "papers": []},
+  {"question": "Which indexed 2025 conference papers have hallucination in their titles?", "operation": ["papers_with_title_term"], "papers": []},
+  {"question": "How many indexed papers were published at EMNLP 2025?", "operation": ["papers_in_venue"], "papers": []}
 ]

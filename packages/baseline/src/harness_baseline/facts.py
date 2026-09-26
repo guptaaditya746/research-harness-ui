@@ -5,6 +5,7 @@ A mixin of ``Baseline20``: methods use the pipeline's state (``self``).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from harness_extraction import (
@@ -16,6 +17,34 @@ from .planner import PaperResolver, QueryPlan
 from .state import (
     CorpusAbsent,
 )
+
+
+def normal_text(text: object) -> str:
+    """Lower-case words and digits joined by single spaces (the same rule as labelling's ``norm``)."""
+    return " ".join(re.findall(r"[a-z0-9]+", str(text).casefold()))
+
+
+def venue_matches(venue_fact: object, paper_year: object, mention: str) -> bool:
+    """Whether a venue fact matches a venue as the question names it.
+
+    The venue name must appear as whole words in the fact ("ACL" matches "ACL 2025", "ACL (1)" and
+    "Findings of ACL", not "NAACL"); a year in the mention must appear in the fact or be the paper's
+    publication year (DBLP often keeps the year out of the venue string). labelling computes gold
+    with the same rule (``structural.venue_matches``).
+    """
+    words = normal_text(mention).split()
+    years = [word for word in words if re.fullmatch(r"(?:19|20)\d{2}", word)]
+    name = " ".join(word for word in words if word not in years)
+    fact = f" {normal_text(venue_fact)} "
+    if name and f" {name} " not in fact:
+        return False
+    return all(f" {year} " in fact or year == str(paper_year or "") for year in years)
+
+
+def title_has_term(title: object, term: str) -> bool:
+    """Word-prefix match: "hallucination" finds "Hallucinations", "manipulation" not "Manipulate"."""
+    wanted = normal_text(term)
+    return bool(wanted) and f" {wanted}" in f" {normal_text(title)}"
 
 
 class FactAnswers:
@@ -157,6 +186,83 @@ class FactAnswers:
                 "support": [{"p": "year", "o": str(plan.year)}],
             })
             return self._fact_answer(triples, f"{len({item.subject for item in triples})} corpus papers were published in {plan.year}: {', '.join(names)} [{', '.join(item.source_id for item in triples)}].")
+
+        year_of = {str(row["subject"]): str(row["object"]) for row in years}
+        venue_rows = [row for row in facts if row["predicate"] == "venue"]
+
+        if op == "papers_with_title_term" and plan.term:
+            titles = [row for row in facts if row["predicate"] == "title"]
+            rows = [row for row in titles if title_has_term(row["object"], plan.term)
+                    and (plan.year is None or year_of.get(str(row["subject"])) == str(plan.year))]
+            scope = f" from {plan.year}" if plan.year is not None else ""
+            if not rows:
+                raise CorpusAbsent(f"No indexed paper{scope} has \"{plan.term}\" in its title.",
+                                   "metadata_facts", len(titles))
+            triples = [self._fact_triple(row) for row in rows]
+            self._computed.append({
+                "label": f"{len(rows)} titles with \"{plan.term}\"",
+                "operation": "filter corpus papers whose title contains the term" + (f" and year is {plan.year}" if scope else ""),
+                "about": {"role": "value", "value": plan.term},
+                "support": [{"p": "title"}],
+            })
+            return self._fact_answer(triples, f"{len(rows)} indexed papers{scope} have \"{plan.term}\" in their title: "
+                                     + "; ".join(str(row["object"]) for row in rows)
+                                     + f" [{', '.join(item.source_id for item in triples)}].")
+
+        if op == "papers_in_venue" and plan.venues:
+            venue = plan.venues[0]
+            rows = [row for row in venue_rows
+                    if venue_matches(row["object"], year_of.get(str(row["subject"])), venue)]
+            if not rows:
+                raise CorpusAbsent(f"No indexed paper has a venue matching {venue}.", "metadata_facts", len(venue_rows))
+            triples = [self._fact_triple(row) for row in rows]
+            papers_found = sorted({str(row["subject"]) for row in rows})
+            self._computed.append({
+                "label": f"{len(papers_found)} papers in {venue}",
+                "operation": "count corpus papers whose venue matches (whole words; year from the venue or the paper)",
+                "about": {"role": "value", "value": venue},
+                "support": [{"p": "venue"}],
+            })
+            names = [self.corpus.paper_title(paper) or paper for paper in papers_found]
+            return self._fact_answer(triples, f"{len(papers_found)} indexed papers were published in {venue}: "
+                                     + "; ".join(names) + f" [{', '.join(item.source_id for item in triples)}].")
+
+        if op == "authors_in_venues" and len(plan.venues) >= 2:
+            author_rows = [row for row in facts if row["predicate"] == "author"]
+            papers_by_venue = {
+                venue: {str(row["subject"]) for row in venue_rows
+                        if venue_matches(row["object"], year_of.get(str(row["subject"])), venue)}
+                for venue in plan.venues
+            }
+            authors_by_venue = {
+                venue: {str(row["object"]) for row in author_rows if str(row["subject"]) in members}
+                for venue, members in papers_by_venue.items()
+            }
+            shared = set.intersection(*authors_by_venue.values())
+            if not shared:
+                raise CorpusAbsent(f"No author has an indexed paper in all of {', '.join(plan.venues)}.",
+                                   "metadata_facts", len(venue_rows))
+            in_scope = set().union(*papers_by_venue.values())
+            rows = [row for row in author_rows if str(row["object"]) in shared and str(row["subject"]) in in_scope]
+            rows += [row for row in venue_rows if str(row["subject"]) in {str(item["subject"]) for item in rows}]
+            triples = [self._fact_triple(row) for row in rows]
+            lines = []
+            for name in sorted(shared):
+                parts = []
+                for venue, members in papers_by_venue.items():
+                    own = sorted(str(row["subject"]) for row in author_rows
+                                 if str(row["object"]) == name and str(row["subject"]) in members)
+                    parts.append(f"{venue}: " + ", ".join(self.corpus.paper_title(paper) or paper for paper in own))
+                lines.append(f"{name} ({'; '.join(parts)})")
+                self._computed.append({
+                    "label": f"in all of {', '.join(plan.venues)}",
+                    "operation": "intersect the authors of the papers in each venue",
+                    "about": {"role": "author", "value": name},
+                    "support": [{"p": "authoredBy", "o": name}, {"p": "venue"}],
+                })
+            return self._fact_answer(
+                triples, f"{len(shared)} authors have indexed papers in all of {', '.join(plan.venues)} "
+                         f"[{', '.join(sorted({item.source_id for item in triples}))}]:\n" + "\n".join(lines))
 
         if op == "publication_year_extreme" and plan.extreme and years:
             pick = min if plan.extreme == "earliest" else max

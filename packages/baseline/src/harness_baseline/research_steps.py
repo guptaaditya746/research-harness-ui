@@ -8,9 +8,11 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from harness_config import settings
 from harness_extraction import (
     AnswerResult,
     ExtractedTriple,
+    parallel_map,
 )
 from harness_extraction.claims import (
     CHANGE,
@@ -65,19 +67,26 @@ class ResearchSteps:
             reports = []
             # Small evidence batches keep the structured response focused and
             # avoid a single long generation blocking the whole run.
+            # Batches run in parallel (HARNESS_EXTRACTION_CONCURRENCY); results keep batch order.
             batch_size = 2
-            batch_count = (len(state["passages"]) + batch_size - 1) // batch_size
-            for start in range(0, len(state["passages"]), max(1, batch_size)):
-                batch_no = start // batch_size + 1
-                self._emit(
-                    "Extracting passages",
-                    f"batch {batch_no}/{batch_count} · {min(batch_size, len(state['passages']) - start)} passages",
-                )
-                extraction, batch_reports = self.extraction.extract_edc(
-                    self._research_question(state), state["inferred"], state["passages"][start : start + batch_size]
-                )
+            batches = [state["passages"][start : start + batch_size]
+                       for start in range(0, len(state["passages"]), batch_size)]
+            workers = min(settings().extraction_concurrency, max(1, len(batches)))
+            question = self._research_question(state)
+            self._emit("Extracting passages", f"{len(state['passages'])} passages in {len(batches)} batches, "
+                                              f"{workers} at a time")
+
+            def run_batch(numbered: tuple[int, list[dict[str, Any]]]) -> tuple[Any, list[dict[str, Any]]]:
+                batch_no, batch = numbered
+                outcome = self.extraction.extract_edc(question, state["inferred"], batch)
+                self._emit("Extracting passages", f"batch {batch_no}/{len(batches)} done · "
+                                                  f"{len(outcome[0].triples)} triples")
+                return outcome
+
+            results = parallel_map(run_batch, list(enumerate(batches, start=1)), workers)
+            for batch_no, (batch, (extraction, batch_reports)) in enumerate(zip(batches, results, strict=True), start=1):
                 extracted.extend(extraction.triples)
-                reports.append({"batch": batch_no, "passages": len(state["passages"][start : start + batch_size]), "edc": batch_reports})
+                reports.append({"batch": batch_no, "passages": len(batch), "edc": batch_reports})
         elif self.enhanced:
             extracted, reports = self.extraction.extract_batches(
                 self._research_question(state), state["inferred"], state["passages"]
@@ -219,10 +228,14 @@ class ResearchSteps:
                 )
                 return {"answer": answer, "extracted": selected}
         notes = self._research_notes(state)
+        report: dict[str, Any] = {}
         answer = self.extraction.answer(
             self._research_question(state), state["inferred"], state["extracted"],
-            verify=self.refine, verifier=self.refinement_model, **({"notes": notes} if notes else {}),
+            verify=self.refine, verifier=self.refinement_model, **({"notes": notes, "report": report} if notes else {}),
         )
+        if report.get("retried_without_notes"):
+            self._check("answer composition", "warn", "the verifier removed every claim of the answer written with "
+                        "research notes; answered from the triples alone")
         try:
             checked_query = sparql_check(answer.sparql, self.extraction.schema)
         except ValueError:

@@ -113,4 +113,24 @@ def run_interruptible(call: Callable[[], Any], cancel: threading.Event | None = 
                 raise ModelFailure(reason) from None
 
 
-__all__ = ["bounded_timeout", "call_budget", "call_interrupted", "phase_budget", "run_interruptible"]
+def parallel_map(function: Callable[[Any], Any], items: list[Any], workers: int) -> list[Any]:
+    """``[function(item) for item in items]`` with up to ``workers`` items at a time, results in input order.
+
+    Each item runs in a copy of the caller's context, so the run's deadline, stop flag and model-call
+    labels apply inside the workers. The first failure (in input order) is raised after the other
+    started items finish; items not yet started are cancelled. ``workers <= 1`` runs them one by one.
+    """
+    if workers <= 1 or len(items) <= 1:
+        return [function(item) for item in items]
+    pool = ThreadPoolExecutor(max_workers=min(workers, len(items)), thread_name_prefix="harness-batch")
+    try:
+        futures = [pool.submit(copy_context().run, function, item) for item in items]
+        return [future.result() for future in futures]
+    except BaseException:
+        pool.shutdown(wait=True, cancel_futures=True)
+        raise
+    finally:
+        pool.shutdown(wait=True)
+
+
+__all__ = ["bounded_timeout", "call_budget", "call_interrupted", "parallel_map", "phase_budget", "run_interruptible"]

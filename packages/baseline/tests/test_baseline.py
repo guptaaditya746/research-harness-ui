@@ -263,7 +263,7 @@ def test_preprint_and_journal_version_count_as_one_work(tmp_path: Path) -> None:
     assert [row["subject"] for row in runner._distinct_works(rows)] == ["p4", "p6"]
 
 
-def test_malformed_model_query_uses_verified_triple_predicate(tmp_path: Path) -> None:
+def test_the_graph_query_is_built_from_the_cited_triples_not_the_model(tmp_path: Path) -> None:
     class MalformedQueryModel:
         def complete_json(self, system: str, user: str) -> dict:
             return {
@@ -283,9 +283,10 @@ def test_malformed_model_query_uses_verified_triple_predicate(tmp_path: Path) ->
 
     answer = runner._query_answer(state)["answer"]
 
-    assert "<https://harness.local/schema#reportsMetric>" in answer.sparql
+    # The model's malformed query is ignored: the query selects the cited triples' predicates.
+    assert "?subject hrn:reportsMetric ?object" in answer.sparql and "p4 reportsMetric" not in answer.sparql
     assert "41.5%" in answer.answer
-    assert any(row.action == "Repairing graph query" for row in runner.trace)
+    assert not any(row.action == "Repairing graph query" for row in runner.trace)
 
 
 def test_year_and_venue_use_verified_corpus_facts(tmp_path: Path) -> None:

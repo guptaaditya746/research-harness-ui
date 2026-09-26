@@ -183,6 +183,22 @@ class RetrievalStep:
             by_id = {str(row["passage_id"]): row for row in rows}
             selected: list[dict[str, Any]] = []
             used: set[str] = set()
+            # A question that names several papers (a comparison) gets an even share for each named
+            # paper first: half the budget, split between them, seeds of that paper before its best-
+            # ranked passages. Otherwise seeds of one paper could fill the budget and drop the other.
+            present = {str(row["paper_id"]) for row in rows}
+            named = [paper for paper in dict.fromkeys(str(value) for value in mentioned_papers) if paper in present]
+            if len(named) >= 2:
+                share = max(1, self.max_passages // (2 * len(named)))
+                seed_rank = {source_id: index for index, source_id in enumerate(self.seed_passage_ids)}
+                for paper_id in named:
+                    own = [row for row in rows if str(row["paper_id"]) == paper_id]
+                    own.sort(key=lambda row: (str(row["passage_id"]) not in seed_rank,
+                                              seed_rank.get(str(row["passage_id"]), 0)))
+                    for row in own[:share]:
+                        if len(selected) < self.max_passages:
+                            selected.append(row)
+                            used.add(str(row["passage_id"]))
             for source_id in self.seed_passage_ids:
                 if source_id in by_id and source_id not in used and len(selected) < self.max_passages:
                     selected.append(by_id[source_id])

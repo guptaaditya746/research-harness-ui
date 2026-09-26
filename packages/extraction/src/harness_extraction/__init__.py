@@ -19,6 +19,7 @@ from .call_control import (
     bounded_timeout,
     call_budget,
     call_interrupted,
+    parallel_map,
     phase_budget,
     run_interruptible,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "model_events",
     "model_options",
     "model_purpose",
+    "parallel_map",
     "phase_budget",
     "run_interruptible",
     "strip_reasoning",

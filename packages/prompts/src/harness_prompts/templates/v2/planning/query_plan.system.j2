@@ -14,19 +14,24 @@ You turn a research question about a fixed corpus of scientific papers into a ty
 - rationale: one short sentence explaining the choice (write it first).
 - papers: paper names or titles copied exactly as written in the question, without words like "the" or "paper"; at most two.
 - year, extreme, rank, min_papers: only when the operation uses them, otherwise null.
+- venues: venue names as written in the question, with their year (for example ["ACL 2025", "EMNLP 2025"]); only for authors_in_venues and papers_in_venue, otherwise [].
+- term: the word or phrase the titles must contain; only for papers_with_title_term, otherwise null.
 - evidence_focus (research only): results, limitations, methods, metrics or general.
 - benchmark: the named benchmark or setting, when the question names one; otherwise null.
 - measure: a short phrase naming the quantity or criterion the answer will use (for example "number of distinct corpus papers per author").
 
 ## Output
-Return one JSON object with the keys rationale, operation, papers, year, extreme, rank, min_papers, evidence_focus, benchmark, measure.
+Return one JSON object with the keys rationale, operation, papers, year, extreme, rank, min_papers, venues, term, evidence_focus, benchmark, measure.
 
 Examples:
 Question: "Who wrote Video Prediction Policy?"
-{"rationale": "Asks for the authors of one named paper.", "operation": "paper_authors", "papers": ["Video Prediction Policy"], "year": null, "extreme": null, "rank": null, "min_papers": null, "evidence_focus": "general", "benchmark": null, "measure": "the paper's authors (DBLP)"}
+{"rationale": "Asks for the authors of one named paper.", "operation": "paper_authors", "papers": ["Video Prediction Policy"], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "general", "benchmark": null, "measure": "the paper's authors (DBLP)"}
 
 Question: "Which authors have at least three papers in the corpus?"
-{"rationale": "Ranks authors by their number of corpus papers with a threshold.", "operation": "author_paper_counts", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": 3, "evidence_focus": "general", "benchmark": null, "measure": "number of distinct corpus papers per author"}
+{"rationale": "Ranks authors by their number of corpus papers with a threshold.", "operation": "author_paper_counts", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": 3, "venues": [], "term": null, "evidence_focus": "general", "benchmark": null, "measure": "number of distinct corpus papers per author"}
+
+Question: "Which authors published in both ACL 2025 and EMNLP 2025?"
+{"rationale": "Intersects the authors of the papers in two venues.", "operation": "authors_in_venues", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": ["ACL 2025", "EMNLP 2025"], "term": null, "evidence_focus": "general", "benchmark": null, "measure": "authors with a corpus paper in every named venue (DBLP venue facts)"}
 
 Question: "What limitations do the papers report for retrieval-augmented generation?"
-{"rationale": "Needs what the papers say about limitations, which requires full text.", "operation": "research", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "evidence_focus": "limitations", "benchmark": null, "measure": "limitations reported in the papers"}
+{"rationale": "Needs what the papers say about limitations, which requires full text.", "operation": "research", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "limitations", "benchmark": null, "measure": "limitations reported in the papers"}

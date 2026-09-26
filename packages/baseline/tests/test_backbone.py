@@ -189,3 +189,39 @@ def test_an_answer_the_verifier_empties_is_answer_unsupported_not_schema_rejecte
     inferred = SchemaInference(label="Tasks", gloss="Which task", classes=["Paper"], properties=["addresses"])
     with pytest.raises(UnsupportedAnswer, match=r"verifier removed 1 claims.*1 triples available"):
         engine.answer(QUESTION, inferred, triples, verify=True, verifier=Verifier())
+
+
+def test_an_answer_emptied_with_notes_is_written_again_from_the_triples_alone() -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference
+
+    class Composer:
+        def __init__(self) -> None:
+            self.payloads: list[dict] = []
+
+        def complete_json(self, system: str, user: str) -> dict:
+            self.payloads.append(json.loads(user))
+            return {"answer": "p4 addresses robot learning [p4-abstract].", "cited_source_ids": ["p4-abstract"]}
+
+    class Verifier:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            self.calls += 1
+            if self.calls == 1:
+                return {"removed_claims": ["It beats all baselines."], "supported": False, "answer": "",
+                        "cited_source_ids": []}
+            return {"removed_claims": [], "supported": True, "answer": "p4 addresses robot learning [p4-abstract].",
+                    "cited_source_ids": ["p4-abstract"]}
+
+    composer = Composer()
+    engine = ExtractionEngine(composer, hand_written_subschema())
+    triples = [ExtractedTriple(subject="p4", predicate="usesDataset", object="robot learning",
+                               source_id="p4-abstract", evidence="for robot learning")]
+    inferred = SchemaInference(label="Tasks", gloss="Which task", classes=["Paper"], properties=["usesDataset"])
+    report: dict = {}
+    result = engine.answer(QUESTION, inferred, triples, verify=True, verifier=Verifier(),
+                           notes=["It beats all baselines."], report=report)
+    assert report == {"retried_without_notes": True}
+    assert "research_notes" in composer.payloads[0] and "research_notes" not in composer.payloads[1]
+    assert result.cited_source_ids == ["p4-abstract"] and "hrn:usesDataset" in result.sparql

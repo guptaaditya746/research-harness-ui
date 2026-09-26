@@ -190,7 +190,8 @@ def funnel(folder: Path) -> dict[str, Any] | None:
     for entry in batches if isinstance(batches, list) else []:
         if not isinstance(entry, dict):
             continue
-        passages += int(entry.get("passages") or 0)
+        count = entry.get("passages") or 0                  # EDC batches: a count; Adaptive batches: the ids
+        passages += len(count) if isinstance(count, list) else int(count)
         for stage in entry.get("edc") or []:
             if stage.get("stage") == "extract":
                 opened += int(stage.get("open_triples") or 0)

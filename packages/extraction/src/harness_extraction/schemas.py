@@ -66,7 +66,9 @@ class EDCDefinitionResult(BaseModel):
 
 class AnswerResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    sparql: str
+    # Built by the engine from the cited triples (``ExtractionEngine.answer_query``); a query the
+    # model still writes (v1 prompts) is replaced. Letting the model write it caused repetition loops.
+    sparql: str = ""
     answer: str
     cited_source_ids: list[str]
 

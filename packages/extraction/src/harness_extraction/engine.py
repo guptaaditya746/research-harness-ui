@@ -26,6 +26,7 @@ from harness_semantic import (
 )
 from rdflib import OWL, RDF, RDFS, XSD, Literal, URIRef
 
+from .call_control import parallel_map
 from .errors import ModelFailure, UnsupportedAnswer
 from .events import emit_model_event, labelled
 from .model_client import ModelClient, complete
@@ -430,14 +431,18 @@ class ExtractionEngine:
             raise ValueError("batch_size must be positive")
         merged: dict[tuple[str, str, str], ExtractedTriple] = {}
         reports: list[dict[str, Any]] = []
-        for batch_no, start in enumerate(range(0, len(passages), batch_size), start=1):
-            batch = passages[start : start + batch_size]
+        batches = [passages[start : start + batch_size] for start in range(0, len(passages), batch_size)]
+
+        def run_batch(batch: list[dict[str, Any]]) -> ExtractionResult | ValueError:
             try:
-                result = self.extract(question, inferred, [
-                    {**row, "text": row["text"][:text_limit]} for row in batch
-                ])
+                return self.extract(question, inferred, [{**row, "text": row["text"][:text_limit]} for row in batch])
             except ValueError as exc:
-                reports.append({"batch": batch_no, "passages": [p["passage_id"] for p in batch], "error": str(exc)})
+                return exc
+
+        outcomes = parallel_map(run_batch, batches, settings().extraction_concurrency)
+        for batch_no, (batch, result) in enumerate(zip(batches, outcomes, strict=True), start=1):
+            if isinstance(result, ValueError):
+                reports.append({"batch": batch_no, "passages": [p["passage_id"] for p in batch], "error": str(result)})
                 continue
             reports.append({"batch": batch_no, "passages": [p["passage_id"] for p in batch], "triples": len(result.triples)})
             for triple in result.triples:
@@ -472,10 +477,9 @@ class ExtractionEngine:
             key = (item.subject.casefold().strip(), item.predicate, item.object.casefold().strip())
             deduped.setdefault(key, item)
         candidates = list(deduped.values())
-        kept: list[ExtractedTriple] = []
-        calls = 0
-        for start in range(0, len(candidates), batch_size):
-            batch = candidates[start : start + batch_size]
+        batches = [candidates[start : start + batch_size] for start in range(0, len(candidates), batch_size)]
+
+        def review(batch: list[ExtractedTriple]) -> list[ExtractedTriple]:
             payload = {
                 "question": question,
                 "candidates": [
@@ -489,13 +493,16 @@ class ExtractionEngine:
             }
             decision = complete(reviewer or self.model,
                                 render("extraction/evidence_review", payload, ensure_ascii=False))
-            calls += 1
             selected = decision.get("keep_ids", []) if isinstance(decision, dict) else []
             if not isinstance(selected, list):
                 raise TypeError("triple reviewer must return keep_ids as a list")
             indices = {value for value in selected if type(value) is int and 0 <= value < len(batch)}
-            kept.extend(item for i, item in enumerate(batch) if i in indices)
-        return kept, {"candidates": len(triples), "unique": len(candidates), "kept": len(kept), "model_calls": calls}
+            return [item for i, item in enumerate(batch) if i in indices]
+
+        # Review batches run in parallel (HARNESS_EXTRACTION_CONCURRENCY); kept triples keep their order.
+        kept = [item for part in parallel_map(review, batches, settings().extraction_concurrency) for item in part]
+        return kept, {"candidates": len(triples), "unique": len(candidates), "kept": len(kept),
+                      "model_calls": len(batches)}
 
     @labelled("answer composition and verification")
     def answer(
@@ -506,8 +513,37 @@ class ExtractionEngine:
         verify: bool = False,
         verifier: ModelClient | None = None,
         notes: list[str] | None = None,
+        report: dict[str, Any] | None = None,
     ) -> AnswerResult:
-        """``notes`` (agentic runs) go to composition only; the verifier sees the plain question."""
+        """``notes`` (agentic runs) go to composition only; the verifier sees the plain question.
+
+        When the verifier removes every claim of an answer written with research notes, the answer
+        is written once more from the triples alone (the notes are unsourced and can lead the model
+        to claims no triple states). ``report["retried_without_notes"]`` records that it happened.
+        """
+        try:
+            return self._compose(question, inferred, triples, verify, verifier, notes)
+        except UnsupportedAnswer as first:
+            if not notes:
+                raise
+            emit_model_event("Answer unsupported", "writing the answer again from the triples only, "
+                                                   "without the research notes")
+            if report is not None:
+                report["retried_without_notes"] = True
+            try:
+                return self._compose(question, inferred, triples, verify, verifier, None)
+            except UnsupportedAnswer as second:
+                raise UnsupportedAnswer(f"{first}; again without research notes: {second}") from second
+
+    def _compose(
+        self,
+        question: str,
+        inferred: SchemaInference,
+        triples: list[ExtractedTriple],
+        verify: bool,
+        verifier: ModelClient | None,
+        notes: list[str] | None,
+    ) -> AnswerResult:
         payload: dict[str, Any] = {
             "question": question,
             "classes": inferred.classes,
@@ -525,6 +561,7 @@ class ExtractionEngine:
             emit_model_event("Answer too long", "retrying answer composition with a shorter format")
             reply = complete(self.model, render("extraction/answer_composition", payload, brief=True))
         result = AnswerResult.model_validate(reply)
+        result = result.model_copy(update={"sparql": self.answer_query(triples, result.cited_source_ids)})
         sources = {triple.source_id for triple in triples}
         if not set(result.cited_source_ids) <= sources:
             raise UnsupportedAnswer(
@@ -551,11 +588,31 @@ class ExtractionEngine:
             verified_sources = reviewed.get("cited_source_ids", [])
             if not isinstance(verified_sources, list) or not verified_sources or not set(verified_sources) <= sources:
                 raise UnsupportedAnswer("verified answer lacks valid triple provenance")
+            cited = [str(source) for source in verified_sources]
             result = result.model_copy(update={
-                "answer": str(reviewed["answer"]),
-                "cited_source_ids": [str(source) for source in verified_sources],
+                "answer": str(reviewed["answer"]), "cited_source_ids": cited,
+                "sparql": self.answer_query(triples, cited),
             })
         return result
+
+    def answer_query(self, triples: list[ExtractedTriple], cited: list[str]) -> str:
+        """SPARQL that selects the triples behind the answer: one pattern per predicate they use.
+
+        Built from the cited triples (all triples when none is cited), so the query always matches
+        the answer and uses only subschema terms.
+        """
+        chosen = [triple for triple in triples if triple.source_id in set(cited)] or list(triples)
+        iris: list[str] = []
+        for triple in chosen:
+            iri = self.property_names.get(triple.predicate)
+            if iri is not None and str(iri) not in iris:
+                iris.append(str(iri))
+        head = f"PREFIX hrn: <{HRN}>\n"
+        if not iris:
+            return head + "SELECT ?subject ?predicate ?object WHERE { ?subject ?predicate ?object . }"
+        names = [f"hrn:{iri[len(str(HRN)):]}" if iri.startswith(str(HRN)) else f"<{iri}>" for iri in iris]
+        branches = [f"{{ ?subject {name} ?object . BIND({name} AS ?predicate) }}" for name in names]
+        return head + "SELECT ?subject ?predicate ?object WHERE {\n  " + "\n  UNION ".join(branches) + "\n}"
 
     def axioms(self, inferred: SchemaInference) -> list[tuple[str, str, str]]:
         rows = []

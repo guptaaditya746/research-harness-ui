@@ -38,6 +38,9 @@ Operation = Literal[
     "publication_year_extreme",
     "author_paper_counts",
     "author_citation_counts",
+    "authors_in_venues",
+    "papers_with_title_term",
+    "papers_in_venue",
     "research",
 ]
 
@@ -58,6 +61,9 @@ MEASURES: dict[str, str] = {
     "publication_year_extreme": "earliest or latest publication year among corpus papers",
     "author_paper_counts": "number of distinct corpus papers per author (a preprint and its journal version count once)",
     "author_citation_counts": "number of distinct corpus papers citing each author's papers",
+    "authors_in_venues": "authors with a corpus paper in every named venue (DBLP venue facts)",
+    "papers_with_title_term": "corpus papers whose title contains the term (DBLP titles)",
+    "papers_in_venue": "number of corpus papers published in the venue (DBLP venue facts)",
 }
 
 OPERATIONS: dict[str, str] = {
@@ -77,6 +83,12 @@ OPERATIONS: dict[str, str] = {
                            "the most papers (rank=top) or with at least N papers (min_papers=N).",
     "author_citation_counts": "Authors ranked by how often other corpus papers cite their papers: the most "
                               "cited authors (rank=top) or those with at least N citing papers (min_papers=N).",
+    "authors_in_venues": "Authors who have a corpus paper in each of two or more venues (e.g. both ACL 2025 and "
+                         "EMNLP 2025). venues=[venue, venue, ...].",
+    "papers_with_title_term": "Corpus papers whose title contains a word or phrase (e.g. papers with "
+                              "\"hallucination\" in the title). term=the word; year=YYYY if the question names one.",
+    "papers_in_venue": "Count or list the corpus papers published in one venue (e.g. how many EMNLP 2025 papers). "
+                       "venues=[venue].",
     "research": "Anything that needs the papers' full text: results, numbers, methods, "
                 "mechanisms, limitations, comparisons, opinions, open questions.",
 }
@@ -95,6 +107,8 @@ class QueryPlan(BaseModel):
     extreme: Literal["earliest", "latest"] | None = None
     rank: Literal["top"] | None = None
     min_papers: int | None = None
+    venues: list[str] = Field(default_factory=list)
+    term: str | None = None
     evidence_focus: EvidenceFocus = "general"
     benchmark: str | None = None
     measure: str | None = None
@@ -113,6 +127,21 @@ class QueryPlan(BaseModel):
         if isinstance(value, str):
             value = [value]
         return [str(item).strip() for item in value if str(item).strip()][:2]
+
+    @field_validator("venues", mode="before")
+    @classmethod
+    def _clean_venues(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        return [str(item).strip() for item in value if str(item).strip()][:4]
+
+    @field_validator("term", mode="before")
+    @classmethod
+    def _clean_term(cls, value: Any) -> str | None:
+        text = str(value or "").strip().strip("\"'")
+        return text or None
 
     @field_validator("evidence_focus", mode="before")
     @classmethod
@@ -134,6 +163,12 @@ class QueryPlan(BaseModel):
             return self.extreme is not None
         if self.operation in {"author_paper_counts", "author_citation_counts"}:
             return self.rank == "top" or (self.min_papers is not None and self.min_papers >= 1)
+        if self.operation == "authors_in_venues":
+            return len(self.venues) >= 2
+        if self.operation == "papers_in_venue":
+            return len(self.venues) >= 1
+        if self.operation == "papers_with_title_term":
+            return self.term is not None and (self.year is None or 1900 <= self.year <= 2100)
         return True
 
     @classmethod
