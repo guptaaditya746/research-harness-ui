@@ -204,8 +204,11 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
     inferred_props = [name for name in reading.properties if predicate_origin(name, vocab) == "invented"]
     inferred_classes = [name for name in reading.classes if name.casefold() not in vocab.seed_classes]
     root = folder / run.id if folder is not None else None
+    # Metadata questions are answered from verified DBLP facts; research questions from passages.
+    answered_from_facts = any(check.name == "verified facts" and check.status == "pass" for check in run.checks)
     return {
         "id": run.id, "path": run.path, "status": run.status, "question": run.question,
+        "kind": "facts" if answered_from_facts else "research",
         "reading": reading.label,
         "nodes": len(touched), "edges": len(edges), "fact_edges": len(facts),
         "claim_edges": sum(edge.kind == "claim" for edge in edges),
@@ -239,13 +242,19 @@ SUMMARY_FIELDS = ("fact_edges", "dblp_share", "invented_share", "pieces", "large
 
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Medians per path (and over all runs) of the main numbers."""
+    """Medians per kind (research / facts) and path, and per kind over all paths.
+
+    The two kinds are kept apart: metadata answers are DBLP facts by construction, and mixing them
+    in would hide how research answers look.
+    """
     out = []
-    for path in [*sorted({row["path"] for row in rows}), "all"]:
-        group = [row for row in rows if path == "all" or row["path"] == path]
+    groups = [(kind, path) for kind in ("research", "facts")
+              for path in [*sorted({row["path"] for row in rows if row.get("kind") == kind}), "all"]]
+    for kind, path in groups:
+        group = [row for row in rows if row.get("kind") == kind and (path == "all" or row["path"] == path)]
         if not group:
             continue
-        summary: dict[str, Any] = {"path": path, "runs": len(group)}
+        summary: dict[str, Any] = {"kind": kind, "path": path, "runs": len(group)}
         for name in SUMMARY_FIELDS:
             values = [row[name] for row in group if row.get(name) is not None]
             summary[name] = round(median(values), 3) if values else None

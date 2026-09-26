@@ -50,8 +50,9 @@ def test_shape_counts_mix_connectivity_dead_ends_and_duplicates() -> None:
     assert row["near_duplicate_nodes"] == 2                    # "attack task" and "attack tasks"
     assert row["invented_properties"] == ["evaluatesAttack", "findsLimitation"]
     assert row["invented_classes"] == ["Attack"]
+    assert row["kind"] == "research"
     [agentic, everything] = summarize([row])
-    assert agentic["path"] == "agentic" and everything["runs"] == 1
+    assert (agentic["kind"], agentic["path"]) == ("research", "agentic") and everything["runs"] == 1
 
 
 def test_older_runs_without_a_graph_use_their_triples() -> None:
@@ -63,3 +64,14 @@ def test_older_runs_without_a_graph_use_their_triples() -> None:
     run = Run(id="r-2", startedAt="2026-01-01T00:00:00Z", durationS=1, question="q", path="baseline",
               budget="fast", status="answered", readings=[reading], chosenReading=0)
     assert shape(run)["dblp_share"] == 1.0
+
+
+def test_answers_from_verified_facts_are_their_own_kind() -> None:
+    from harness_schema.models import Check
+
+    run = run_with(AnswerGraph(nodes=[node("paper:a", "paper"), node("author:x", "author")],
+                               edges=[edge("paper:a", "author:x", "authoredBy")]), [], [])
+    run = run.model_copy(update={"checks": [Check(name="verified facts", status="pass")]})
+    row = shape(run)
+    assert row["kind"] == "facts"
+    assert [(item["kind"], item["path"]) for item in summarize([row])] == [("facts", "agentic"), ("facts", "all")]

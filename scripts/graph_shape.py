@@ -65,13 +65,13 @@ def main(
         return
 
     table = Table(title=f"Answer graphs of {len(rows)} answered runs (chosen reading)")
-    for column in ("Run", "Path", "Facts", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit", "Stmt",
-                   "Dup", "Export"):
-        table.add_column(column, justify="left" if column in {"Run", "Path"} else "right",
+    for column in ("Run", "Kind", "Path", "Facts", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit",
+                   "Stmt", "Dup", "Export"):
+        table.add_column(column, justify="left" if column in {"Run", "Kind", "Path"} else "right",
                          no_wrap=column == "Run")
     for row in rows:
         export = row.get("export") or {}
-        table.add_row(row["id"], PATHS.get(row["path"], row["path"]), str(row["fact_edges"]),
+        table.add_row(row["id"], row["kind"], PATHS.get(row["path"], row["path"]), str(row["fact_edges"]),
                       _pct(row["dblp_share"]), _pct(row["invented_share"]), str(row["pieces"]),
                       _pct(row["largest_piece_share"]), _pct(row["paper_pairs_connected"]),
                       _pct(row["invented_dead_end_share"]), _pct(row["literal_object_share"]),
@@ -79,19 +79,21 @@ def main(
                       str(export.get("triples", "–")))
     console.print(table)
 
-    summary = Table(title="Medians per path")
-    for column in ("Path", "Runs", "Facts", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit", "Stmt",
+    summary = Table(title="Medians per kind and path (research = answered from passages, facts = from DBLP)")
+    for column in ("Kind", "Path", "Runs", "Facts", "DBLP", "Inv", "Pieces", "Big", "Pairs", "Dead", "Lit", "Stmt",
                    "New classes"):
-        summary.add_column(column, justify="left" if column == "Path" else "right")
+        summary.add_column(column, justify="left" if column in {"Kind", "Path"} else "right")
     for item in result["summary"]:
-        summary.add_row(PATHS.get(item["path"], item["path"]), str(item["runs"]), _num(item["fact_edges"]),
+        summary.add_row(item["kind"], PATHS.get(item["path"], item["path"]), str(item["runs"]),
+                        _num(item["fact_edges"]),
                         _pct(item["dblp_share"]), _pct(item["invented_share"]), _num(item["pieces"]),
                         _pct(item["largest_piece_share"]), _pct(item["paper_pairs_connected"]),
                         _pct(item["invented_dead_end_share"]), _pct(item["literal_object_share"]),
                         _pct(item["statement_object_share"]), str(item["runs_with_invented_classes"]))
     console.print(summary)
     console.print(f"[dim]{LEGEND} New classes = runs that invented at least one class.[/dim]")
-    everything = result["summary"][-1]
+    everything = next((item for item in result["summary"] if item["kind"] == "research" and item["path"] == "all"),
+                      result["summary"][-1])
     if everything["top_invented_properties"]:
         console.print("Most invented properties in the runs' schemas: " + ", ".join(
             f"{name} ({count})" for name, count in everything["top_invented_properties"]))
