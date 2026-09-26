@@ -71,6 +71,9 @@ class AnswerResult(BaseModel):
     sparql: str = ""
     answer: str
     cited_source_ids: list[str]
+    # Set by the engine after verification: every draft sentence with its sources and verdict
+    # (``harness_schema.models.AnswerSentence`` fields). Empty when the answer was not verified.
+    sentences: list[dict[str, Any]] = Field(default_factory=list)
 
 
 __all__ = [

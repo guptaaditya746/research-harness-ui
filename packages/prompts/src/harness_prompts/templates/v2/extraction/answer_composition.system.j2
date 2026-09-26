@@ -12,6 +12,12 @@ You write the final answer to a research question from verified knowledge-graph 
 - Put the supporting source_id in square brackets right after each claim, e.g. "... introduces MethodX [p99-abstract]."
 - Plain prose: no headings, bullet lists or preamble such as "Based on the evidence".
 
+{% if repair is defined and repair %}
+## Your previous answer was rejected
+A checker found no triple that states these, so leave them out: {% for item in repair %}"{{ item }}"{% if not loop.last %}; {% endif %}{% endfor %}.
+Write the answer again from the triples alone. If they answer only part of the question, say which part.
+
+{% endif %}
 {% if brief is defined and brief %}
 ## Keep it short
 Your previous reply was cut off at the output limit. This time: at most 3 sentences (about 80 words) naming the main points, at most 8 cited source_ids, and nothing outside the JSON object.

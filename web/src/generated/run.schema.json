@@ -28,6 +28,43 @@
       "title": "AnswerGraph",
       "type": "object"
     },
+    "AnswerSentence": {
+      "additionalProperties": false,
+      "description": "One sentence of a verified answer with the sources it cites and the verifier's verdict (Phase 5.1).\n\n``accepted``: a supplied triple states it. ``removed``: no triple supports it; it is not in the answer.\n``from_facts``: the composed answer had no supported sentence after one repair, so the answer states\nthe extracted facts themselves.",
+      "properties": {
+        "text": {
+          "title": "Text",
+          "type": "string"
+        },
+        "sourceIds": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Sourceids",
+          "type": "array"
+        },
+        "verdict": {
+          "enum": [
+            "accepted",
+            "removed",
+            "from_facts"
+          ],
+          "title": "Verdict",
+          "type": "string"
+        },
+        "reason": {
+          "default": "",
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "verdict"
+      ],
+      "title": "AnswerSentence",
+      "type": "object"
+    },
     "Check": {
       "additionalProperties": false,
       "description": "One stage's outcome, so a failure names the stage that failed.",
@@ -739,6 +776,13 @@
             "$ref": "#/$defs/SchemaTerm"
           },
           "title": "Schematerms",
+          "type": "array"
+        },
+        "answerSentences": {
+          "items": {
+            "$ref": "#/$defs/AnswerSentence"
+          },
+          "title": "Answersentences",
           "type": "array"
         }
       },

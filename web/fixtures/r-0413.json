@@ -291,7 +291,8 @@
           "range": "dblp:Creator",
           "definition": null
         }
-      ]
+      ],
+      "answerSentences": []
     },
     {
       "label": "First-author publication count",
@@ -550,7 +551,8 @@
           "range": "dblp:Creator",
           "definition": null
         }
-      ]
+      ],
+      "answerSentences": []
     },
     {
       "label": "Venue prestige of published work",
@@ -836,7 +838,8 @@
           "range": "dblp:Creator",
           "definition": null
         }
-      ]
+      ],
+      "answerSentences": []
     },
     {
       "label": "Breadth of collaboration",
@@ -1095,7 +1098,8 @@
           "range": "dblp:Creator",
           "definition": null
         }
-      ]
+      ],
+      "answerSentences": []
     }
   ],
   "chosenReading": null,

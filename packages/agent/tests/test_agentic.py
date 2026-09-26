@@ -504,3 +504,68 @@ def test_refused_tool_calls_are_not_corpus_calls() -> None:
                           {"tool": "search_evidence", "status": "ok", "result": {"items": [{"passage_id": "p1-a"}]}}]
     runner._collect_findings(session)
     assert [call["tool"] for call in session.corpus_calls] == ["search_evidence"]
+
+
+def test_a_reading_answered_from_verified_facts_skips_the_research_agent() -> None:
+    from harness_baseline.planner import QueryPlan
+
+    class Planner:
+        calls = 0
+
+        def plan(self, question: str, concept: dict | None = None) -> QueryPlan:
+            Planner.calls += 1
+            return QueryPlan(operation="paper_authors", papers=["Some Paper"], rationale="authors of one paper")
+
+    baseline = StubBaseline()
+    baseline.planner = Planner()
+    baseline.preset_plan = None
+    runner = AgenticResearch(baseline, agent_model=HighModel(), high_model=HighModel())
+
+    def no_agent(_session) -> None:
+        raise AssertionError("the research agent must not start for a fact lookup")
+
+    runner._mcp_research = no_agent
+    runner._read_papers = no_agent
+    result = runner.run("Who wrote Some Paper?", "slow", "r-route", concept=CONCEPT)
+    checks = {check.name: check for check in result["run"].checks}
+    assert checks["agent research (MCP)"].status == "skipped"
+    assert "paper_authors" in checks["agent research (MCP)"].detail
+    assert result["run"].status == "answered" and result["run"].execution_status == "completed"
+    assert Planner.calls == 1 and isinstance(baseline.preset_plan, QueryPlan)   # handed to the pipeline
+
+
+def test_a_research_reading_still_runs_the_agent() -> None:
+    from harness_baseline.planner import QueryPlan
+
+    class Planner:
+        def plan(self, question: str, concept: dict | None = None) -> QueryPlan:
+            return QueryPlan(operation="research", rationale="needs full text")
+
+    baseline = StubBaseline()
+    baseline.planner = Planner()
+    runner = AgenticResearch(baseline, agent_model=HighModel(), high_model=HighModel())
+    started: list[str] = []
+    runner._mcp_research = lambda session: started.append("mcp")
+    runner.run("How does Some Paper work?", "slow", "r-route-research", concept=CONCEPT)
+    assert started == ["mcp"]
+
+
+def test_unstructured_decision_with_recorded_findings_is_not_degraded(monkeypatch) -> None:
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+
+    def run_agent(self, model, question, grounded_context):
+        self.sink({
+            "call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+            "arguments": {"query": "NLP task"}, "status": "ok", "duration_ms": 3.0, "result_count": 1,
+            "result": {"items": [{"passage_id": "p4-intro", "paper_id": "p4", "text": "Relevant task."}]},
+        })
+        self.notes.append({"id": "F1", "statement": "p4 studies an NLP task.", "evidence_ids": ["p4-intro"]})
+        return "The corpus includes several NLP tasks."
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    result = AgenticResearch(StubBaseline(), agent_model=HighModel()).run(
+        "Which NLP tasks appear most often?", "slow", "r-unstructured-findings", concept=CONCEPT,
+    )
+    assert result["run"].execution_status == "completed"
+    decision = next(check for check in result["run"].checks if check.name == "agent decision")
+    assert decision.status == "warn" and "1 recorded findings" in decision.detail

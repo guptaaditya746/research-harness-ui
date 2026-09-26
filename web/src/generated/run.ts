@@ -6,6 +6,13 @@ export interface AnswerGraph {
   computed: Array<ComputedResult>;
 }
 
+export interface AnswerSentence {
+  text: string;
+  sourceIds: Array<string>;
+  verdict: "accepted" | "removed" | "from_facts";
+  reason: string;
+}
+
 export interface Check {
   name: string;
   status: "pass" | "warn" | "fail" | "skipped" | "info";
@@ -115,6 +122,7 @@ export interface Reading {
   measure: string | null;
   graph: AnswerGraph | null;
   schemaTerms: Array<SchemaTerm>;
+  answerSentences: Array<AnswerSentence>;
 }
 
 export interface SchemaTerm {

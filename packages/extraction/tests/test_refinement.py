@@ -32,7 +32,7 @@ class DraftAndVerifier:
 
     def complete_json(self, system: str, user: str) -> dict:
         self.calls += 1
-        if self.calls == 1:
+        if self.calls % 2:                      # drafts (first answer, then the one repair)
             return {
                 "sparql": "SELECT * WHERE { ?s ?p ?o }",
                 "answer": "A different paper introduced the method.",
@@ -47,9 +47,9 @@ def test_answer_verifier_rejects_claims_not_supported_by_triples() -> None:
     inferred = SchemaInference(label="Paper", gloss="Paper", classes=["Paper"], properties=["title"])
     triple = ExtractedTriple(subject="p4", predicate="title", object="Video Prediction Policy", source_id="p4-metadata", evidence="Video Prediction Policy")
 
-    with pytest.raises(ValueError, match="no fully supported"):
+    with pytest.raises(ValueError, match="no fully supported.*after one repair"):
         engine.answer("Which paper introduced Video Prediction Policy?", inferred, [triple], verify=True)
-    assert model.calls == 2
+    assert model.calls == 4                     # draft, verdict, repaired draft, verdict
 
 
 class CanonicalizationModel:
@@ -75,3 +75,31 @@ def test_ontology_review_recovers_a_supported_metric_relation() -> None:
         ("p4", "reportsMetric", "41.5% on CALVIN ABC→D", "p4-result")
     ]
     assert stages[-2] == {"stage": "ontology_review", "unresolved": 1, "mapped": 1}
+
+
+class SentenceVerifier:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def complete_json(self, system: str, user: str) -> dict:
+        self.calls += 1
+        if self.calls == 1:
+            return {"answer": "MethodX is introduced by p4 [p4-metadata]. It beats every baseline [p4-metadata].",
+                    "cited_source_ids": ["p4-metadata"]}
+        return {"sentences": [
+            {"text": "MethodX is introduced by p4 [p4-metadata].", "supported": True, "source_ids": ["p4-metadata"]},
+            {"text": "It beats every baseline [p4-metadata].", "supported": False, "source_ids": [],
+             "reason": "no triple compares with baselines"},
+            {"text": "It is fast.", "supported": True, "source_ids": ["p9-unknown"]},
+        ], "removed_claims": ["It beats every baseline."], "supported": True,
+            "answer": "MethodX is introduced by p4 [p4-metadata].", "cited_source_ids": ["p4-metadata"]}
+
+
+def test_the_answer_is_the_accepted_sentences_and_every_verdict_is_kept() -> None:
+    engine = ExtractionEngine(SentenceVerifier(), hand_written_subschema())
+    inferred = SchemaInference(label="Paper", gloss="Paper", classes=["Paper"], properties=["title"])
+    triple = ExtractedTriple(subject="p4", predicate="title", object="MethodX", source_id="p4-metadata", evidence="MethodX")
+    result = engine.answer("Who introduced MethodX?", inferred, [triple], verify=True)
+    assert result.answer == "MethodX is introduced by p4 [p4-metadata]."
+    assert [item["verdict"] for item in result.sentences] == ["accepted", "removed", "removed"]
+    assert result.sentences[2]["reason"] == "cites no source of the supplied triples"   # supported, but no known source

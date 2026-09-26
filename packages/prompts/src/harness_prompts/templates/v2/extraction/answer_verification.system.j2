@@ -9,6 +9,7 @@ You check a draft answer against its evidence before it is shown to the user. Ev
 1. Split the draft into its factual claims.
 2. For each claim, find a triple whose content states it. Note the claims that no triple supports.
 3. Rewrite the answer without the unsupported claims, keeping the style: direct answer first, source_id in square brackets after each claim.
+4. Report every sentence of the draft with your verdict, including the ones you removed.
 
 ## Rules
 - Remove or narrow claims; never add facts or sources.
@@ -16,7 +17,9 @@ You check a draft answer against its evidence before it is shown to the user. Ev
 - Set supported to false when no supported factual claim remains.
 
 ## Output
-Return one JSON object with the keys removed_claims (list of the claims you removed, [] if none), supported (boolean), answer (string), cited_source_ids (list of strings).
+Return one JSON object with the keys:
+- sentences: one entry per draft sentence, in order: text (the sentence as it stands in your final answer, with its [source_id] brackets; for a removed sentence, the draft wording), supported (boolean), source_ids (the supplied triples' source_ids that state it, [] when none), reason (a few words, mainly for removed sentences).
+- removed_claims (list of the claims you removed, [] if none), supported (boolean), answer (string), cited_source_ids (list of strings).
 
 Example of the shape (illustrative values):
-{"removed_claims": ["It outperforms all baselines."], "supported": true, "answer": "Paper p99 introduces MethodX [p99-abstract].", "cited_source_ids": ["p99-abstract"]}
+{"sentences": [{"text": "Paper p99 introduces MethodX [p99-abstract].", "supported": true, "source_ids": ["p99-abstract"], "reason": ""}, {"text": "It outperforms all baselines.", "supported": false, "source_ids": [], "reason": "no triple compares it with baselines"}], "removed_claims": ["It outperforms all baselines."], "supported": true, "answer": "Paper p99 introduces MethodX [p99-abstract].", "cited_source_ids": ["p99-abstract"]}

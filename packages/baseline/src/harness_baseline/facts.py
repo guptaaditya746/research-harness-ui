@@ -429,6 +429,9 @@ class FactAnswers:
         ]
 
     def _plan(self, question: str) -> QueryPlan:
+        preset, self.preset_plan = getattr(self, "preset_plan", None), None
+        if preset is not None:
+            return preset
         if self.planner is None:
             return QueryPlan.fallback("no query planner configured")
         return self.planner.plan(question, self.concept)

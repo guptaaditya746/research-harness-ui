@@ -25,6 +25,7 @@ from harness_extraction.claims import (
 from harness_graphstore import ProvenanceDataset
 from harness_observability import record_tool_call
 from harness_schema.models import (
+    AnswerSentence,
     Metrics,
     Reading,
     Run,
@@ -32,7 +33,7 @@ from harness_schema.models import (
     required_artifacts,
 )
 from harness_semantic import DBLP, HRN, validate_subschema
-from rdflib import RDFS, XSD, Literal, URIRef
+from rdflib import RDFS, XSD, Graph, Literal, URIRef
 
 from . import answer_graph
 from .backbone import answer_paper_keys, backbone_triples, origin_of, schema_terms, subschema_slice
@@ -122,6 +123,29 @@ class RunOutcomes:
         artifacts["coverage_plan.json"] = json.dumps({"evidence_surface": "indexed_full_text", **absence.coverage}).encode()
         artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in self.trace], indent=2).encode()
         return run, artifacts
+
+    def _schema_check(self, conforms: bool, terms: list, turtle: str) -> None:
+        """Phase 5.7: the run's own schema and export, as a stage check (graph-shape counts the same)."""
+        invented = [term for term in terms if term.origin == "invented"]
+        properties = [term for term in invented if term.kind != "class"]
+        problems = []
+        if not conforms:
+            problems.append("SHACL shapes do not conform (see shacl_report.ttl)")
+        unparented = [term.name for term in invented if not term.parent]
+        if unparented:
+            problems.append(f"{len(unparented)} invented terms without a parent: {', '.join(unparented[:3])}")
+        untyped = [term.name for term in properties if not (term.domain and term.range)]
+        if untyped:
+            problems.append(f"{len(untyped)} invented properties without domain and range: {', '.join(untyped[:3])}")
+        try:
+            exported = len(Graph().parse(data=turtle, format="turtle"))
+        except Exception as exc:  # noqa: BLE001 - any parser error means the export is invalid
+            problems.append(f"triples.ttl does not parse ({type(exc).__name__})")
+            exported = 0
+        self._check("schema", "warn" if problems else "pass", "; ".join(problems) or (
+            f"{len(terms)} OWL 2 terms ({len(properties)} invented properties and "
+            f"{len(invented) - len(properties)} invented classes, each with a parent); SHACL conforms; "
+            f"triples.ttl parses ({exported} triples)"))
 
     def _success(
         self,
@@ -253,7 +277,9 @@ class RunOutcomes:
         query_claim = derive_query_claim(question, claims)
         if query_claim is not None:
             claims.append(query_claim)
-        if state.get("retrieval", {}).get("stop_reason") != "verified_facts" and claims:
+        # A verified answer (sentences with verdicts) is shown as written; an unverified one (Fast)
+        # is replaced by the list of source-backed claims.
+        if state.get("retrieval", {}).get("stop_reason") != "verified_facts" and claims and not answer.sentences:
             grouped: dict[str, list[str]] = {}
             for claim in claims:
                 if "object" not in claim.fields:
@@ -311,6 +337,7 @@ class RunOutcomes:
             triples=ui_triples,
             claims=claims,
             schemaTerms=terms,
+            answerSentences=[AnswerSentence.model_validate(item) for item in answer.sentences],
             claimRelations=claim_relations,
             # The prose renderer below only enumerates these source-backed claims.
             answerClaimIds=[claim.id for claim in claims],
@@ -336,6 +363,7 @@ class RunOutcomes:
             artifacts=list(required_artifacts(path)),
         )
         report = validate_subschema(schema.graph)
+        self._schema_check(report.conforms, terms, dataset.export_turtle())
         artifacts = {
             # The question's own terms with their parents, not the whole seed ontology.
             "subschema.ttl": subschema_slice(schema.graph, terms).serialize(format="turtle").encode(),

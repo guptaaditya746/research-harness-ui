@@ -32,7 +32,7 @@ from langgraph.graph import END, START, StateGraph
 
 from .facts import FactAnswers
 from .outcomes import RunOutcomes
-from .planner import QueryPlanner
+from .planner import QueryPlan, QueryPlanner
 from .research_steps import ResearchSteps
 from .retrieval import RetrievalStep
 from .state import (
@@ -76,6 +76,8 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         self.refine = refine
         self.refinement_model = refinement_model
         self.claim_lookup = claim_lookup
+        # A plan made before the run (the agentic path routes a reading first); used once by ``_plan``.
+        self.preset_plan: QueryPlan | None = None
         self.relation_proposer = relation_proposer
         self.seed_passage_ids = seed_passage_ids or []
         # Findings the agentic path hands over (statements + evidence ids); see _research_notes.

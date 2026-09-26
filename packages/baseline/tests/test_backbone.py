@@ -108,6 +108,8 @@ def test_invented_terms_are_owl2_with_parents_and_marked_by_origin(tmp_path: Pat
         "class", "invented", "hrn:ResearchEntity")
     assert terms["hrn:Paper"].origin == "core"
     assert terms["dblp:authoredBy"].origin == "dblp"            # backbone predicate, shown by its DBLP name
+    schema_check = next(check for check in result["run"].checks if check.name == "schema")
+    assert schema_check.status == "pass" and "triples.ttl parses" in schema_check.detail
     schema = Graph().parse(data=result["artifacts"]["subschema.ttl"].decode(), format="turtle")
     addresses = URIRef(HRN + "addresses")
     assert (addresses, RDF.type, OWL.ObjectProperty) in schema
@@ -222,7 +224,7 @@ def test_an_answer_emptied_with_notes_is_written_again_from_the_triples_alone() 
     report: dict = {}
     result = engine.answer(QUESTION, inferred, triples, verify=True, verifier=Verifier(),
                            notes=["It beats all baselines."], report=report)
-    assert report == {"retried_without_notes": True}
+    assert report == {"repaired": True, "notes_dropped": True}
     assert "research_notes" in composer.payloads[0] and "research_notes" not in composer.payloads[1]
     assert result.cited_source_ids == ["p4-abstract"] and "hrn:usesDataset" in result.sparql
 
@@ -243,3 +245,31 @@ def test_a_citation_outside_the_evidence_is_not_retried_without_notes() -> None:
     with pytest.raises(UnsupportedAnswer) as caught:
         engine.answer(QUESTION, inferred, triples, notes=["a note"], report={})
     assert caught.value.stage == "citation" and Composer.calls == 1
+
+
+def test_an_answer_nothing_supports_after_the_repair_states_the_extracted_facts(tmp_path: Path) -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference
+
+    class Rejecting:
+        calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            Rejecting.calls += 1
+            if Rejecting.calls % 2:
+                return {"answer": "Everything is solved [p4-abstract].", "cited_source_ids": ["p4-abstract"]}
+            return {"sentences": [{"text": "Everything is solved [p4-abstract].", "supported": False,
+                                   "source_ids": [], "reason": "overclaims"}],
+                    "removed_claims": ["Everything is solved."], "supported": False, "answer": "", "cited_source_ids": []}
+
+    engine = ExtractionEngine(Rejecting(), hand_written_subschema())
+    runner = Baseline20(two_papers(tmp_path), engine, enhanced=True, refine=True, refinement_model=Rejecting())
+    runner.started = __import__("time").monotonic()
+    state = {"question": QUESTION, "passages": [], "concept": None,
+             "inferred": SchemaInference(label="Tasks", gloss="g", classes=["Paper"], properties=["usesDataset"]),
+             "extracted": [ExtractedTriple(subject="p4", predicate="usesDataset", object="robot videos",
+                                           source_id="p4-abstract", evidence="robot videos")]}
+    answer = runner._query_answer(state)["answer"]
+    assert answer.answer == "Video Prediction Policy: uses dataset robot videos [p4-abstract]."
+    assert [item["verdict"] for item in answer.sentences] == ["removed", "from_facts"]
+    warn = [check for check in runner.checks if check.name == "answer composition"]
+    assert warn and warn[0].status == "warn" and "states the 1 extracted facts" in warn[0].detail

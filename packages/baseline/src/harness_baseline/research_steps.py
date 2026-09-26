@@ -5,11 +5,14 @@ A mixin of ``Baseline20``: methods use the pipeline's state (``self``).
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from harness_config import settings
 from harness_extraction import (
+    AnswerResult,
     ExtractedTriple,
+    UnsupportedAnswer,
     parallel_map,
 )
 from harness_graphstore import sparql_check
@@ -132,17 +135,45 @@ class ResearchSteps:
         self._check("extraction", "pass", f"{len(extracted)} supported triples")
         return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports}
 
+    def _facts_answer(self, triples: list[ExtractedTriple], removed: list[dict[str, Any]]) -> AnswerResult:
+        """An answer that states the extracted facts, one sentence each (at most 12), with the
+        composer's rejected sentences kept as ``removed`` so the reader sees what was dropped."""
+        sentences: list[dict[str, Any]] = [
+            {**item, "verdict": "removed"} for item in removed if item.get("verdict") == "removed"]
+        for triple in triples[:12]:
+            title = self.corpus.paper_title(triple.subject) or triple.subject
+            relation = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", triple.predicate).lower()
+            sentences.append({"text": f"{title}: {relation} {triple.object} [{triple.source_id}].",
+                              "sourceIds": [triple.source_id], "verdict": "from_facts",
+                              "reason": "stated from an extracted fact"})
+        stated = [item for item in sentences if item["verdict"] == "from_facts"]
+        cited = list(dict.fromkeys(source for item in stated for source in item["sourceIds"]))
+        return AnswerResult(answer=" ".join(item["text"] for item in stated), cited_source_ids=cited,
+                            sparql=self.extraction.answer_query(triples, cited), sentences=sentences)
+
     def _query_answer(self, state: BaselineState) -> dict[str, Any]:
         self.stage = "answer composition"
         notes = self._research_notes(state)
         report: dict[str, Any] = {}
-        answer = self.extraction.answer(
-            self._research_question(state), state["inferred"], state["extracted"],
-            verify=self.refine, verifier=self.refinement_model, **({"notes": notes, "report": report} if notes else {}),
-        )
-        if report.get("retried_without_notes"):
-            self._check("answer composition", "warn", "the verifier removed every claim of the answer written with "
-                        "research notes; answered from the triples alone")
+        try:
+            answer = self.extraction.answer(
+                self._research_question(state), state["inferred"], state["extracted"],
+                verify=self.refine, verifier=self.refinement_model, report=report, **({"notes": notes} if notes else {}),
+            )
+        except UnsupportedAnswer as exc:
+            # After one repair nothing the model wrote was supported, but evidence review kept these
+            # triples: state them instead of failing the run (they are supported by construction).
+            if exc.stage != "verification" or not state["extracted"]:
+                raise
+            answer = self._facts_answer(state["extracted"], exc.sentences)
+            self._check("answer composition", "warn", f"no composed sentence was supported after one repair "
+                        f"({len(exc.sentences) or len(exc.removed)} removed); the answer states the "
+                        f"{len(state['extracted'])} extracted facts")
+            report = {}
+        if report.get("repaired"):
+            self._check("answer composition", "warn", "the verifier removed every claim of the first answer; "
+                        "it was written once more from the triples"
+                        + (" without the research notes" if report.get("notes_dropped") else ""))
         try:
             checked_query = sparql_check(answer.sparql, self.extraction.schema)
         except ValueError:

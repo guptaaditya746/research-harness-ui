@@ -15,9 +15,12 @@ class UnsupportedAnswer(ValueError):
     (``"provenance"``). Before Phase 4 this surfaced as ``schema_rejected``.
     """
 
-    def __init__(self, message: str, stage: str = "verification") -> None:
+    def __init__(self, message: str, stage: str = "verification", removed: list[str] | None = None,
+                 sentences: list[dict] | None = None) -> None:
         super().__init__(message)
         self.stage = stage
+        self.removed = list(removed or [])          # the claims the verifier removed
+        self.sentences = list(sentences or [])      # its per-sentence verdicts, when it gave them
 
 
 __all__ = ["ModelFailure", "UnsupportedAnswer"]

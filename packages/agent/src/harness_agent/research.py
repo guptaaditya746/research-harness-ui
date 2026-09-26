@@ -86,6 +86,8 @@ class _Session:
     baseline_started_s: float = 0.0
     base_run: Run | None = None
     result: dict | None = None
+    # The fact operation that answers this reading, when routing found one (the agent is then skipped).
+    fact_route: str | None = None
 
     def elapsed(self) -> float:
         return round(monotonic() - self.started, 3)
@@ -126,18 +128,30 @@ class AgenticResearch(ConceptProposalStep):
             question=question, budget=budget, run_id=run_id, concept=concept,
             concept_input=concept.model_dump(by_alias=False), started=monotonic(),
         )
-        self._check_heavy_load(session)
-        # Search through MCP before the shared pipeline verifies its answer.
-        # Otherwise a rejected draft prevents the agent from gathering the
-        # very evidence that could make the answer supportable.
-        if not session.heavy_busy:
-            self._mcp_research(session)
-        if not session.heavy_busy and not session.agent_decision and not session.mcp_error:
-            session.mcp_error = "agent_returned_no_research_decision"
-        self._collect_findings(session)
-        if not session.heavy_busy:
-            self._read_papers(session)
-        self._select_seeds(session)
+        self._route(session)
+        if session.fact_route is None:
+            self._check_heavy_load(session)
+            # Search through MCP before the shared pipeline verifies its answer.
+            # Otherwise a rejected draft prevents the agent from gathering the
+            # very evidence that could make the answer supportable.
+            if not session.heavy_busy:
+                self._mcp_research(session)
+            if not session.heavy_busy and not session.agent_decision and not session.mcp_error:
+                session.mcp_error = "agent_returned_no_research_decision"
+            self._collect_findings(session)
+            if session.mcp_error == "agent_final_not_structured" and session.findings:
+                # Phase 5.5: validated findings (each with evidence ids the agent observed) are the
+                # hand-off, so a final message that is still not JSON after the one correction turn
+                # does not degrade the run; the decision then adds no ids of its own.
+                session.mcp_error = None
+                session.agent_decision = {"verified_claim_ids": [], "additional_evidence_ids": [],
+                                          "reasoning_summary": session.agent_final[:500]}
+                session.agent_checks.append(Check(
+                    name="agent decision", status="warn",
+                    detail=f"the final message was not JSON; used the {len(session.findings)} recorded findings"))
+            if not session.heavy_busy:
+                self._read_papers(session)
+            self._select_seeds(session)
         self._run_shared_pipeline(session)
         self._review_decision(session)
         if session.mcp_error:
@@ -145,6 +159,24 @@ class AgenticResearch(ConceptProposalStep):
         return self._assemble(session)
 
     # ─── Shared helpers ──────────────────────────────────────────────────────
+
+    def _route(self, session: _Session) -> None:
+        """Plan the chosen reading before any research (Phase 5.3).
+
+        A reading that a fact operation answers (authors, venues, counts, citations) needs no full-text
+        research, so the MCP agent is not started for it. The plan is handed to the shared pipeline, so
+        the question is planned once. A planner failure or a research plan leaves the agent path as it was.
+        """
+        planner = getattr(self.baseline, "planner", None)
+        if planner is None:
+            return
+        plan = planner.plan(session.question, session.concept_input)
+        if hasattr(self.baseline, "preset_plan"):
+            self.baseline.preset_plan = plan
+        if plan.source == "model" and plan.operation != "research" and plan.requirements_met():
+            session.fact_route = plan.operation
+            self._trace(session, TraceRow(atS=session.elapsed(), action="Routing the reading",
+                                          returned=f"{plan.operation}: answered from verified facts, no agent research"))
 
     def _trace(self, session: _Session, row: TraceRow) -> None:
         session.trace.append(row)
@@ -537,7 +569,10 @@ class AgenticResearch(ConceptProposalStep):
         base_run, mcp_error, corpus_calls = session.base_run, session.mcp_error, session.corpus_calls
         assert base_run is not None
         checks = list(session.agent_checks)
-        if session.heavy_busy:
+        if session.fact_route:
+            research = Check(name="agent research (MCP)", status="skipped",
+                             detail=f"the reading is a fact lookup ({session.fact_route}); answered from verified facts")
+        elif session.heavy_busy:
             research = Check(name="agent research (MCP)", status="skipped", detail=mcp_error or "heavy model busy")
         elif mcp_error and mcp_error.startswith("MCP agent workflow failed"):
             research = Check(name="agent research (MCP)", status="fail", detail=mcp_error)

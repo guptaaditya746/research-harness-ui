@@ -154,6 +154,20 @@ class Check(Contract):
     detail: str = ""
 
 
+class AnswerSentence(Contract):
+    """One sentence of a verified answer with the sources it cites and the verifier's verdict (Phase 5.1).
+
+    ``accepted``: a supplied triple states it. ``removed``: no triple supports it; it is not in the answer.
+    ``from_facts``: the composed answer had no supported sentence after one repair, so the answer states
+    the extracted facts themselves.
+    """
+
+    text: str
+    source_ids: list[str] = Field(default_factory=list, alias="sourceIds")
+    verdict: Literal["accepted", "removed", "from_facts"]
+    reason: str = ""
+
+
 class Reading(Contract):
     label: str
     gloss: str
@@ -174,6 +188,8 @@ class Reading(Contract):
     graph: AnswerGraph | None = None
     # The subschema's terms with their origin (DBLP / core / invented), for the Subschema panel.
     schema_terms: list[SchemaTerm] = Field(default_factory=list, alias="schemaTerms")
+    # Verified answers only: every sentence the composer wrote, kept or removed, with its sources.
+    answer_sentences: list[AnswerSentence] = Field(default_factory=list, alias="answerSentences")
 
 
 class TraceRow(Contract):
