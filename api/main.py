@@ -21,6 +21,7 @@ import routes_benchmark
 import routes_data
 import routes_public
 import routes_runs
+import routes_status
 from api_models import RunRequest
 from app_state import runtime
 from capacity import MODEL_SLOT, PUBLIC_MODEL_SLOT
@@ -48,7 +49,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-for module in (routes_public, routes_runs, routes_benchmark, routes_data):
+for module in (routes_public, routes_runs, routes_benchmark, routes_data, routes_status):
     app.include_router(module.router)
 
 __all__ = [

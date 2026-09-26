@@ -84,6 +84,8 @@ class RunRuntime:
         self.runner_factory = runner_factory or self._runner
         self.events: dict[str, list[TraceRow]] = {}
         self.running: set[str] = set()
+        # Runs waiting for a model slot (a subset of ``running``); the model status endpoint reports them.
+        self.queued: set[str] = set()
         self.stop_requested: set[str] = set()
         self.settings = {"baseline": "fast", "agentic": "slow"}
         self.fixture_overrides: dict[str, Run] = {}
@@ -203,6 +205,7 @@ class RunRuntime:
                         if not announced:
                             announced = True
                             with self.lock:
+                                self.queued.add(run_id)
                                 self.events[run_id].append(
                                     TraceRow(
                                         atS=0.0,
@@ -216,6 +219,9 @@ class RunRuntime:
                 for slot in held:
                     slot.release()
                 raise
+            finally:
+                with self.lock:
+                    self.queued.discard(run_id)
             return held
 
         def execute() -> None:

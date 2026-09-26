@@ -1,5 +1,7 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import type { Check, ClaimSubgraph, Reading, Run, SchemaTerm, Triple } from './generated/run';
+import { Mascot, type MascotState } from './Mascot';
+import { ModelStatus } from './ModelStatus';
 
 // The graph library is large; load it only when a graph is shown.
 const AnswerGraphView = lazy(() => import('./AnswerGraph').then(module => ({ default: module.AnswerGraphView })));
@@ -400,6 +402,10 @@ export default function App() {
   const currentNav = ['idle', 'running', 'readings', 'agentic_result', 'baseline_result', 'failed'].includes(scene) ? 'Ask' : scene === 'gold' ? 'Gold' : scene[0].toUpperCase() + scene.slice(1);
   const showSidebar = !!active && ['agentic_result', 'baseline_result'].includes(scene);
   const busy = scene === 'running';
+  const resultScene = ['agentic_result', 'baseline_result'].includes(scene);
+  const mascotState: MascotState = busy ? 'researching'
+    : scene === 'failed' || (resultScene && active?.status === 'incomplete') ? 'failed'
+    : resultScene && active ? 'answered' : 'idle';
   useEffect(() => { if (!busy) return; const timer = window.setInterval(() => setTick(value => value + 1), 1000); return () => window.clearInterval(timer); }, [busy]);
   const lastRow = liveTrace[liveTrace.length - 1];
   const waitingOn = busy && lastRow?.action === 'Model call started' ? lastRow.returned : null;
@@ -431,7 +437,7 @@ export default function App() {
   const when = (value: string) => new Date(value).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
   const pathName = (value: Run['path']) => value === 'agentic' ? 'Agentic' : value === 'baseline-enhanced' ? 'Adaptive' : 'Fast';
 
-  return <div className="page"><header className="nav header"><span className="nav-brand">Research Harness</span>{['Ask', 'Corpus', 'Runs', 'Benchmark', 'Gold', 'Settings'].map(item => <a key={item} href="#" aria-current={currentNav === item ? 'page' : undefined} onClick={e => { e.preventDefault(); setScene(item === 'Ask' ? 'idle' : item.toLowerCase() as Scene); }}>{item}</a>)}</header>
+  return <div className="page"><header className="nav header"><span className="nav-mark"><Mascot state={mascotState} /><span className="nav-brand">Research Harness</span></span>{['Ask', 'Corpus', 'Runs', 'Benchmark', 'Gold', 'Settings'].map(item => <a key={item} href="#" aria-current={currentNav === item ? 'page' : undefined} onClick={e => { e.preventDefault(); setScene(item === 'Ask' ? 'idle' : item.toLowerCase() as Scene); }}>{item}</a>)}<ModelStatus api={api} /></header>
     <main className="main"><div className="content">
       {scene === 'corpus' && <><h2>Corpus</h2><p className="muted" style={{ maxWidth: '56ch', marginBottom: 40 }}>Papers are parsed once, chunked into passages and indexed. Every path reads the same index, so runs stay comparable. New PDFs are added with <code>make ingest</code>.</p><table className="table" style={{ marginTop: 34 }}><thead><tr><th>Paper</th><th>Identifier</th></tr></thead><tbody>{papers.map(paper => <tr key={paper.paper_id}><td>{paper.title}</td><td className="muted micro">{paper.dblp_iri ? 'DBLP' : 'local'} · {paper.paper_id}</td></tr>)}</tbody></table><p className="muted micro" style={{ marginTop: 16 }}>{papers.length} papers indexed</p></>}
       {scene === 'settings' && <><h2>Settings</h2><p className="muted" style={{ maxWidth: '56ch', marginBottom: 40 }}>Execution budgets live here so the ask screen stays one question and two runs. A change applies to every run that follows and is recorded with it.</p><div style={{ display: 'grid', gap: 34 }}>

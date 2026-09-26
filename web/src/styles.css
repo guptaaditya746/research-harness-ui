@@ -87,3 +87,71 @@
 .public-shell textarea { width: 100%; min-height: 120px; margin: 14px 0; }
 .public-paths { display: flex; flex-wrap: wrap; gap: 14px 24px; margin: 12px 0 18px; }
 .public-shell pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* — header mark (Mascot.tsx) — */
+.nav-mark { display: inline-flex; align-items: center; gap: 10px; margin-right: auto; }
+.nav-mark .nav-brand { margin-right: 0; }
+.mascot { display: block; overflow: visible; }
+/* Only the moving parts get a box-centred origin: the rotate(...) attributes on the arm groups must keep theirs. */
+.mascot-drop, .mascot-body, .mascot-eyes, .mascot .eye-open, .mascot-spark { transform-box: fill-box; transform-origin: center; }
+.mascot .drop-c { fill: var(--color-accent); }
+.mascot .drop-m { fill: var(--color-accent-2); }
+.mascot .drop-y { fill: var(--color-process-yellow); }
+.mascot { --spread: 4.5px; }
+.mascot-drop { transform: translateY(calc(-1 * var(--spread))); transition: transform .7s cubic-bezier(.3, 1.35, .5, 1); }
+.mascot-orbit { transform-box: view-box; transform-origin: 32px 32px; animation: mascot-spin 14s linear infinite; }
+.mascot-body { transition: transform .6s ease, filter .6s ease; animation: mascot-breathe 3.6s ease-in-out infinite; }
+.mascot-eyes { transition: transform .5s ease; }
+.mascot .eye-open { fill: var(--color-text); animation: mascot-blink 5s infinite; }
+.mascot .eye-happy, .mascot .eye-flat { fill: none; stroke: var(--color-text); stroke-width: 2.2; stroke-linecap: round; opacity: 0; }
+.mascot-spark { fill: var(--color-process-yellow); opacity: 0; transform: scale(.2); transition: opacity .3s, transform .5s cubic-bezier(.3, 1.6, .5, 1); }
+.mascot[data-state='researching'] { --spread: 10.5px; }
+.mascot[data-state='researching'] .mascot-orbit { animation-duration: 2.6s; }
+.mascot[data-state='researching'] .mascot-drop { animation: mascot-pulse 1.3s ease-in-out infinite; }
+.mascot[data-state='researching'] .drop-m { animation-delay: -.43s; }
+.mascot[data-state='researching'] .drop-y { animation-delay: -.86s; }
+.mascot[data-state='researching'] .mascot-eyes { animation: mascot-look 2.6s ease-in-out infinite; }
+/* Merged into one round drop; a small spread keeps the three inks visible as a slow swirl. */
+.mascot[data-state='answered'] { --spread: 2.5px; }
+.mascot[data-state='answered'] .mascot-orbit { animation-duration: 24s; }
+.mascot[data-state='answered'] .mascot-body { animation: mascot-pop .6s ease-out 1; }
+.mascot[data-state='answered'] .eye-open, .mascot[data-state='failed'] .eye-open { opacity: 0; animation: none; }
+.mascot[data-state='answered'] .eye-happy { opacity: 1; }
+.mascot[data-state='answered'] .mascot-spark { opacity: 1; transform: scale(1); animation: mascot-twinkle 2.4s ease-in-out .6s infinite; }
+.mascot[data-state='failed'] { --spread: 7px; }
+.mascot[data-state='failed'] .mascot-orbit { animation: none; }
+.mascot[data-state='failed'] .mascot-body { animation: none; transform: translateY(4px) scale(1.06, .82); filter: saturate(.15) opacity(.8); }
+.mascot[data-state='failed'] .eye-flat { opacity: 1; }
+@keyframes mascot-spin { to { transform: rotate(360deg); } }
+@keyframes mascot-breathe { 50% { transform: scale(1.04); } }
+@keyframes mascot-blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.12); } }
+@keyframes mascot-pulse { 50% { transform: translateY(calc(-1 * var(--spread))) scale(.82); } }
+@keyframes mascot-look { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(-2.2px); } 70% { transform: translateX(2.2px); } }
+@keyframes mascot-pop { 40% { transform: scale(1.12); } }
+@keyframes mascot-twinkle { 50% { transform: scale(.65) rotate(20deg); } }
+
+/* — model status (ModelStatus.tsx) — */
+.model-status { position: relative; }
+.model-status-button { display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 13px; color: var(--color-text); background: transparent; border: 1px solid var(--color-divider); border-radius: 999px; padding: 4px 11px; cursor: pointer; }
+.model-status-button:hover { border-color: var(--color-accent); }
+.model-status-button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+.model-dots { display: inline-flex; gap: 4px; }
+.model-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--color-neutral-500); vertical-align: middle; }
+.model-dot.state-healthy { background: #1f8a5b; }
+.model-dot.state-busy { background: var(--color-process-yellow); }
+.model-dot.state-saturated { background: #d97a00; }
+.model-dot.state-recovering { background: var(--color-accent); }
+.model-dot.state-unavailable { background: var(--color-accent-2); }
+.model-dot.state-busy, .model-dot.state-saturated { animation: model-pulse 1.4s ease-in-out infinite; }
+@keyframes model-pulse { 50% { opacity: .45; } }
+.model-status-panel { position: absolute; right: 0; top: calc(100% + 8px); z-index: 20; width: min(560px, calc(100vw - 32px)); background: var(--color-bg); border: 1px solid var(--color-divider); border-radius: 8px; padding: 14px 16px; box-shadow: 0 8px 28px rgba(32, 30, 29, .12); display: grid; gap: 10px; overflow-x: auto; }
+.model-status-panel p { margin: 0; }
+.model-table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+.model-table th { text-align: left; font-weight: 600; padding: 4px 8px 6px 0; border-bottom: 1px solid var(--color-divider); white-space: nowrap; }
+.model-table td { padding: 6px 8px 6px 0; vertical-align: top; border-bottom: 1px solid var(--color-divider); }
+.model-table td:nth-child(n+2) { white-space: nowrap; }
+@media (max-width: 640px) { .model-status-text { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot *, .model-dot { animation: none !important; transition: none !important; }
+}
