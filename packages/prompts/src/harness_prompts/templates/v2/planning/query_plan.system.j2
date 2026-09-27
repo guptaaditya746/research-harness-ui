@@ -19,7 +19,7 @@ You turn a research question about a fixed corpus of scientific papers into a ty
 - term: the word or phrase the titles must contain; only for papers_with_title_term, otherwise null.
 - evidence_focus (research only): results, limitations, methods or general.
 - measure: a short phrase naming the quantity or criterion the answer will use (for example "number of distinct corpus papers per author").
-- ignored: the conditions of the question that the chosen operation does not apply, in the question's words; [] when it applies all of them (always [] for research). A detail that only describes a named paper (its venue or year) is not ignored, because naming the paper already fixes the answer. Words that only say the papers are in the corpus ("indexed", "in the corpus") are not conditions.
+- ignored: the conditions of the question that the chosen operation does not apply, in the question's words; [] when it applies all of them (always [] for research). A detail that only describes a named paper (its venue or year) is not ignored, because naming the paper already fixes the answer. Words that only say the papers are in the corpus ("indexed", "in the corpus") are not conditions, and neither is a condition that every corpus paper meets (the corpus field, when given, lists the venues and years the collection holds).
 
 ## Output
 Return one JSON object with the keys rationale, operation, papers, year, extreme, rank, min_papers, venues, term, evidence_focus, measure, ignored.

@@ -28,6 +28,7 @@ from time import monotonic
 from typing import Any
 
 from harness_baseline import Baseline20
+from harness_baseline.planner import RANKING_OPERATIONS
 from harness_config import settings
 from harness_observability import record_tool_call
 from harness_schema.models import Check, ConceptChoice, Run, TraceRow, required_artifacts
@@ -174,7 +175,13 @@ class AgenticResearch(ConceptProposalStep):
         planner = getattr(self.baseline, "planner", None)
         if planner is None:
             return
-        plan = planner.plan(session.question, session.concept_input)
+        # The bare question first (one plan for all readings of it): a fact lookup takes its arguments
+        # from the question, so its readings must not get different plans. Only a research plan, or a
+        # ranking whose measure the reading chooses, is planned again with the reading.
+        plan = planner.plan_question(session.question) if hasattr(planner, "plan_question") \
+            else planner.plan(session.question)
+        if plan.operation == "research" or plan.operation in RANKING_OPERATIONS or plan.source != "model":
+            plan = planner.plan(session.question, session.concept_input)
         if hasattr(self.baseline, "preset_plan"):
             self.baseline.preset_plan = plan
         resolve = getattr(self.baseline, "_resolve_papers", None)

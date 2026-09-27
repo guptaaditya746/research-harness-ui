@@ -254,10 +254,15 @@ class ExternalHarness(Baseline20):
             detail = result.get("problem") or result.get("error") or result.get("exit_status") or status
             if status == "error" and _PROVIDER_ERRORS.search(str(detail)):
                 raise ModelFailure(str(detail))
-            raise ExternalFailure(f"external_{status or 'failed'}: {detail} ({summary})")
+            why = [f"exit {result['exit_status']}" if result.get("exit_status") else "",
+                   f"{usage['format_errors']} replies without a command" if usage.get("format_errors") else ""]
+            raise ExternalFailure(f"external_{status or 'failed'}: {detail} ({summary}"
+                                  + "".join(f"; {item}" for item in why if item) + ")")
         dropped = result.get("dropped_triples") or []
         triples, unmapped = self._triples(result.get("triples") or [])
         notes = [f"{len(dropped)} dropped by the answer contract" if dropped else "",
+                 "answer taken from the agent's last reply (no answer.json)"
+                 if result.get("answer_source") == "final_message" else "",
                  f"{unmapped} with a predicate that is not a relation (dropped)" if unmapped else ""]
         audit = [f"{result['evidence_not_in_source']} quote evidence not found in their passage"
                  if result.get("evidence_not_in_source") else "",

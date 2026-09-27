@@ -17,10 +17,14 @@ Design rules:
 
 from __future__ import annotations
 
+import json
 import re
+import threading
+from collections import OrderedDict
 from difflib import SequenceMatcher
-from typing import Any, Literal
+from typing import Any, ClassVar, Literal
 
+from harness_config import settings
 from harness_extraction import complete, model_purpose
 from harness_prompts import Prompt, render
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -50,6 +54,9 @@ EvidenceFocus = Literal["general", "results", "limitations", "methods"]
 # Words that are not part of a venue's name ("ACL 2025 main conference", "long papers").
 VENUE_FILLER = {"main", "long", "short", "conference", "papers", "paper", "proceedings", "track"}
 
+# Rankings whose measure an ambiguous word leaves open ("most successful author"): the chosen reading
+# decides the measure, so these are planned with the reading.
+RANKING_OPERATIONS = {"author_paper_counts", "author_citation_counts", "paper_citation_counts"}
 # Operations on one or two named papers: a venue or year in the question describes the paper.
 _NAMED_PAPER_OPERATIONS = {"find_paper", "paper_authors", "paper_year", "paper_venue", "cites"}
 # Which filters (year, venues, title term) each other fact operation applies.
@@ -241,14 +248,57 @@ class QueryPlan(BaseModel):
         return cls(operation="research", rationale=why, source="fallback")
 
 
+def corpus_profile(corpus: Any) -> dict[str, Any]:
+    """What the collection holds, for the planner: paper counts per venue and per year (DBLP facts).
+    A condition every corpus paper meets is not a condition to apply; the planner needs this to tell."""
+    papers = getattr(corpus, "by_paper", {}) or {}
+    venues: dict[str, set[str]] = {}
+    years: dict[str, set[str]] = {}
+    for row in getattr(corpus, "fact_rows", []) or []:
+        subject = str(row.get("subject"))
+        if subject not in papers:
+            continue
+        if row.get("predicate") == "venue":
+            venues.setdefault(str(row.get("object")), set()).add(subject)
+        elif row.get("predicate") == "year":
+            years.setdefault(str(row.get("object")), set()).add(subject)
+    top = sorted(venues.items(), key=lambda item: -len(item[1]))[:12]
+    return {"papers": len(papers), "venues": {name: len(ids) for name, ids in top},
+            "years": {year: len(ids) for year, ids in sorted(years.items())}}
+
+
 class QueryPlanner:
     """Model-backed question understanding with strict validation."""
 
-    def __init__(self, model: Any) -> None:
+    # Plans of the bare question (no reading), shared by all readings of one question in this process:
+    # a fact lookup's arguments come from the question alone, so every reading gets the same plan.
+    _question_plans: ClassVar[OrderedDict[tuple[str, ...], QueryPlan]] = OrderedDict()
+    _lock: ClassVar[threading.Lock] = threading.Lock()
+
+    def __init__(self, model: Any, profile: dict[str, Any] | None = None) -> None:
         self.model = model
+        self.profile = profile
+
+    def plan_question(self, question: str) -> QueryPlan:
+        """``plan(question)`` without a reading, cached per model, prompt set, corpus and question."""
+        key = (str(getattr(self.model, "model", type(self.model).__name__)), settings().prompt_set or "v2",
+               json.dumps(self.profile, sort_keys=True), " ".join(question.split()))
+        with self._lock:
+            cached = self._question_plans.get(key)
+        if cached is not None:
+            return cached
+        plan = self.plan(question)
+        if plan.source == "model":                                   # a failed call is not remembered
+            with self._lock:
+                self._question_plans[key] = plan
+                while len(self._question_plans) > 256:
+                    self._question_plans.popitem(last=False)
+        return plan
 
     def plan(self, question: str, concept: dict[str, Any] | None = None) -> QueryPlan:
         request: dict[str, Any] = {"question": question}
+        if self.profile and (settings().prompt_set or "v2") != "v1":
+            request["corpus"] = self.profile
         if concept:
             request["research_interpretation"] = {
                 "label": concept.get("label"), "description": concept.get("gloss"),
@@ -347,4 +397,4 @@ class PaperResolver:
         return None
 
 
-__all__ = ["OPERATIONS", "VENUE_FILLER", "PaperResolver", "QueryPlan", "QueryPlanner"]
+__all__ = ["OPERATIONS", "RANKING_OPERATIONS", "VENUE_FILLER", "PaperResolver", "QueryPlan", "QueryPlanner", "corpus_profile"]

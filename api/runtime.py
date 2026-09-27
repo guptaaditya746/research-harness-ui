@@ -24,7 +24,7 @@ from api_models import RunRequest
 from capacity import run_slots
 from harness_agent import AgenticResearch
 from harness_baseline import Baseline20, ExternalHarness
-from harness_baseline.planner import QueryPlanner
+from harness_baseline.planner import QueryPlanner, corpus_profile
 from harness_config import settings
 from harness_corpus.store import CorpusStore
 from harness_extraction import (
@@ -134,10 +134,11 @@ class RunRuntime:
             model=config.model_edc or model_name or config.model_small,
             timeout_s=timeout_s or budget_timeout,
         )
+        corpus = CorpusStore(corpus_root())
         return Baseline20(
-            CorpusStore(corpus_root()),
+            corpus,
             ExtractionEngine(model, schema, schema_model=schema_model, edc_model=edc_model),
-            planner=QueryPlanner(model),
+            planner=QueryPlanner(model, profile=corpus_profile(corpus)),
             retrieve_k=config.baseline_retrieve_k,
             max_passages=(
                 max_passages

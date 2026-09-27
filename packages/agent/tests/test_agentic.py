@@ -607,3 +607,30 @@ def test_routing_needs_resolved_papers_and_reports_a_fallback_honestly() -> None
     assert run.execution_status == "degraded"
     research = next(check for check in run.checks if check.name == "agent research (MCP)")
     assert "did not cover it" in research.detail
+
+
+def test_every_reading_of_a_fact_question_gets_the_plan_of_the_question() -> None:
+    from harness_baseline.planner import QueryPlan, QueryPlanner
+
+    calls: list[str] = []
+
+    class Model:
+        model = "stub-planner"
+
+        def complete_json(self, system: str, user: str) -> dict:
+            calls.append(user)
+            if "research_interpretation" in user:            # a reading-specific plan would differ
+                return {"operation": "research", "rationale": "reading says research"}
+            return {"operation": "paper_authors", "papers": ["Some Paper"], "rationale": "authors"}
+
+    QueryPlanner._question_plans.clear()
+    baseline = StubBaseline()
+    baseline.planner = QueryPlanner(Model(), profile={"papers": 1, "venues": {"ICML 2024": 1}, "years": {"2024": 1}})
+    baseline.preset_plan = None
+    runner = AgenticResearch(baseline, agent_model=HighModel(), high_model=HighModel())
+    runner._mcp_research = lambda session: (_ for _ in ()).throw(AssertionError("agent must not start"))
+    for index in range(3):
+        runner.run("Who wrote Some Paper?", "slow", f"r-reading-{index}", concept=CONCEPT)
+        assert isinstance(baseline.preset_plan, QueryPlan) and baseline.preset_plan.operation == "paper_authors"
+    assert len(calls) == 1                                        # planned once, reused for every reading
+    assert '"corpus"' in calls[0] and "ICML 2024" in calls[0]
