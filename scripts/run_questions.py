@@ -31,22 +31,46 @@ FINISHED = {"answered", "corpus_absent", "no_evidence_found", "awaiting_reading"
 write_lock = threading.Lock()
 
 
+# A busy API can take longer than the client timeout to answer a poll; that is not a failed run.
+POLL_ERRORS_ALLOWED = 15
+# Starting a run is retried only when the request cannot have reached the API (nothing was created).
+NOT_SENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout)
+
+
 def wait(client: httpx.Client, run_id: str, timeout: float) -> dict[str, Any]:
-    """Poll until the run is written (404 while it runs) and has a final status."""
+    """Poll until the run is written (404 while it runs) and has a final status. Transport errors
+    (a poll that timed out, a dropped connection) are retried, up to POLL_ERRORS_ALLOWED in a row."""
     started = time.monotonic()
+    errors = 0
     while True:
-        response = client.get(f"/runs/{run_id}")
-        if response.status_code == 200 and response.json().get("status") in FINISHED:
-            return response.json()
-        if response.status_code not in {200, 404}:
-            response.raise_for_status()
+        try:
+            response = client.get(f"/runs/{run_id}")
+        except httpx.TransportError:
+            errors += 1
+            if errors > POLL_ERRORS_ALLOWED:
+                raise
+            response = None
+        if response is not None:
+            errors = 0
+            if response.status_code == 200 and response.json().get("status") in FINISHED:
+                return response.json()
+            if response.status_code not in {200, 404}:
+                response.raise_for_status()
         if time.monotonic() - started > timeout:
             raise TimeoutError(f"{run_id} did not finish within {timeout:.0f}s")
-        time.sleep(2)
+        time.sleep(2 if response is not None else 5)
 
 
-def start(client: httpx.Client, body: dict[str, Any]) -> str:
-    response = client.post("/runs", json=body)
+def start(client: httpx.Client, body: dict[str, Any], attempts: int = 3) -> str:
+    """POST /runs. A read timeout is not retried (the run may exist already); it gets 5 minutes."""
+    for attempt in range(1, attempts + 1):
+        try:
+            response = client.post("/runs", json=body, timeout=httpx.Timeout(60, read=300))
+            break
+        except NOT_SENT:
+            if attempt == attempts:
+                raise
+            time.sleep(5 * attempt)
     response.raise_for_status()
     return str(response.json()["id"])
 

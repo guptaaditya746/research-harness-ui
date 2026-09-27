@@ -8,6 +8,7 @@ each call) and goes through the ``ModelClient`` protocol.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
 from typing import Any
@@ -48,6 +49,73 @@ def local_name(value: URIRef) -> str:
 # DBLP properties offered as parents of invented properties (e.g. firstAuthor under dblp:authoredBy).
 DBLP_PARENTS = ("authoredBy", "createdBy", "publishedIn", "publishedInStream", "publishedAsPartOf",
                 "isVersionOf", "yearOfPublication", "title", "affiliation")
+
+
+# Source ids are lowercase slugs with a letter and a digit ("p4-abstract", "p12-s3-p2", "2501-01234-metadata");
+# research_notes is part of the composer's input but not a source. Other brackets are prose ("[0.5-0.7]",
+# "[CLS]", "[GPT-4]", "[h_t]").
+_ID_LIKE = re.compile(r"(?=[a-z0-9_-]*[a-z])(?=[a-z0-9_-]*\d)[a-z0-9]+(?:[-_][a-z0-9]+)*")
+_NOT_SOURCES = {"research_notes"}
+# A sentence ends at . ! or ? followed by a space, but not after "et al.", "e.g.", "i.e.", "vs.", "Fig." and the like.
+_SENTENCE_END = re.compile(r"(?<!\bet al\.)(?<!\be\.g\.)(?<!\bi\.e\.)(?<!\bvs\.)(?<!\bFig\.)(?<!\bSec\.)"
+                           r"(?<!\bEq\.)(?<!\bNo\.)(?<!\bU\.S\.)(?<=[.!?])\s+")
+_BRACKET = re.compile(r"\[([^\]]+)\]")
+
+
+def _drop_reason(value: object) -> str:
+    """Evidence review's reason for dropping a triple, as one of the prompt's words."""
+    text = str(value or "").strip().casefold()
+    return next((word for word in ("unsupported", "irrelevant", "malformed") if word in text),
+                "no reason given" if not text else "other")
+
+
+def _looks_like_source(value: str) -> bool:
+    return value in _NOT_SOURCES or bool(_ID_LIKE.fullmatch(value))
+
+
+def citation_ids(group: str, sources: set[str]) -> list[str] | None:
+    """The ids of one bracket group, or None when the group is prose. A group is a citation when one of
+    its parts is a known source ("[p4-abstract, Table 2]" cites p4-abstract) or every part looks like a
+    source id ("[research_notes]", "[p9-abstract]")."""
+    parts = [part.strip() for part in re.split(r"[,;]", group) if part.strip()]
+    if any(part in sources for part in parts):
+        return [part for part in parts if part in sources or _looks_like_source(part)]
+    return parts if parts and all(_looks_like_source(part) for part in parts) else None
+
+
+def drop_unknown_citations(answer: str, cited: list[str], sources: set[str]) -> tuple[str, list[str], list[str], int]:
+    """The answer without citations that are no triple's source.
+
+    A citation after the full stop ("A holds. [p4-abstract]") belongs to the sentence before it. A sentence
+    with a citation that names no known source is dropped, even when it also cites a real one (its other
+    claim has no evidence); an unknown id next to a known one in the same brackets is removed. Sentences
+    without citations stay. Returns the text, the valid cited ids (listed or in brackets), every unknown id
+    and the number of sentences dropped.
+    """
+    def attach(match: re.Match[str]) -> str:
+        return (f" [{match.group(2)}]{match.group(1)}" if citation_ids(match.group(2), sources) is not None
+                else match.group(0))
+
+    def known_only(match: re.Match[str]) -> str:
+        ids = citation_ids(match.group(1), sources)
+        return match.group(0) if ids is None else f" [{', '.join(item for item in ids if item in sources)}]"
+
+    listed = [str(item).strip().strip("[]").strip() for item in cited]
+    valid = [item for item in listed if item in sources]
+    unknown = [item for item in listed if item and item not in sources]
+    text = re.sub(r"([.!?])\s+\[([^\]]+)\](?=\s|$)", attach, str(answer).strip())
+    kept: list[str] = []
+    dropped = 0
+    for sentence in _SENTENCE_END.split(text):
+        groups = [ids for ids in (citation_ids(group, sources) for group in _BRACKET.findall(sentence)) if ids is not None]
+        unknown.extend(item for ids in groups for item in ids if item not in sources)
+        if any(not any(item in sources for item in ids) for ids in groups):
+            dropped += 1
+            continue
+        valid.extend(item for ids in groups for item in ids if item in sources)
+        kept.append(re.sub(r"\s+([.,;:!?])", r"\1", re.sub(r"\s*\[([^\]]+)\]", known_only, sentence)) if groups
+                    else sentence)
+    return " ".join(kept).strip(), list(dict.fromkeys(valid)), list(dict.fromkeys(unknown)), dropped
 
 
 class ExtractionEngine:
@@ -462,7 +530,7 @@ class ExtractionEngine:
         passages: list[dict[str, Any]],
         batch_size: int = 24,
         reviewer: ModelClient | None = None,
-    ) -> tuple[list[ExtractedTriple], dict[str, int]]:
+    ) -> tuple[list[ExtractedTriple], dict[str, Any]]:
         """Second model pass: retain only atomic claims relevant to the question.
 
         The reviewer receives numbered existing candidates and may only return
@@ -479,7 +547,7 @@ class ExtractionEngine:
         candidates = list(deduped.values())
         batches = [candidates[start : start + batch_size] for start in range(0, len(candidates), batch_size)]
 
-        def review(batch: list[ExtractedTriple]) -> list[ExtractedTriple]:
+        def review(batch: list[ExtractedTriple]) -> tuple[list[ExtractedTriple], list[dict[str, str]]]:
             payload = {
                 "question": question,
                 "candidates": [
@@ -497,12 +565,24 @@ class ExtractionEngine:
             if not isinstance(selected, list):
                 raise TypeError("triple reviewer must return keep_ids as a list")
             indices = {value for value in selected if type(value) is int and 0 <= value < len(batch)}
-            return [item for i, item in enumerate(batch) if i in indices]
+            reasons = decision.get("drop_reasons") if isinstance(decision, dict) else None
+            reasons = reasons if isinstance(reasons, dict) else {}
+            dropped = [{"triple": f"{item.subject} —{item.predicate}→ {item.object}", "source": item.source_id,
+                        "why": _drop_reason(reasons.get(str(i)))}
+                       for i, item in enumerate(batch) if i not in indices]
+            return [item for i, item in enumerate(batch) if i in indices], dropped
 
         # Review batches run in parallel (HARNESS_EXTRACTION_CONCURRENCY); kept triples keep their order.
-        kept = [item for part in parallel_map(review, batches, settings().extraction_concurrency) for item in part]
-        return kept, {"candidates": len(triples), "unique": len(candidates), "kept": len(kept),
-                      "model_calls": len(batches)}
+        results = parallel_map(review, batches, settings().extraction_concurrency)
+        kept = [item for part, _ in results for item in part]
+        dropped = [item for _, part in results for item in part]
+        report: dict[str, Any] = {"candidates": len(triples), "unique": len(candidates), "kept": len(kept),
+                                  "model_calls": len(batches)}
+        if dropped:
+            # Why facts are lost at this stage (the largest loss in the funnel): counts per reason and examples.
+            report["dropped"] = dict(Counter(item["why"] for item in dropped).most_common())
+            report["dropped_examples"] = dropped[:8]
+        return kept, report
 
     @labelled("answer composition and verification")
     def answer(
@@ -517,17 +597,21 @@ class ExtractionEngine:
     ) -> AnswerResult:
         """``notes`` (agentic runs) go to composition only; the verifier sees the plain question.
 
-        One bounded repair (Phase 5.1): when the verifier removes every claim of the answer, it is
-        written once more from the triples alone (no research notes), told which statements were
-        rejected. ``report["repaired"]`` records that it happened. A second rejection raises
-        ``UnsupportedAnswer`` with the verifier's sentences; the caller decides what to show instead.
+        One bounded repair (Phase 5.1): when the verifier removes every claim of the answer, or it cites
+        only ids that are no triple's source, it is written once more from the triples alone (no
+        research notes), told which statements or ids were rejected. ``report["repaired"]`` records that
+        it happened; ``report["citations_dropped"]`` counts sentences dropped from the returned answer
+        for citing unknown ids. A second rejection raises ``UnsupportedAnswer``; the caller decides what
+        to show instead.
         """
         try:
-            return self._compose(question, inferred, triples, verify, verifier, notes)
+            return self._compose(question, inferred, triples, verify, verifier, notes, report=report)
         except UnsupportedAnswer as first:
             # The v1 templates have no repair section, so a second call would repeat the first.
-            if first.stage != "verification" or settings().prompt_set == "v1":
+            if first.stage not in {"verification", "citation"} or settings().prompt_set == "v1":
                 raise
+            if first.stage == "citation" and not first.unknown_sources:
+                raise                                      # nothing to tell the composer: same prompt again
             emit_model_event("Answer unsupported", "writing the answer once more from the triples alone")
             if report is not None:
                 report["repaired"] = True
@@ -535,10 +619,12 @@ class ExtractionEngine:
             try:
                 return self._compose(question, inferred, triples, verify, verifier, None,
                                      repair=first.removed or [item["text"] for item in first.sentences
-                                                              if item["verdict"] == "removed"])
+                                                              if item["verdict"] == "removed"],
+                                     bad_sources=first.unknown_sources, report=report)
             except UnsupportedAnswer as second:
                 raise UnsupportedAnswer(f"{first}; after one repair: {second}", stage=second.stage,
-                                        removed=second.removed, sentences=second.sentences) from second
+                                        removed=second.removed, sentences=second.sentences,
+                                        unknown_sources=second.unknown_sources) from second
 
     def _compose(
         self,
@@ -549,6 +635,8 @@ class ExtractionEngine:
         verifier: ModelClient | None,
         notes: list[str] | None,
         repair: list[str] | None = None,
+        bad_sources: list[str] | None = None,
+        report: dict[str, Any] | None = None,
     ) -> AnswerResult:
         payload: dict[str, Any] = {
             "question": question,
@@ -558,7 +646,9 @@ class ExtractionEngine:
         }
         if notes:
             payload["research_notes"] = list(notes)
-        extra = {"repair": [str(item)[:300] for item in repair[:8]]} if repair else {}
+        extra: dict[str, Any] = {"repair": [str(item)[:300] for item in repair[:8]]} if repair else {}
+        if bad_sources:
+            extra["bad_sources"] = [str(item)[:80] for item in bad_sources[:8]]
         try:
             reply = complete(self.model, render("extraction/answer_composition", payload, **extra))
         except ModelFailure as exc:
@@ -570,13 +660,23 @@ class ExtractionEngine:
         if isinstance(reply, dict):
             reply = {key: value for key, value in reply.items() if key != "sentences"}   # set only by verification
         result = AnswerResult.model_validate(reply)
-        result = result.model_copy(update={"sparql": self.answer_query(triples, result.cited_source_ids)})
         sources = {triple.source_id for triple in triples}
-        if not set(result.cited_source_ids) <= sources:
+        if report is not None:
+            report.pop("citations_dropped", None)             # describes the attempt that is returned
+        text, cited, unknown, dropped = drop_unknown_citations(result.answer, result.cited_source_ids, sources)
+        if unknown and (not text or not cited):
             raise UnsupportedAnswer(
-                f"answer cites a source outside the extracted evidence "
-                f"({sorted(set(result.cited_source_ids) - sources)[:3]}; {len(triples)} triples available)",
-                stage="citation")
+                f"no sentence of the answer cites a source of the extracted evidence (it cited {unknown[:3]}); "
+                f"{len(triples)} triples available", stage="citation", unknown_sources=unknown)
+        if dropped:
+            # e.g. "[research_notes]" or a passage id no triple carries: those sentences have no evidence.
+            emit_model_event("Answer cites unknown sources",
+                             f"dropped {dropped} sentence{'s' if dropped > 1 else ''} citing {', '.join(unknown[:3])}")
+            if report is not None:
+                report["citations_dropped"] = {"sentences": dropped, "ids": unknown[:5]}
+        if unknown:
+            result = result.model_copy(update={"answer": text, "cited_source_ids": cited})
+        result = result.model_copy(update={"sparql": self.answer_query(triples, result.cited_source_ids)})
         if verify:
             reviewed = complete(verifier or self.model, render(
                 "extraction/answer_verification",
@@ -633,8 +733,7 @@ class ExtractionEngine:
             reason = str(item.get("reason") or "")
             if item.get("supported") is True and not ids:
                 reason = reason or "cites no source of the supplied triples"
-            in_text = [clean(part) for group in re.findall(r"\[([^\]]+)\]", text)
-                       for part in re.split(r"[,;]", group) if clean(part)]
+            in_text = [item for group in _BRACKET.findall(text) for item in citation_ids(group, sources) or []]
             outside = [value for value in in_text if value not in sources]
             if accepted and outside:
                 accepted, reason = False, f"cites a source not among the triples: {', '.join(outside[:3])}"

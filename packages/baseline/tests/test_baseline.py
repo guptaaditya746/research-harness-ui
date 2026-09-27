@@ -429,6 +429,76 @@ def test_planner_degrades_to_research_instead_of_guessing() -> None:
     assert down.operation == "research" and "unavailable" in down.rationale
 
 
+def test_a_run_whose_triples_cannot_enter_the_graph_is_no_results_not_an_empty_answer(tmp_path: Path) -> None:
+    class UnindexedTarget:
+        model = "recorded"
+
+        def __init__(self) -> None:
+            self.replies = iter([
+                {"label": "Compared methods", "gloss": "What VPP is compared to", "classes": ["Paper"],
+                 "properties": ["comparesTo"]},
+                {"triples": [{"subject": "p4", "predicate": "comparesTo", "object": "A Paper Outside The Corpus",
+                              "source_id": "p4-abstract", "evidence": "We propose the Video Prediction Policy"}]},
+                {"answer": "p4 is compared to another paper [p4-abstract].", "cited_source_ids": ["p4-abstract"]},
+            ])
+
+        def complete_json(self, system: str, user: str) -> dict:
+            return next(self.replies)
+
+    question = "What is the Video Prediction Policy compared to?"
+    runner = Baseline20(corpus(tmp_path), ExtractionEngine(UnindexedTarget(), hand_written_subschema()),
+                        planner=StubPlanner({question: QueryPlan(operation="research")}))
+    run = runner.run(question)["run"]
+    assert run.status != "answered" and run.reason == "no_results"
+    failed = [check.detail for check in run.checks if check.status == "fail"]
+    assert any("1 paper not indexed" in detail for detail in failed)
+
+
+def test_a_fact_plan_must_take_its_arguments_from_the_question() -> None:
+    # A term copied from the reading's label, not the question, answers a different question.
+    concept = {"label": "MethodX robustness framework", "gloss": "Frameworks that test robustness."}
+    borrowed = QueryPlanner(JsonModel({"operation": "papers_with_title_term", "term": "robustness framework"})).plan(
+        "Who wrote the MethodX paper?", concept)
+    assert borrowed.operation == "research" and borrowed.source == "fallback"
+    assert "term 'robustness framework'" in borrowed.rationale
+    assert borrowed.stated_measure() == "MethodX robustness framework"
+    wrong_year = QueryPlanner(JsonModel({"operation": "papers_in_year", "year": 2023})).plan("List the papers from 2024.")
+    assert wrong_year.operation == "research" and "year 2023" in wrong_year.rationale
+    wrong_venue = QueryPlanner(JsonModel({"operation": "papers_in_venue", "venues": ["COLT 2021"]})).plan(
+        "List every COLT paper.")
+    assert wrong_venue.operation == "research" and "venue 'COLT 2021'" in wrong_venue.rationale
+    # Filler and stop words in a venue, "ICML2024" as one word, a year inside the venue.
+    for venue, year in (("Findings of ICML 2024", None), ("ICML 2024 main conference", 2024)):
+        plan = QueryPlanner(JsonModel({"operation": "papers_in_venue", "venues": [venue], "year": year})).plan(
+            "Show every ICML2024 Findings paper.")
+        assert plan.operation == "papers_in_venue", plan.rationale
+    plural = QueryPlanner(JsonModel({"operation": "papers_with_title_term", "term": "transformer", "year": 2022})).plan(
+        "Show the 2022 titles that contain the word transformers.")
+    assert plural.operation == "papers_with_title_term"
+    loose = QueryPlanner(JsonModel({"operation": "papers_with_title_term", "term": "findings"})).plan(
+        "Help me find titles about graphs.")
+    assert loose.operation == "research"                  # "find" in the question does not state "findings"
+    named = QueryPlanner(JsonModel({"operation": "paper_year", "papers": ["BenchY"], "venues": ["NeurIPS 2023"]})).plan(
+        "When did the NeurIPS 2023 BenchY paper come out?", concept)
+    assert named.operation == "paper_year"                # the venue only describes the named paper
+
+
+def test_a_fact_plan_that_leaves_out_a_condition_becomes_research() -> None:
+    result = QueryPlanner(JsonModel({"operation": "papers_in_venue", "venues": ["ICML"],
+                                     "ignored": ["report results on BenchY"]})).plan(
+        "Show the ICML papers that report results on BenchY.")
+    assert result.operation == "research" and "BenchY" in result.rationale
+    research = QueryPlanner(JsonModel({"operation": "research", "ignored": ["x"]})).plan("Show the ICML papers on y.")
+    assert research.operation == "research" and research.source == "model"
+    none = QueryPlanner(JsonModel({"operation": "paper_authors", "papers": ["MethodX"], "ignored": ["none"]})).plan(
+        "Who wrote MethodX?")
+    assert none.operation == "paper_authors"
+    # A filter the operation does not apply (the citing papers' year) is a condition left out.
+    dated = QueryPlanner(JsonModel({"operation": "citing_count", "papers": ["MethodX"], "year": 2024})).plan(
+        "How many 2024 papers cite MethodX?")
+    assert dated.operation == "research" and "year" in dated.rationale
+
+
 def test_paper_resolver_links_mentions_and_refuses_ambiguity() -> None:
     resolver = PaperResolver({
         "p6": "FOCUS: object-centric world models for robotic manipulation",

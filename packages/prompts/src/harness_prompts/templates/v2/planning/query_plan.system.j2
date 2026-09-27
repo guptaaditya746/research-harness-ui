@@ -6,31 +6,39 @@ You turn a research question about a fixed corpus of scientific papers into a ty
 {% endfor %}
 
 ## How to choose
-1. If a research_interpretation is supplied, plan for that interpretation: choose the operation that computes exactly the measure it names (a citation-based ranking is author_citation_counts, a paper-count ranking is author_paper_counts). If no operation computes that measure, choose research.
+1. A research_interpretation, when supplied, is the meaning of an ambiguous question that the user chose. It settles what an ambiguous word means (a citation-based ranking is author_citation_counts, a paper-count ranking is author_paper_counts); it never replaces the question. The plan still answers the question as asked, and every argument (papers, venues, term, year) comes from the question's own words, never from the interpretation's label or description.
 2. Choose a metadata or citation operation only when the question asks for that metadata. When the question needs what the papers say (results, methods, limitations, comparisons, opinions), choose research.
-3. When unsure, choose research: it is slower but never answers a different question than the one asked.
+3. A metadata operation must apply every condition the question puts on the answer. A list of the papers in a venue, a year or with a title word does not apply a topic, a method or a result ("papers in venue V that study T" needs research). If the chosen operation would leave a condition out, choose research.
+4. When unsure, choose research: it is slower but never answers a different question than the one asked.
 
 ## Filling the fields
 - rationale: one short sentence explaining the choice (write it first).
 - papers: paper names or titles copied exactly as written in the question, without words like "the" or "paper"; at most two.
 - year, extreme, rank, min_papers: only when the operation uses them, otherwise null.
-- venues: venue names as written in the question, with their year (for example ["ICML 2024", "NeurIPS 2024"]); only for authors_in_venues and papers_in_venue, otherwise [].
+- venues: venue names as written in the question, with their year when the question gives one (for example ["ICML 2024", "NeurIPS 2024"]); only for authors_in_venues and papers_in_venue, otherwise [].
 - term: the word or phrase the titles must contain; only for papers_with_title_term, otherwise null.
 - evidence_focus (research only): results, limitations, methods or general.
 - measure: a short phrase naming the quantity or criterion the answer will use (for example "number of distinct corpus papers per author").
+- ignored: the conditions of the question that the chosen operation does not apply, in the question's words; [] when it applies all of them (always [] for research). A detail that only describes a named paper (its venue or year) is not ignored, because naming the paper already fixes the answer. Words that only say the papers are in the corpus ("indexed", "in the corpus") are not conditions.
 
 ## Output
-Return one JSON object with the keys rationale, operation, papers, year, extreme, rank, min_papers, venues, term, evidence_focus, measure.
+Return one JSON object with the keys rationale, operation, papers, year, extreme, rank, min_papers, venues, term, evidence_focus, measure, ignored.
 
 Examples:
 Question: "Who wrote Sparse Mixtures for Tabular Data?"
-{"rationale": "Asks for the authors of one named paper.", "operation": "paper_authors", "papers": ["Sparse Mixtures for Tabular Data"], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "general", "measure": "the paper's authors (DBLP)"}
+{"rationale": "Asks for the authors of one named paper.", "operation": "paper_authors", "papers": ["Sparse Mixtures for Tabular Data"], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "general", "measure": "the paper's authors (DBLP)", "ignored": []}
 
 Question: "List every author with five or more corpus papers."
-{"rationale": "Authors filtered by their number of corpus papers.", "operation": "author_paper_counts", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": 5, "venues": [], "term": null, "evidence_focus": "general", "measure": "number of distinct corpus papers per author"}
+{"rationale": "Authors filtered by their number of corpus papers.", "operation": "author_paper_counts", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": 5, "venues": [], "term": null, "evidence_focus": "general", "measure": "number of distinct corpus papers per author", "ignored": []}
 
 Question: "Did anyone publish at ICML 2024 as well as NeurIPS 2024?"
-{"rationale": "Intersects the authors of the papers in two venues.", "operation": "authors_in_venues", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": ["ICML 2024", "NeurIPS 2024"], "term": null, "evidence_focus": "general", "measure": "authors with a corpus paper in every named venue (DBLP venue facts)"}
+{"rationale": "Intersects the authors of the papers in two venues.", "operation": "authors_in_venues", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": ["ICML 2024", "NeurIPS 2024"], "term": null, "evidence_focus": "general", "measure": "authors with a corpus paper in every named venue (DBLP venue facts)", "ignored": []}
 
 Question: "What weaknesses do the papers admit in their approach to dependency parsing?"
-{"rationale": "Needs what the papers say about their weaknesses, which requires full text.", "operation": "research", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "limitations", "measure": "limitations reported in the papers"}
+{"rationale": "Needs what the papers say about their weaknesses, which requires full text.", "operation": "research", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "limitations", "measure": "limitations reported in the papers", "ignored": []}
+
+Question: "How many NeurIPS 2023 papers use BenchY for evaluation?"
+{"rationale": "Counting the venue's papers would not apply the BenchY condition, so this needs the full text.", "operation": "research", "papers": [], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "methods", "measure": "NeurIPS 2023 papers that evaluate on BenchY", "ignored": []}
+
+Question: "When did the MethodX paper come out?", research_interpretation: {"label": "MethodX for low-resource translation", "description": "Work applying MethodX to languages with little data"}
+{"rationale": "Asks the publication year of one named paper; the interpretation's topic is not part of what is asked.", "operation": "paper_year", "papers": ["MethodX"], "year": null, "extreme": null, "rank": null, "min_papers": null, "venues": [], "term": null, "evidence_focus": "general", "measure": "the paper's publication year (DBLP)", "ignored": []}

@@ -47,6 +47,20 @@ Operation = Literal[
 
 EvidenceFocus = Literal["general", "results", "limitations", "methods"]
 
+# Words that are not part of a venue's name ("ACL 2025 main conference", "long papers").
+VENUE_FILLER = {"main", "long", "short", "conference", "papers", "paper", "proceedings", "track"}
+
+# Operations on one or two named papers: a venue or year in the question describes the paper.
+_NAMED_PAPER_OPERATIONS = {"find_paper", "paper_authors", "paper_year", "paper_venue", "cites"}
+# Which filters (year, venues, title term) each other fact operation applies.
+_FILTERS_USED: dict[str, set[str]] = {
+    "papers_in_year": {"year"},
+    "papers_with_title_term": {"term", "year"},
+    "papers_in_venue": {"venues"},
+    "authors_in_venues": {"venues"},
+}
+_PLACEHOLDERS = {"none", "n/a", "na", "null", "nothing", "-", "[]", "no"}
+
 # What each fact operation measures, stated with the answer so an ambiguous
 # question ("best author") never silently answers a different measure.
 MEASURES: dict[str, str] = {
@@ -113,6 +127,7 @@ class QueryPlan(BaseModel):
     term: str | None = None
     evidence_focus: EvidenceFocus = "general"
     measure: str | None = None
+    ignored: list[str] = Field(default_factory=list)   # question conditions the operation does not apply
     rationale: str = ""
     source: Literal["model", "fallback"] = "model"
 
@@ -137,6 +152,18 @@ class QueryPlan(BaseModel):
         if isinstance(value, str):
             value = [value]
         return [str(item).strip() for item in value if str(item).strip()][:4]
+
+    @field_validator("ignored", mode="before")
+    @classmethod
+    def _clean_ignored(cls, value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            return []
+        items = [str(item).strip() for item in value if str(item).strip()]
+        return [item for item in items if item.casefold().strip(".") not in _PLACEHOLDERS][:6]
 
     @field_validator("term", mode="before")
     @classmethod
@@ -172,6 +199,43 @@ class QueryPlan(BaseModel):
             return self.term is not None and (self.year is None or 1900 <= self.year <= 2100)
         return True
 
+    def ungrounded(self, question: str) -> list[str]:
+        """The arguments of a fact operation that the question does not state.
+
+        A fact operation computes from its arguments alone, so each must come from the question's
+        words: a venue, term or paper taken from a reading's label would answer a different question.
+        Words match as whole words or word prefixes ("hallucination" / "hallucinations").
+        """
+        if self.operation == "research":
+            return []
+        asked = _words(question)
+        missing = []
+        for paper in self.papers:
+            tokens = [word for word in _words(paper) if word not in _STOP]
+            if tokens and sum(_stated(word, asked) for word in tokens) / len(tokens) < 0.6:
+                missing.append(f"paper {paper!r}")
+        for venue in self.venues:
+            if not all(_stated(word, asked) for word in _words(venue) if word not in VENUE_FILLER | _STOP):
+                missing.append(f"venue {venue!r}")
+        if self.term and not all(_stated(word, asked) for word in _words(self.term) if word not in _STOP):
+            missing.append(f"term {self.term!r}")
+        if self.year is not None and str(self.year) not in asked:
+            missing.append(f"year {self.year}")
+        return missing
+
+    def unused_filters(self) -> list[str]:
+        """Filters the plan carries that its operation does not apply ("papers from 2024 that cite X" as
+        citing_count with a year): answering would silently drop that condition. For operations on a
+        named paper a venue or year only describes that paper, so they are not filters there."""
+        if self.operation == "research" or self.operation in _NAMED_PAPER_OPERATIONS:
+            return []
+        uses = _FILTERS_USED.get(self.operation, set())
+        # A year that is part of a venue ("ACL 2025") is applied with the venue.
+        year_in_venue = "venues" in uses and any(str(self.year) in _words(venue) for venue in self.venues)
+        present = {"year": self.year is not None and not year_in_venue, "venues": bool(self.venues),
+                   "term": self.term is not None}
+        return [name for name, given in present.items() if given and name not in uses]
+
     @classmethod
     def fallback(cls, why: str) -> QueryPlan:
         return cls(operation="research", rationale=why, source="fallback")
@@ -200,6 +264,16 @@ class QueryPlanner:
             return QueryPlan.fallback(f"invalid plan: {exc.errors()[0].get('msg')}")
         if not plan.requirements_met():
             return QueryPlan.fallback(f"plan for {plan.operation} lacks required arguments")
+        missing = plan.ungrounded(question)
+        unused = plan.unused_filters()
+        if missing:
+            plan = QueryPlan.fallback(f"plan for {plan.operation} uses {', '.join(missing)}, "
+                                      "which the question does not state")
+        elif unused:
+            plan = QueryPlan.fallback(f"{plan.operation} cannot apply the {' and '.join(unused)} the question names")
+        elif plan.operation != "research" and plan.ignored:
+            plan = QueryPlan.fallback(f"{plan.operation} would leave out part of the question "
+                                      f"({'; '.join(plan.ignored[:3])})")
         if concept and concept.get("label") and plan.operation == "research":
             # The user chose this reading; the answer must say it used it, not
             # whatever measure the model derived from the question's wording.
@@ -211,6 +285,18 @@ class QueryPlanner:
 
 _STOP = {"the", "a", "an", "paper", "papers", "work", "article", "study", "of", "and", "for",
          "on", "in", "with", "to", "by", "its"}
+
+
+def _words(text: object) -> list[str]:
+    """Lower-case words and digits; "ACL2025" reads as "ACL 2025"."""
+    return re.findall(r"[a-z0-9]+", re.sub(r"(?<=[A-Za-z])(?=(?:19|20)\d{2}\b)", " ", str(text)).casefold())
+
+
+def _stated(word: str, asked: list[str]) -> bool:
+    """Whether ``word`` occurs in the question as a word or a word prefix, either way round
+    ("model" / "models", "hallucinations" / "hallucination")."""
+    return any(word == other or (len(word) >= 3 and other.startswith(word))
+               or (len(other) >= 4 and word.startswith(other) and len(word) - len(other) <= 2) for other in asked)
 
 
 def _norm(text: str) -> str:
@@ -261,4 +347,4 @@ class PaperResolver:
         return None
 
 
-__all__ = ["OPERATIONS", "PaperResolver", "QueryPlan", "QueryPlanner"]
+__all__ = ["OPERATIONS", "VENUE_FILLER", "PaperResolver", "QueryPlan", "QueryPlanner"]

@@ -229,22 +229,50 @@ def test_an_answer_emptied_with_notes_is_written_again_from_the_triples_alone() 
     assert result.cited_source_ids == ["p4-abstract"] and "hrn:usesDataset" in result.sparql
 
 
-def test_a_citation_outside_the_evidence_is_not_retried_without_notes() -> None:
+def test_an_answer_citing_no_triple_source_is_repaired_once_without_notes() -> None:
     from harness_extraction import ExtractedTriple, SchemaInference, UnsupportedAnswer
+
+    systems: list[str] = []
 
     class Composer:
         calls = 0
 
         def complete_json(self, system: str, user: str) -> dict:
             Composer.calls += 1
-            return {"answer": "p9 does it [p9-abstract].", "cited_source_ids": ["p9-abstract"]}
+            systems.append(system)
+            return {"answer": "p9 does it [p9-abstract]. Notes say so [research_notes].",
+                    "cited_source_ids": ["p9-abstract"]}
 
     engine = ExtractionEngine(Composer(), hand_written_subschema())
     triples = [ExtractedTriple(subject="p4", predicate="usesDataset", object="x", source_id="p4-abstract", evidence="x")]
     inferred = SchemaInference(label="l", gloss="g", classes=["Paper"], properties=["usesDataset"])
+    report: dict = {}
     with pytest.raises(UnsupportedAnswer) as caught:
-        engine.answer(QUESTION, inferred, triples, notes=["a note"], report={})
-    assert caught.value.stage == "citation" and Composer.calls == 1
+        engine.answer(QUESTION, inferred, triples, notes=["a note"], report=report)
+    assert caught.value.stage == "citation" and Composer.calls == 2
+    assert caught.value.unknown_sources == ["p9-abstract", "research_notes"]
+    # The repair names the ids that are no triple's source.
+    assert '"research_notes"' in systems[1] and '"research_notes"' not in systems[0]
+    assert report["repaired"] is True and "citations_dropped" not in report
+
+
+def test_sentences_citing_only_unknown_ids_are_dropped_and_the_rest_kept() -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference
+
+    class Composer:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {"answer": "p4 uses x [p4-abstract]. The agent also found y [research_notes]. "
+                              "It scores [0.5-0.7] on z [p4-abstract, p9-x].",
+                    "cited_source_ids": ["p4-abstract", "research_notes"]}
+
+    engine = ExtractionEngine(Composer(), hand_written_subschema())
+    triples = [ExtractedTriple(subject="p4", predicate="usesDataset", object="x", source_id="p4-abstract", evidence="x")]
+    inferred = SchemaInference(label="l", gloss="g", classes=["Paper"], properties=["usesDataset"])
+    report: dict = {}
+    result = engine.answer(QUESTION, inferred, triples, report=report)
+    assert result.answer == "p4 uses x [p4-abstract]. It scores [0.5-0.7] on z [p4-abstract]."
+    assert result.cited_source_ids == ["p4-abstract"]
+    assert report == {"citations_dropped": {"sentences": 1, "ids": ["research_notes", "p9-x"]}}
 
 
 def test_an_answer_nothing_supports_after_the_repair_states_the_extracted_facts(tmp_path: Path) -> None:
@@ -273,3 +301,72 @@ def test_an_answer_nothing_supports_after_the_repair_states_the_extracted_facts(
     assert [item["verdict"] for item in answer.sentences] == ["removed", "from_facts"]
     warn = [check for check in runner.checks if check.name == "answer composition"]
     assert warn and warn[0].status == "warn" and "states 1 of the 1 extracted facts" in warn[0].detail
+
+
+def test_an_answer_that_cites_only_research_notes_after_the_repair_states_the_extracted_facts(tmp_path: Path) -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference
+
+    class NotesOnly:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {"answer": "The agent found it works [research_notes].", "cited_source_ids": ["research_notes"]}
+
+    engine = ExtractionEngine(NotesOnly(), hand_written_subschema())
+    runner = Baseline20(two_papers(tmp_path), engine, enhanced=True, refine=True, refinement_model=NotesOnly())
+    runner.started = __import__("time").monotonic()
+    state = {"question": QUESTION, "passages": [], "concept": None,
+             "inferred": SchemaInference(label="Tasks", gloss="g", classes=["Paper"], properties=["usesDataset"]),
+             "extracted": [ExtractedTriple(subject="p4", predicate="usesDataset", object="robot videos",
+                                           source_id="p4-abstract", evidence="robot videos")]}
+    answer = runner._query_answer(state)["answer"]
+    assert answer.answer == "Video Prediction Policy: uses dataset robot videos [p4-abstract]."
+    details = [check.detail for check in runner.checks if check.name == "answer composition"]
+    assert any("cited research_notes" in detail and "states 1 of the 1" in detail for detail in details)
+
+
+def test_citation_edge_cases_keep_prose_brackets_and_attach_trailing_citations() -> None:
+    from harness_extraction.engine import drop_unknown_citations
+
+    sources = {"p4-abstract", "p2-s1-p3"}
+    # A citation after the full stop belongs to the sentence before it; a notes-only sentence goes.
+    assert drop_unknown_citations("A is true. [research_notes] B is true. [p4-abstract]", [], sources)[:2] == (
+        "B is true [p4-abstract].", ["p4-abstract"])
+    # A claim cited only by an unknown id is not re-attributed to the known id later in the sentence.
+    assert drop_unknown_citations("Claim A [p9-abstract] and claim B [p4-abstract].", [], sources)[0] == ""
+    # Abbreviations do not end sentences; model names, ranges and tokens in brackets are prose.
+    text = "Smith et al. report it [p4-abstract]. It beats GPT-4 [GPT-4], e.g. on [0.5-0.7] [p2-s1-p3]."
+    assert drop_unknown_citations(text, [], sources) == (text, ["p4-abstract", "p2-s1-p3"], [], 0)
+    assert drop_unknown_citations("Uses [p4-abstract, Table 2].", [], sources)[0] == "Uses [p4-abstract]."
+
+
+def test_an_uncited_answer_is_not_repaired_with_the_same_prompt() -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference
+
+    class Honest:
+        calls = 0
+
+        def complete_json(self, system: str, user: str) -> dict:
+            Honest.calls += 1
+            return {"answer": "The triples do not say which method is fastest.", "cited_source_ids": []}
+
+    engine = ExtractionEngine(Honest(), hand_written_subschema())
+    triples = [ExtractedTriple(subject="p4", predicate="usesDataset", object="x", source_id="p4-abstract", evidence="x")]
+    inferred = SchemaInference(label="l", gloss="g", classes=["Paper"], properties=["usesDataset"])
+    result = engine.answer(QUESTION, inferred, triples, report={})
+    assert result.answer.startswith("The triples do not say") and Honest.calls == 1
+
+
+def test_a_fast_run_without_evidence_review_does_not_fall_back_to_stating_facts(tmp_path: Path) -> None:
+    from harness_extraction import ExtractedTriple, SchemaInference, UnsupportedAnswer
+
+    class NotesOnly:
+        def complete_json(self, system: str, user: str) -> dict:
+            return {"answer": "It works [research_notes].", "cited_source_ids": ["research_notes"]}
+
+    runner = Baseline20(two_papers(tmp_path), ExtractionEngine(NotesOnly(), hand_written_subschema()))
+    runner.started = __import__("time").monotonic()
+    state = {"question": QUESTION, "passages": [], "concept": None,
+             "inferred": SchemaInference(label="Tasks", gloss="g", classes=["Paper"], properties=["usesDataset"]),
+             "extracted": [ExtractedTriple(subject="p4", predicate="usesDataset", object="robot videos",
+                                           source_id="p4-abstract", evidence="robot videos")]}
+    with pytest.raises(UnsupportedAnswer):
+        runner._query_answer(state)

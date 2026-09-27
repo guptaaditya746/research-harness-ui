@@ -41,6 +41,7 @@ from .state import (
     BaselineState,
     CorpusAbsent,
     NoEvidenceFound,
+    NoResults,
 )
 
 
@@ -213,12 +214,14 @@ class RunOutcomes:
             seed_rdf.append((subject, predicate, object_))
         if seed_rdf:
             dataset.add_event("corpus-seed", seed_rdf, sorted({str(row["source_id"]) for row in seed_rows}))
+        dropped = {"invalid edge": 0, "paper not indexed": 0}
         for index, item in enumerate(extracted, start=1):
             candidate = Triple(
                 s=item.subject, p=item.predicate, o=item.object,
                 support="1 passage", evidence=item.evidence, source=item.source_id,
             )
             if not valid_edge(candidate):
+                dropped["invalid edge"] += 1
                 continue
             local_predicate = URIRef(HRN[item.predicate])
             predicate = URIRef(
@@ -237,6 +240,7 @@ class RunOutcomes:
                 and not object_iri and item.object not in self.corpus.by_paper
             ):
                 # A paper-valued relation must resolve to an indexed paper.
+                dropped["paper not indexed"] += 1
                 continue
             object_ = (
                 Literal(item.object)
@@ -259,6 +263,15 @@ class RunOutcomes:
                     tripleId=f"t-{index:03d}",
                 )
             )
+        lost = ", ".join(f"{count} {why}" for why, count in dropped.items() if count)
+        if not ui_triples:
+            # Nothing the answer could cite reached the graph: an honest "no results", not an answer
+            # without facts.
+            raise NoResults(f"none of the {len(extracted)} extracted triples could enter the answer graph ({lost}); "
+                            "a paper-valued relation must name an indexed paper")
+        if lost:
+            self._emit("Graph building dropped triples", f"{lost} of {len(extracted)}")
+
         def paper_for_source(source_id: str, subject: str) -> str:
             row = self.corpus.by_passage.get(source_id)
             paper_id = str(row["paper_id"]) if row else subject

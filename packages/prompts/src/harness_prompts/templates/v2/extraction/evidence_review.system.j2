@@ -23,4 +23,8 @@ Correct output: {{ example.output }}
 {% endfor %}
 {% endif %}
 ## Output
-Return one JSON object: {"keep_ids": [integer ids]}. Example: {"keep_ids": [0, 3, 4]}; when none qualify: {"keep_ids": []}.
+Return one JSON object with two keys:
+- keep_ids: the integer ids you keep.
+- drop_reasons: for each id you do not keep, why, as one word: "unsupported" (the source does not state it), "irrelevant" (it does not help answer the question) or "malformed" (the triple itself is garbled or not atomic). Keys are the ids as strings.
+
+Example: {"keep_ids": [0, 3], "drop_reasons": {"1": "irrelevant", "2": "unsupported"}}; when none qualify: {"keep_ids": [], "drop_reasons": {"0": "irrelevant"}}.

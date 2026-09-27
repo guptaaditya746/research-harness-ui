@@ -13,7 +13,7 @@ from harness_extraction import (
     ExtractedTriple,
 )
 
-from .planner import PaperResolver, QueryPlan
+from .planner import VENUE_FILLER, PaperResolver, QueryPlan
 from .state import (
     CorpusAbsent,
 )
@@ -22,9 +22,6 @@ from .state import (
 def normal_text(text: object) -> str:
     """Lower-case words and digits joined by single spaces (the same rule as labelling's ``norm``)."""
     return " ".join(re.findall(r"[a-z0-9]+", str(text).casefold()))
-
-
-VENUE_FILLER = {"main", "long", "short", "conference", "papers", "paper", "proceedings", "track"}
 
 
 def venue_matches(venue_fact: object, paper_year: object, mention: str) -> bool:

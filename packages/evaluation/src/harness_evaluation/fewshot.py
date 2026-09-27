@@ -6,7 +6,8 @@ Two kinds of error on the gold set become example candidates:
   even at the soft level. The draft shows the gold triple's evidence passage as input and the
   proposition that should have been extracted from it as output.
 - ``extraction/evidence_review``: extra run triples that reviewers rejected as wrong. The draft
-  shows the candidate with its evidence as input and ``{"keep_ids": []}`` as output.
+  shows the candidate with its evidence as input and ``{"keep_ids": [], "drop_reasons": {...}}`` as output
+  (the reason is left for the reviewer to fill in).
 
 Candidates are grouped by triple and ranked by how many runs made the error, so repeated errors
 come first. The ``why`` of each draft is left for a person to write: an example teaches only
@@ -36,6 +37,7 @@ LOGGER = logging.getLogger(__name__)
 EXTRACT_PROMPT = "extraction/edc_extract"
 REVIEW_PROMPT = "extraction/evidence_review"
 WHY_TODO = "TODO: say what the model got wrong and what to do instead"
+REASON_TODO = "TODO: unsupported, irrelevant or malformed"
 
 
 def _words(predicate: str) -> str:
@@ -61,7 +63,7 @@ def _review_draft(item: dict[str, Any], question: str) -> dict[str, str]:
     if item.get("evidence"):
         candidate += f', evidence "{item["evidence"]}"'
     return {"input": f'question: "{question}"; candidate {candidate}',
-            "output": json.dumps({"keep_ids": []}), "why": WHY_TODO}
+            "output": json.dumps({"keep_ids": [], "drop_reasons": {"0": REASON_TODO}}), "why": WHY_TODO}
 
 
 def fewshot_candidates(

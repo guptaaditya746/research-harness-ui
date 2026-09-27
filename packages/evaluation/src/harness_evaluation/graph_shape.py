@@ -187,6 +187,8 @@ def funnel(folder: Path) -> dict[str, Any] | None:
         return None
     passages = opened = mapped = 0
     kept: int | None = None
+    dropped: Counter[str] = Counter()
+    examples: list[dict[str, Any]] = []
     for entry in batches if isinstance(batches, list) else []:
         if not isinstance(entry, dict):
             continue
@@ -199,7 +201,11 @@ def funnel(folder: Path) -> dict[str, Any] | None:
                 mapped += sum(bool(item.get("selected")) for item in stage.get("decisions") or [])
         if entry.get("stage") == "evidence_review":
             kept = int(entry.get("kept") or 0)
-    return {"passages": passages, "open": opened, "mapped": mapped, "kept": mapped if kept is None else kept}
+            # Why evidence review dropped triples (recorded since the drop reasons were added).
+            dropped.update({str(why): int(count) for why, count in (entry.get("dropped") or {}).items()})
+            examples.extend(entry.get("dropped_examples") or [])
+    return {"passages": passages, "open": opened, "mapped": mapped, "kept": mapped if kept is None else kept,
+            "dropped": dict(dropped.most_common()), "dropped_examples": examples[:8]}
 
 
 def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
@@ -291,9 +297,9 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
     }
 
 
-SUMMARY_FIELDS = ("fact_edges", "backbone_edges", "extracted_edges", "dblp_share", "invented_share", "pieces", "largest_piece_share",
-                  "paper_pairs_connected", "invented_dead_end_share", "literal_object_share",
-                  "statement_object_share", "near_duplicate_nodes")
+SUMMARY_FIELDS = ("fact_edges", "backbone_edges", "extracted_edges", "dblp_share", "extracted_invented_share",
+                  "pieces", "largest_piece_share", "paper_pairs_connected", "invented_dead_end_share",
+                  "literal_object_share", "statement_object_share", "near_duplicate_nodes")
 
 
 def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -318,6 +324,10 @@ def summarize(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         funnels = [row["funnel"] for row in group if row.get("funnel")]
         summary["funnel"] = {key: round(median(item[key] for item in funnels), 1)
                              for key in ("passages", "open", "mapped", "kept")} if funnels else None
+        drops: Counter[str] = Counter()
+        for item in funnels:
+            drops.update(item.get("dropped") or {})
+        summary["review_drops"] = dict(drops.most_common())
         summary["runs_with_invented_classes"] = sum(bool(row["invented_classes"]) for row in group)
         out.append(summary)
     return out

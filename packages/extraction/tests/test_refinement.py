@@ -9,7 +9,7 @@ class Reviewer:
 
     def complete_json(self, system: str, user: str) -> dict:
         self.calls += 1
-        return {"keep_ids": [0, 999, "1"]}
+        return {"keep_ids": [0, 999, "1"], "drop_reasons": {"1": "irrelevant"}}
 
 
 def test_refinement_cannot_invent_a_triple_or_select_invalid_ids() -> None:
@@ -22,7 +22,9 @@ def test_refinement_cannot_invent_a_triple_or_select_invalid_ids() -> None:
     selected, report = engine.refine_triples("Which paper introduced Video Prediction Policy?", candidates, [])
 
     assert selected == candidates[:1]
-    assert report == {"candidates": 2, "unique": 2, "kept": 1, "model_calls": 1}
+    assert report == {"candidates": 2, "unique": 2, "kept": 1, "model_calls": 1, "dropped": {"irrelevant": 1},
+                      "dropped_examples": [{"triple": "p2 —title→ Other Paper", "source": "p2-metadata",
+                                            "why": "irrelevant"}]}
     assert reviewer.calls == 1
 
 

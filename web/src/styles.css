@@ -89,46 +89,43 @@
 .public-shell pre { white-space: pre-wrap; overflow-wrap: anywhere; }
 
 /* — header mark (Mascot.tsx) — */
-.nav-mark { display: inline-flex; align-items: center; gap: 10px; margin-right: auto; }
+.nav-mark { display: inline-flex; align-items: center; gap: 12px; margin-right: auto; }
 .nav-mark .nav-brand { margin-right: 0; }
-.mascot { display: block; overflow: visible; }
-/* Only the moving parts get a box-centred origin: the rotate(...) attributes on the arm groups must keep theirs. */
-.mascot-drop, .mascot-body, .mascot-eyes, .mascot .eye-open, .mascot-spark { transform-box: fill-box; transform-origin: center; }
-.mascot .drop-c { fill: var(--color-accent); }
-.mascot .drop-m { fill: var(--color-accent-2); }
-.mascot .drop-y { fill: var(--color-process-yellow); }
-.mascot { --spread: 4.5px; }
-.mascot-drop { transform: translateY(calc(-1 * var(--spread))); transition: transform .7s cubic-bezier(.3, 1.35, .5, 1); }
-.mascot-orbit { transform-box: view-box; transform-origin: 32px 32px; animation: mascot-spin 14s linear infinite; }
-.mascot-body { transition: transform .6s ease, filter .6s ease; animation: mascot-breathe 3.6s ease-in-out infinite; }
+.mascot { display: block; overflow: visible; flex: none; }
+/* Scale, blink and slide around each part's own centre; the orbit turns around the node (60, 60). */
+.mascot-node, .mascot-sat, .mascot-eyes, .mascot .eye-open { transform-box: fill-box; transform-origin: center; }
+.mascot-orbit { transform-box: view-box; transform-origin: 60px 60px; }
+.mascot-node { fill: var(--color-accent); animation: mascot-breathe 3.2s ease-in-out infinite; transition: fill .5s; }
+.mascot-sat { transition: transform .6s cubic-bezier(.3, 1.4, .5, 1), opacity .5s; }
+.mascot .s1 { fill: var(--color-accent-2); }
+.mascot .s2 { fill: var(--color-process-yellow); }
+.mascot .s3 { fill: var(--color-text); }
+.mascot-spoke { stroke: var(--color-text); stroke-width: 4; opacity: .45; transition: opacity .4s; }
+.mascot-tri { fill: none; stroke: var(--color-text); stroke-width: 4; stroke-linejoin: round; opacity: 0; transition: opacity .4s .3s; }
 .mascot-eyes { transition: transform .5s ease; }
-.mascot .eye-open { fill: var(--color-text); animation: mascot-blink 5s infinite; }
-.mascot .eye-happy, .mascot .eye-flat { fill: none; stroke: var(--color-text); stroke-width: 2.2; stroke-linecap: round; opacity: 0; }
-.mascot-spark { fill: var(--color-process-yellow); opacity: 0; transform: scale(.2); transition: opacity .3s, transform .5s cubic-bezier(.3, 1.6, .5, 1); }
-.mascot[data-state='researching'] { --spread: 10.5px; }
-.mascot[data-state='researching'] .mascot-orbit { animation-duration: 2.6s; }
-.mascot[data-state='researching'] .mascot-drop { animation: mascot-pulse 1.3s ease-in-out infinite; }
-.mascot[data-state='researching'] .drop-m { animation-delay: -.43s; }
-.mascot[data-state='researching'] .drop-y { animation-delay: -.86s; }
-.mascot[data-state='researching'] .mascot-eyes { animation: mascot-look 2.6s ease-in-out infinite; }
-/* Merged into one round drop; a small spread keeps the three inks visible as a slow swirl. */
-.mascot[data-state='answered'] { --spread: 2.5px; }
-.mascot[data-state='answered'] .mascot-orbit { animation-duration: 24s; }
-.mascot[data-state='answered'] .mascot-body { animation: mascot-pop .6s ease-out 1; }
+/* The node stays cyan in both themes, so the face is always dark. */
+.mascot .eye-open { fill: #1b1a1a; animation: mascot-blink 4.6s infinite; }
+.mascot .eye-happy, .mascot .eye-flat { fill: none; stroke: #1b1a1a; stroke-width: 3; stroke-linecap: round; opacity: 0; }
+.mascot[data-state='researching'] .mascot-orbit { animation: mascot-spin 2.4s linear infinite; }
+.mascot[data-state='researching'] .mascot-spoke { animation: mascot-flicker .8s steps(2) infinite; }
+.mascot[data-state='researching'] .mascot-eyes { animation: mascot-look 2.4s ease-in-out infinite; }
+.mascot[data-state='answered'] .mascot-spoke, .mascot[data-state='failed'] .mascot-spoke { opacity: 0; }
+.mascot[data-state='answered'] .mascot-tri { opacity: .8; }
+.mascot[data-state='answered'] .s1 { transform: translate(-6px, 8px); }
+.mascot[data-state='answered'] .s2 { transform: translate(6px, 8px); }
+.mascot[data-state='answered'] .s3 { transform: translate(0, -2px); }
 .mascot[data-state='answered'] .eye-open, .mascot[data-state='failed'] .eye-open { opacity: 0; animation: none; }
 .mascot[data-state='answered'] .eye-happy { opacity: 1; }
-.mascot[data-state='answered'] .mascot-spark { opacity: 1; transform: scale(1); animation: mascot-twinkle 2.4s ease-in-out .6s infinite; }
-.mascot[data-state='failed'] { --spread: 7px; }
-.mascot[data-state='failed'] .mascot-orbit { animation: none; }
-.mascot[data-state='failed'] .mascot-body { animation: none; transform: translateY(4px) scale(1.06, .82); filter: saturate(.15) opacity(.8); }
+.mascot[data-state='failed'] .mascot-node { fill: #7d7979; animation: none; }
+.mascot[data-state='failed'] .mascot-sat { transform: translateY(26px); opacity: .35; }
+/* The top neighbour would stop behind the node; it falls to the same line as the others. */
+.mascot[data-state='failed'] .s3 { transform: translateY(86px); }
 .mascot[data-state='failed'] .eye-flat { opacity: 1; }
 @keyframes mascot-spin { to { transform: rotate(360deg); } }
-@keyframes mascot-breathe { 50% { transform: scale(1.04); } }
-@keyframes mascot-blink { 0%, 93%, 100% { transform: scaleY(1); } 96% { transform: scaleY(.12); } }
-@keyframes mascot-pulse { 50% { transform: translateY(calc(-1 * var(--spread))) scale(.82); } }
-@keyframes mascot-look { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(-2.2px); } 70% { transform: translateX(2.2px); } }
-@keyframes mascot-pop { 40% { transform: scale(1.12); } }
-@keyframes mascot-twinkle { 50% { transform: scale(.65) rotate(20deg); } }
+@keyframes mascot-breathe { 50% { transform: scale(1.05); } }
+@keyframes mascot-blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.1); } }
+@keyframes mascot-look { 0%, 100% { transform: translateX(0); } 30% { transform: translateX(-3px); } 70% { transform: translateX(3px); } }
+@keyframes mascot-flicker { 50% { opacity: .1; } }
 
 /* — model status (ModelStatus.tsx) — */
 .model-status { position: relative; }

@@ -163,15 +163,25 @@ class ResearchSteps:
         except UnsupportedAnswer as exc:
             # After one repair nothing the model wrote was supported, but evidence review kept these
             # triples: state them instead of failing the run (they are supported by construction).
-            if exc.stage != "verification" or not state["extracted"]:
+            # Only when evidence review kept the triples (Adaptive/Agentic): then they are supported by
+            # construction. Without review (Fast) the run still fails as answer_unsupported.
+            if exc.stage not in {"verification", "citation"} or not state["extracted"] or not self.refine:
                 raise
             answer = self._facts_answer(state["extracted"], exc.sentences)
-            self._check("answer composition", "warn", f"no composed sentence was supported after one repair "
-                        f"({len(exc.sentences) or len(exc.removed)} removed); the answer states "
+            after = " after one repair" if report.get("repaired") else ""
+            why = (f"no composed sentence cited a source of the triples{after} (it cited "
+                   f"{', '.join(exc.unknown_sources[:3])})" if exc.stage == "citation"
+                   else f"no composed sentence was supported{after} "
+                        f"({len(exc.sentences) or len(exc.removed)} removed)")
+            self._check("answer composition", "warn", f"{why}; the answer states "
                         f"{min(12, len(state['extracted']))} of the {len(state['extracted'])} extracted facts")
             report = {}
+        if report.get("citations_dropped"):
+            dropped = report["citations_dropped"]
+            self._check("answer composition", "warn", f"{dropped['sentences']} sentence(s) citing ids that are no "
+                        f"triple's source were dropped: {', '.join(dropped['ids'][:3])}")
         if report.get("repaired"):
-            self._check("answer composition", "warn", "the verifier removed every claim of the first answer; "
+            self._check("answer composition", "warn", "the first answer had no supported, cited claim; "
                         "it was written once more from the triples"
                         + (" without the research notes" if report.get("notes_dropped") else ""))
         try:

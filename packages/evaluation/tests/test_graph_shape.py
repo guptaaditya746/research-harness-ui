@@ -90,3 +90,22 @@ def test_claim_context_nodes_connect_papers_and_backbone_is_recognised_by_id() -
     row = shape(run_with(graph, [], []))
     assert row["paper_pairs_connected"] == 1.0          # both results on the same benchmark
     assert row["backbone_edges"] == 1
+
+
+def test_funnel_follows_the_batches_and_counts_why_evidence_review_dropped_triples(tmp_path) -> None:
+    import json
+
+    from harness_evaluation.graph_shape import funnel
+
+    (tmp_path / "extraction_batches.json").write_text(json.dumps([
+        {"batch": 1, "passages": 2, "edc": [{"stage": "extract", "open_triples": 5},
+                                            {"stage": "canonicalize", "decisions": [{"selected": "a"}, {"selected": None},
+                                                                                    {"selected": "b"}]}]},
+        {"batch": 2, "passages": ["x", "y"], "edc": [{"stage": "extract", "open_triples": 3}]},
+        {"stage": "evidence_review", "kept": 1, "dropped": {"irrelevant": 1},
+         "dropped_examples": [{"triple": "p1 —usesDataset→ D", "source": "p1-s", "why": "irrelevant"}]},
+    ]))
+    flow = funnel(tmp_path)
+    assert {key: flow[key] for key in ("passages", "open", "mapped", "kept")} == {
+        "passages": 4, "open": 8, "mapped": 2, "kept": 1}
+    assert flow["dropped"] == {"irrelevant": 1} and flow["dropped_examples"][0]["why"] == "irrelevant"

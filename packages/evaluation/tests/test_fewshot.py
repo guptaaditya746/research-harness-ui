@@ -56,7 +56,7 @@ def test_candidates_rank_repeated_errors_and_keep_the_evidence() -> None:
     review = result["candidates"][REVIEW_PROMPT]
     assert [(row["triple"]["o"], row["errors"], row["run_ids"]) for row in review] == [
         ("prompt injection", 1, ["r1"])]
-    assert json.loads(review[0]["draft"]["output"]) == {"keep_ids": []}
+    assert json.loads(review[0]["draft"]["output"])["keep_ids"] == []
 
 
 def test_development_ids_restrict_the_questions_and_okay_triples_are_optional() -> None:

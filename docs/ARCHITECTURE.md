@@ -19,7 +19,7 @@ LiteLLM, the models and the status API come from thesis-llm-setup. The API never
 
 ## One run
 
-Every path first turns the question into a typed plan (`planner.py`). Metadata and citation operations (authors, years, citing papers, author rankings) are answered from verified DBLP facts without full-text research; everything else is research.
+Every path first turns the question into a typed plan (`planner.py`). Metadata and citation operations (authors, years, citing papers, author rankings) are answered from verified DBLP facts without full-text research; everything else is research. A fact plan must take its arguments (papers, venues, title term, year) from the question's own words, never from a reading's label, and must apply every condition the question states: the planner lists the conditions an operation would leave out (`ignored`), and any such plan, or one with an argument the question does not state, becomes research.
 
 | Path | Request `path` | What it does |
 |---|---|---|

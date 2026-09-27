@@ -91,7 +91,7 @@ def main(
         flow = item.get("funnel")
         summary.add_row(item["kind"], PATHS.get(item["path"], item["path"]), str(item["runs"]),
                         _num(item["fact_edges"]), _num(item["backbone_edges"]), _num(item["extracted_edges"]),
-                        _pct(item["dblp_share"]), _pct(item["invented_share"]), _num(item["pieces"]),
+                        _pct(item["dblp_share"]), _pct(item["extracted_invented_share"]), _num(item["pieces"]),
                         _pct(item["paper_pairs_connected"]), _pct(item["invented_dead_end_share"]),
                         _pct(item["statement_object_share"]),
                         f"{_num(flow['passages'])}>{_num(flow['open'])}>{_num(flow['mapped'])}>{_num(flow['kept'])}"
@@ -100,6 +100,9 @@ def main(
     console.print(f"[dim]{LEGEND} New classes = runs that invented at least one class.[/dim]")
     everything = next((item for item in result["summary"] if item["kind"] == "research" and item["path"] == "all"),
                       result["summary"][-1])
+    if everything.get("review_drops"):
+        console.print("Why evidence review dropped triples (research runs, all paths): " + ", ".join(
+            f"{why} {count}" for why, count in everything["review_drops"].items()))
     if everything["top_invented_properties"]:
         console.print("Most invented properties in the runs' schemas: " + ", ".join(
             f"{name} ({count})" for name, count in everything["top_invented_properties"]))
@@ -119,6 +122,8 @@ def main(
         for kind, lines in row["examples"].items():
             for line in lines:
                 console.print(f"  {kind}: {line}")
+        for item in (row.get("funnel") or {}).get("dropped_examples") or []:
+            console.print(f"  dropped by review ({item.get('why')}): {item.get('triple')} [{item.get('source')}]")
         console.print(f"  invented properties: {', '.join(row['invented_properties']) or 'none'}")
         console.print(f"  invented classes: {', '.join(row['invented_classes']) or 'none'}")
 
