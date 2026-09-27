@@ -231,12 +231,15 @@ class Settings(BaseSettings):
 
         Most specific first: HARNESS_RUN_DEADLINE_<PATH>_<BUDGET>_S, then
         HARNESS_RUN_DEADLINE_<BUDGET>_S, then the built-in default. Read
-        dynamically because the variable name depends on the path.
+        dynamically because the variable name depends on the path. The External
+        path skips the budget-wide variable: its limit is a safety net above the
+        agent's own wall time (external config, 900 s by default), and a shared
+        HARNESS_RUN_DEADLINE_SLOW_S=900 would stop it before the agent writes its result.
         """
         default = 300.0 if (path == "agentic" and budget == "slow") else {"fast": 300.0, "slow": 900.0}[budget]
-        if path == "external":
-            default = 960.0             # a safety net: the external agent enforces its own wall time (config)
         path_key = f"HARNESS_RUN_DEADLINE_{path.upper().replace('-', '_')}_{budget.upper()}_S"
+        if path == "external":
+            return float(os.environ.get(path_key, 960.0))
         return float(os.environ.get(path_key, os.environ.get(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default)))
 
 

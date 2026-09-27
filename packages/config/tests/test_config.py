@@ -55,6 +55,12 @@ def test_run_deadline_prefers_the_most_specific_variable(monkeypatch) -> None:
     assert settings().run_deadline_seconds("baseline", "slow") == 600.0
     monkeypatch.setenv("HARNESS_RUN_DEADLINE_BASELINE_SLOW_S", "120")
     assert settings().run_deadline_seconds("baseline", "slow") == 120.0
+    # External: a safety net above the agent's own wall time; the budget-wide variable does not apply.
+    monkeypatch.setenv("HARNESS_RUN_DEADLINE_SLOW_S", "900")
+    monkeypatch.delenv("HARNESS_RUN_DEADLINE_EXTERNAL_SLOW_S", raising=False)
+    assert settings().run_deadline_seconds("external", "slow") == 960.0
+    monkeypatch.setenv("HARNESS_RUN_DEADLINE_EXTERNAL_SLOW_S", "1200")
+    assert settings().run_deadline_seconds("external", "slow") == 1200.0
 
 
 def test_model_options_are_read_per_alias(monkeypatch) -> None:
