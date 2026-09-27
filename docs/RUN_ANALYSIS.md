@@ -43,3 +43,7 @@ Runs live in `ARTIFACT_ROOT` (default `./artifacts`), one folder per run id.
 | `GET /runs/<id>` returns 404 while the run is active | Expected: a run is readable once `run.json` is written; the UI treats 404 as pending and follows the event stream | — |
 
 See `docs/KNOWN_ISSUES.md` for problems with a known root cause.
+
+## Evaluation runs
+
+Pooling runs (`make run-questions`, every reading) build the gold candidates; scoring runs (`make benchmark-runs`, evaluation mode, 3 repetitions per path, the gold row's question text and snapshot) are what `make evaluate` scores. The whole pilot, with every command in both repos: [labelling/docs/PILOT.md](https://github.com/guptaaditya746/labelling/blob/main/docs/PILOT.md).

@@ -28,7 +28,7 @@ from rich.table import Table
 
 ROOT = Path(__file__).resolve().parents[1]
 console = Console()
-PATH_LABELS = {"baseline": "Fast", "adaptive-baseline": "Adaptive", "agentic": "Agentic"}
+PATH_LABELS = {"baseline": "Fast", "adaptive-baseline": "Adaptive", "agentic": "Agentic", "external": "External"}
 
 
 def _interval(value: dict | None) -> str:
@@ -55,10 +55,11 @@ def main(
     variants_only: Annotated[bool, typer.Option("--variants-only", help="Soft level without the judge.")] = False,
     as_json: Annotated[bool, typer.Option("--json", help="Print the full result as JSON.")] = False,
     out: Annotated[Path | None, typer.Option(help="Also write the full result to this file.")] = None,
+    gold_version: Annotated[str | None, typer.Option(help="Only gold rows of this version (e.g. pilot-v1).")] = None,
 ) -> None:
     datasets = settings().datasets_root or ROOT / "datasets"
     candidates = [row for row in GoldCandidateStore(Path(datasets) / "gold" / "candidates.jsonl").list()
-                  if row.get("status") == "approved"]
+                  if row.get("status") == "approved" and (gold_version is None or row.get("gold_version") == gold_version)]
     runs = load_runs(settings().artifact_root or ROOT / "artifacts")
     if judge and variants_only:
         raise typer.BadParameter("--judge and --variants-only exclude each other")
@@ -85,6 +86,16 @@ def main(
             table.add_row(first, level, *(_interval(row["paths"][path][level]) for path in PATH_LABELS))
         table.add_section()
     console.print(table)
+    differences = Table(title="Soft F1 differences, paired over questions (mean [95% bootstrap CI])")
+    differences.add_column("Complexity")
+    everything = result["by_complexity"]["rows"]
+    names = list(everything[0]["soft_f1_differences"]) if everything else []
+    for name in names:
+        differences.add_column(name)
+    for row in everything:
+        differences.add_row(f"{row['complexity']} ({row['questions']})",
+                            *(_interval(row["soft_f1_differences"][name]) for name in names))
+    console.print(differences)
     pending = sum(entry["judge_pending"] for row in result["questions"] for entry in row["paths"])
     if pending:
         console.print(f"[yellow]{pending} judge pairs are not in the cache; soft scores are lower bounds "

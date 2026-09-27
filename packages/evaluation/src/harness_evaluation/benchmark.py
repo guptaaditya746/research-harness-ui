@@ -51,7 +51,7 @@ def complexity_level(candidate: dict) -> str | None:
 def _by_complexity(question_rows: list[dict]) -> dict:
     """Per-question means (repetitions averaged first), then a bootstrap interval over questions."""
     groups = ["simple", "compound", "complex"]
-    paths = ["baseline", "adaptive-baseline", "agentic"]
+    paths = ["baseline", "adaptive-baseline", "agentic", "external"]
     rows = []
     for group in [*groups, "all"]:
         members = [row for row in question_rows if group == "all" or row.get("complexity") == group]
@@ -71,10 +71,11 @@ def _by_complexity(question_rows: list[dict]) -> dict:
                 values.setdefault(path, {})[row["id"]] = entry["levels"]["soft"]["f1"]["mean"]
             per_path[path] = {**{level: mean_ci(scores[level]) for level in LEVELS}, "vital_recall": mean_ci(vital)}
         differences = {}
-        for path in paths[1:]:
-            shared = sorted(set(values.get(path, {})) & set(values.get("baseline", {})))
-            differences[f"{path} - baseline"] = paired_difference_ci(
-                [values[path][qid] for qid in shared], [values["baseline"][qid] for qid in shared])
+        # Each path against Fast, and ours against the external baseline (paired over shared questions).
+        for path, other in [*((path, "baseline") for path in paths[1:]), ("agentic", "external")]:
+            shared = sorted(set(values.get(path, {})) & set(values.get(other, {})))
+            differences[f"{path} - {other}"] = paired_difference_ci(
+                [values[path][qid] for qid in shared], [values[other][qid] for qid in shared])
         rows.append({"complexity": group, "questions": len(members), "paths": per_path,
                      "soft_f1_differences": differences})
     return {"metric": "triple F1 per question, mean and 95% bootstrap interval over questions", "rows": rows}

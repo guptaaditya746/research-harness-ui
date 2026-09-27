@@ -1,4 +1,4 @@
-.PHONY: ontology run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: ontology benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -60,6 +60,11 @@ embed:
 # make evaluate ARGS="--judge" also asks the soft-match judge and caches its answers.
 evaluate:
 	uv run --python 3.12 python scripts/evaluate.py $(ARGS)
+
+# Scoring runs for the approved gold: every question and path, 3 repetitions, evaluation mode
+# make benchmark-runs ARGS="--ids nlp11 --paths agentic,external" (see scripts/run_benchmark.py)
+benchmark-runs:
+	uv run --python 3.12 python scripts/run_benchmark.py $(ARGS)
 
 # The 30 evaluation questions through the running API; Agentic runs every proposed reading.
 # make run-questions ARGS="--ids nlp07,nlp27" (see scripts/run_questions.py)

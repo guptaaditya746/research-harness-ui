@@ -12,11 +12,13 @@ ones plus ``external_result.json`` and ``external_trajectory.json``. Nothing of 
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import queue
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -33,9 +35,29 @@ from harness_extraction.call_control import call_interrupted
 from .pipeline import Baseline20
 from .state import BaselineResult, BaselineState, NoResults
 
-# DBLP property names the agent may copy from the ontology, as the harness names them.
-_DBLP_NAMES = {"author": "authoredBy", "yearOfPublication": "year", "publishedIn": "venue"}
+# DBLP (and plain) names the agent may copy from the ontology, as the harness names them. Venue and
+# year variants collapse onto the harness's venue and year; creator variants onto authoredBy.
+_DBLP_NAMES = {
+    "author": "authoredBy", "hasAuthor": "authoredBy", "createdBy": "authoredBy", "creator": "authoredBy",
+    "yearOfPublication": "year", "yearOfEvent": "year", "publicationYear": "year",
+    "publishedIn": "venue", "publishedInStream": "venue", "publishedInSeries": "venue",
+    "publishedInJournal": "venue", "publishedInBook": "venue", "publishedAsPartOf": "venue",
+}
+# Inverse properties: (author, authorOf, paper) is (paper, authoredBy, author).
+_INVERSE = {"authorOf": "authoredBy", "creatorOf": "authoredBy"}
+# Not relations between research entities: dropped (and counted).
+_META = {"type", "a", "label", "comment", "subClassOf", "subPropertyOf", "sameAs", "bibtexType", "numberOfCreators"}
 _NAME = re.compile(r"[a-z][A-Za-z0-9_]{0,63}")
+# litellm exception names in the external result: the model endpoint failed, not the agent.
+_PROVIDER_ERRORS = re.compile(r"APIConnectionError|AuthenticationError|RateLimitError|Timeout|ServiceUnavailable|"
+                              r"InternalServerError|APIError|BadRequestError|NotFoundError|ContextWindowExceeded")
+# What the external process may see of our environment: enough to run uv/Python, reach the model
+# endpoint and expand its config, never our keys or data paths (DATASETS_ROOT, ARTIFACT_ROOT, ...).
+_PASS_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "TZ", "TMPDIR", "SHELL", "TERM",
+             "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+             "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE",
+             "LITELLM_BASE_URL", "VLLM_API_KEY")
+_PASS_PREFIXES = ("UV_", "XDG_", "XH_")
 
 
 class ExternalFailure(RuntimeError):
@@ -53,8 +75,16 @@ def predicate_name(raw: str) -> str | None:
         name = words[0][0].lower() + words[0][1:]
     else:
         name = words[0].lower() + "".join(word[:1].upper() + word[1:] for word in words[1:])
+    if name in _META:
+        return None
     name = _DBLP_NAMES.get(name, name)
     return name if _NAME.fullmatch(name) else None
+
+
+def _external_env(corpus_root: Path) -> dict[str, str]:
+    env = {key: value for key, value in os.environ.items() if key in _PASS_ENV or key.startswith(_PASS_PREFIXES)}
+    env["CORPUS_ROOT"] = str(corpus_root.resolve())          # absolute: the config may expand ${CORPUS_ROOT}
+    return env
 
 
 class ExternalHarness(Baseline20):
@@ -104,6 +134,12 @@ class ExternalHarness(Baseline20):
         if not self.command or not self.config_path:
             raise ExternalFailure("external_failed: HARNESS_EXTERNAL_COMMAND and HARNESS_EXTERNAL_CONFIG must be set")
         folder = Path(tempfile.mkdtemp(prefix=f"xh-{run_id}-"))
+        try:
+            return self._call_in(folder, question, run_id)
+        finally:
+            shutil.rmtree(folder, ignore_errors=True)              # later runs must not find this one
+
+    def _call_in(self, folder: Path, question: str, run_id: str) -> tuple[dict[str, Any], dict[str, bytes]]:
         question_file = folder / "question.txt"
         question_file.write_text(question, encoding="utf-8")
         out = folder / "run"
@@ -112,18 +148,21 @@ class ExternalHarness(Baseline20):
         self._emit("Starting external harness", f"{Path(self.config_path).name} · {' '.join(self.command[-2:])}")
         stderr = (folder / "stderr.log").open("w+", encoding="utf-8")
         try:
-            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr, text=True,
-                                       start_new_session=os.name == "posix")
+            process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=stderr, stdin=subprocess.DEVNULL,
+                                       text=True, encoding="utf-8", errors="replace",
+                                       env=_external_env(Path(self.corpus.root)), start_new_session=os.name == "posix")
         except OSError as exc:
             stderr.close()
             raise ExternalFailure(f"external_failed: cannot start {self.command[0]!r} ({exc})") from None
         lines: queue.Queue[str | None] = queue.Queue()
 
         def read() -> None:
-            assert process.stdout is not None
-            for line in process.stdout:
-                lines.put(line)
-            lines.put(None)
+            try:
+                assert process.stdout is not None
+                for line in process.stdout:
+                    lines.put(line)
+            finally:
+                lines.put(None)                                     # always ends the loop below
 
         threading.Thread(target=read, name=f"xh-{run_id}", daemon=True).start()
         try:
@@ -138,7 +177,10 @@ class ExternalHarness(Baseline20):
                 if line is None:
                     break
                 self._event(line)
-            process.wait(timeout=30)
+            try:
+                process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                raise ExternalFailure("external_failed: the process closed its output but did not exit") from None
         except BaseException:
             self._kill(process)
             raise
@@ -160,16 +202,21 @@ class ExternalHarness(Baseline20):
 
     @staticmethod
     def _kill(process: subprocess.Popen) -> None:
+        """SIGTERM first (xh then ends the agent's running command, which has its own session), then
+        SIGKILL for whatever is left of the process group."""
         if process.poll() is not None:
             return
-        try:
-            if os.name == "posix":
-                os.killpg(process.pid, signal.SIGKILL)
-            else:
-                process.kill()
-        except ProcessLookupError:
-            pass
-        process.wait(timeout=10)
+        for sig, grace in ((signal.SIGTERM, 5), (signal.SIGKILL, 10)):
+            with contextlib.suppress(ProcessLookupError):
+                if os.name == "posix":
+                    os.killpg(process.pid, sig)
+                else:
+                    process.kill()
+            try:
+                process.wait(timeout=grace)
+                return
+            except subprocess.TimeoutExpired:
+                continue
 
     def _event(self, line: str) -> None:
         """One JSON event from ``xh run --events`` as a trace row (other output is ignored)."""
@@ -202,18 +249,28 @@ class ExternalHarness(Baseline20):
         summary = (f"{harness.get('name', 'external')} {harness.get('version', '')} · {usage.get('model_calls', 0)} "
                    f"model calls · {usage.get('commands', 0)} commands · {result.get('duration_s', 0)}s").replace("  ", " ")
         status = str(result.get("status") or "")
+        self._same_corpus(result.get("knowledge_base") or {})
         if status != "answered":
             detail = result.get("problem") or result.get("error") or result.get("exit_status") or status
-            if status == "error" and "model" in str(detail).casefold():
+            if status == "error" and _PROVIDER_ERRORS.search(str(detail)):
                 raise ModelFailure(str(detail))
             raise ExternalFailure(f"external_{status or 'failed'}: {detail} ({summary})")
         dropped = result.get("dropped_triples") or []
-        self._check("external harness", "pass", f"{summary}; {len(result.get('triples') or [])} triples"
-                    + (f", {len(dropped)} dropped by the answer contract" if dropped else ""))
+        triples, unmapped = self._triples(result.get("triples") or [])
+        notes = [f"{len(dropped)} dropped by the answer contract" if dropped else "",
+                 f"{unmapped} with a predicate that is not a relation (dropped)" if unmapped else ""]
+        audit = [f"{result['evidence_not_in_source']} quote evidence not found in their passage"
+                 if result.get("evidence_not_in_source") else "",
+                 f"{len(result['outside_paths'])} commands looked outside the run folder (sandbox off): "
+                 f"{result['outside_paths'][0][:80]}" if result.get("outside_paths") else ""]
+        self._check("external harness", "warn" if any(audit) else "pass",
+                    "; ".join(item for item in [f"{summary}; {len(result.get('triples') or [])} triples", *notes, *audit]
+                              if item))
         self._check("retrieval", "skipped", f"the external agent searched on its own ({usage.get('commands', 0)} commands)")
-        triples = self._triples(result.get("triples") or [])
         if not triples:
-            raise NoResults(f"the external agent answered without a usable triple ({summary})")
+            answer = " ".join(str(result.get("answer") or "").split())[:300]
+            raise NoResults(f"the external agent answered without a usable triple ({summary})"
+                            + (f": {answer}" if answer else ""))
         self._check("extraction", "pass", f"{len(triples)} triples written by the external agent")
         cited = list(dict.fromkeys(triple.source_id for triple in triples))
         answer = AnswerResult(answer=str(result.get("answer") or ""), cited_source_ids=cited,
@@ -231,24 +288,39 @@ class ExternalHarness(Baseline20):
             "extraction_batches": [{"stage": "external", "triples": len(triples), "dropped": len(dropped)}],
         }
 
-    def _triples(self, rows: list[dict[str, Any]]) -> list[ExtractedTriple]:
-        """The agent's triples with harness property names; a name the schema lacks becomes a run-local
-        property with a generic parent (like any invented property)."""
-        triples = []
+    def _same_corpus(self, knowledge_base: dict[str, Any]) -> None:
+        """The external index must be built from our corpus: same folder and the same number of passages."""
+        folder = knowledge_base.get("corpus_dir")
+        ours = Path(self.corpus.root).resolve()
+        if folder and Path(folder).resolve() != ours:
+            raise ExternalFailure(f"external_failed: the external harness read the corpus in {folder}, not {ours}")
+        passages = knowledge_base.get("passages")
+        if passages is not None and int(passages) != len(self.corpus.passages):
+            raise ExternalFailure(f"external_failed: its index has {passages} passages, the corpus "
+                                  f"{len(self.corpus.passages)} (rebuild it: xh index)")
+
+    def _triples(self, rows: list[dict[str, Any]]) -> tuple[list[ExtractedTriple], int]:
+        """The agent's triples with harness property names, and how many had no usable predicate. A name
+        the schema lacks becomes a run-local property with a generic parent (like any invented property)."""
+        triples, unmapped = [], 0
         for row in rows:
-            name = predicate_name(str(row.get("predicate") or ""))
+            raw = re.split(r"[#/:]", str(row.get("predicate") or "").strip())[-1]
+            subject, object_ = str(row["subject"]), str(row["object"])
+            if raw in _INVERSE:
+                name, subject, object_ = _INVERSE[raw], object_, subject
+            else:
+                name = predicate_name(raw)
             if name is None:
+                unmapped += 1
                 continue
             if name not in self.extraction.property_names:
-                paper_object = str(row.get("object")) in self.corpus.by_paper
                 self.extraction.register_local_relation(
                     name, f"Relation used by the external agent: {name}.",
-                    domain_name="Paper", range_name="Paper" if paper_object else "xsd:string")
+                    domain_name="Paper", range_name="Paper" if object_ in self.corpus.by_paper else "xsd:string")
             triples.append(ExtractedTriple(
-                subject=str(row["subject"]), predicate=name, object=str(row["object"]),
-                source_id=str(row["source_id"]),
+                subject=subject, predicate=name, object=object_, source_id=str(row["source_id"]),
                 evidence=str(row.get("evidence") or "") or f"Stated by the external agent from {row['source_id']}."))
-        return triples
+        return triples, unmapped
 
     def _workflow_tool_calls(self, state: BaselineState, run_id: str) -> list[dict[str, Any]]:
         """The agent's commands, one tool call each (the Benchmark page counts them)."""

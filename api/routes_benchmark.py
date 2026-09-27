@@ -16,7 +16,9 @@ router = APIRouter()
 
 def _run_cost(run: Run) -> dict[str, float | int]:
     """Return observable per-run costs; tool counts come from the saved call log."""
-    model_calls = sum(row.action == "Model call started" for row in run.trace)
+    # Harness paths log each call when it starts; the External path only when it ends.
+    model_calls = max(sum(row.action == "Model call started" for row in run.trace),
+                      sum(row.action in {"Model call finished", "Model call failed"} for row in run.trace))
     try:
         tool_log = app_state.runtime.artifacts.read(run.id, "tool_calls.jsonl")
         tool_calls = sum(bool(line.strip()) for line in tool_log.splitlines())
