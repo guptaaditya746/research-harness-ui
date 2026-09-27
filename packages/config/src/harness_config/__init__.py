@@ -239,7 +239,7 @@ class Settings(BaseSettings):
         default = 300.0 if (path == "agentic" and budget == "slow") else {"fast": 300.0, "slow": 900.0}[budget]
         path_key = f"HARNESS_RUN_DEADLINE_{path.upper().replace('-', '_')}_{budget.upper()}_S"
         if path == "external":
-            return float(os.environ.get(path_key, 960.0))
+            return float(os.environ.get(path_key, "960"))
         return float(os.environ.get(path_key, os.environ.get(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default)))
 
 
