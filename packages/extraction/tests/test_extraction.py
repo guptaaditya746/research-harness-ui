@@ -47,9 +47,10 @@ def test_schema_inference_extends_seed_with_run_local_terms() -> None:
     assert inferred.classes == ["Paper", "Task", "Approach"]
     assert inferred.properties == ["studiesTask", "usesApproach"]
     assert schema_model.calls == 1
-    assert HRN.Task not in seed.classes
-    assert (HRN.Task, None, None) not in seed.graph
-    assert HRN.Task in engine.schema.classes
+    assert HRN.Task in seed.classes                     # a content-core (CS-KG) class since Phase 4
+    assert HRN.Approach not in seed.classes
+    assert (HRN.Approach, None, None) not in seed.graph
+    assert HRN.Approach in engine.schema.classes
     assert engine.schema.graph.value(HRN.studiesTask, RDFS.range) == HRN.Task
     assert engine.schema.graph.value(HRN.usesApproach, RDFS.range) == HRN.Approach
     assert validate_subschema(engine.schema.graph).conforms
@@ -216,3 +217,29 @@ def test_a_cut_off_reply_says_how_it_ended() -> None:
 
     assert "JSON-mode loop" in _cut_off_ending('{"answer": "x"' + " " * 500)
     assert _cut_off_ending('{"answer": "a b c d').endswith('{"answer": "a b c d')
+
+
+def test_v2_prompts_see_property_signatures_and_v1_prompts_do_not(monkeypatch) -> None:
+    schema_reply = {"label": "x", "gloss": "y", "classes": ["Paper", "Task"], "properties": ["addresses"]}
+    passages = [{"passage_id": "p99-s1", "paper_id": "p99", "text": "We study BenchY."}]
+    sent: list[dict] = []
+
+    class Recording(RecordedModel):
+        def complete_json(self, system: str, user: str) -> dict:
+            sent.append(json.loads(user))
+            return super().complete_json(system, user)
+
+    engine = ExtractionEngine(Recording([{"triples": []}]), hand_written_subschema(),
+                              schema_model=Recording([schema_reply]))
+    inferred = engine.infer_schema("Which problems does p99 study?", passages)
+    engine.extract("Which problems does p99 study?", inferred, passages)
+    signatures = sent[0]["property_signatures"]
+    assert any(row.startswith("addresses: Paper -> Task. ") for row in signatures)
+    assert any(row.startswith("solves: ResearchEntity -> Task. ") for row in signatures)
+    assert sent[1]["property_signatures"] == [row for row in signatures if row.startswith("addresses:")]
+
+    monkeypatch.setenv("HARNESS_PROMPT_SET", "v1")
+    sent.clear()
+    engine = ExtractionEngine(Recording([]), hand_written_subschema(), schema_model=Recording([schema_reply]))
+    engine.infer_schema("Which problems does p99 study?", passages)
+    assert "property_signatures" not in sent[0]

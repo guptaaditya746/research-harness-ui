@@ -56,11 +56,14 @@ class SchemaModel:
         self.payload = json.loads(user)
         return {
             "label": "Tasks", "gloss": "Which task each paper addresses",
-            "classes": ["Paper", "Task"], "properties": ["addresses", "robotCount"],
-            "class_definitions": [{"name": "Task", "definition": "A research problem.", "parent": "ResearchEntity"}],
+            "classes": ["Paper", "Task", "Skill"], "properties": ["addresses", "targetsSkill", "robotCount"],
+            "class_definitions": [{"name": "Skill", "definition": "A robot ability.", "parent": "ResearchEntity"}],
             "property_definitions": [
-                {"name": "addresses", "definition": "The paper works on the task.", "domain": "Paper",
-                 "range": "Task", "parent": "researchRelation"},
+                # A seed (content core) property redefined by the model: the seed definition stays.
+                {"name": "addresses", "definition": "Something else.", "domain": "Paper",
+                 "range": "xsd:string", "parent": "researchAttribute"},
+                {"name": "targetsSkill", "definition": "The paper trains the skill.", "domain": "Paper",
+                 "range": "Skill", "parent": "researchRelation"},
                 # A datatype property with an object parent: the parent is replaced by the generic one.
                 {"name": "robotCount", "definition": "Number of robots.", "domain": "Paper",
                  "range": "xsd:string", "parent": "usesDataset"},
@@ -101,11 +104,16 @@ def test_invented_terms_are_owl2_with_parents_and_marked_by_origin(tmp_path: Pat
     assert "researchRelation (object)" in schema_model.payload["parent_properties"]
     assert "dblp:authoredBy (object)" in schema_model.payload["parent_properties"]
     terms = {term.name: term for term in reading.schema_terms}
-    assert (terms["hrn:addresses"].kind, terms["hrn:addresses"].origin, terms["hrn:addresses"].parent) == (
+    assert (terms["hrn:targetsSkill"].kind, terms["hrn:targetsSkill"].origin, terms["hrn:targetsSkill"].parent) == (
         "object", "invented", "hrn:researchRelation")
     assert (terms["hrn:robotCount"].kind, terms["hrn:robotCount"].parent) == ("datatype", "hrn:researchAttribute")
-    assert (terms["hrn:Task"].kind, terms["hrn:Task"].origin, terms["hrn:Task"].parent) == (
+    assert (terms["hrn:Skill"].kind, terms["hrn:Skill"].origin, terms["hrn:Skill"].parent) == (
         "class", "invented", "hrn:ResearchEntity")
+    # Content core: addresses keeps its seed type; Task keeps its harness name and names its CS-KG class.
+    addresses_term = terms["hrn:addresses"]
+    assert (addresses_term.origin, addresses_term.domain, addresses_term.range) == ("core", "hrn:Paper", "hrn:Task")
+    assert (terms["hrn:Task"].origin, terms["hrn:Task"].kind) == ("core", "class")
+    assert terms["hrn:Task"].definition.endswith("(same as cskg-ont:Task)")
     assert terms["hrn:Paper"].origin == "core"
     assert terms["dblp:authoredBy"].origin == "dblp"            # backbone predicate, shown by its DBLP name
     schema_check = next(check for check in result["run"].checks if check.name == "schema")
@@ -114,7 +122,8 @@ def test_invented_terms_are_owl2_with_parents_and_marked_by_origin(tmp_path: Pat
     addresses = URIRef(HRN + "addresses")
     assert (addresses, RDF.type, OWL.ObjectProperty) in schema
     assert (addresses, RDFS.subPropertyOf, URIRef(HRN + "researchRelation")) in schema
-    assert (URIRef(HRN + "Task"), RDF.type, OWL.Class) in schema
+    assert (URIRef(HRN + "Skill"), RDF.type, OWL.Class) in schema
+    assert (URIRef(HRN + "Task"), OWL.equivalentClass, URIRef("https://w3id.org/cskg/ontology#Task")) in schema
     # Harness classes are OWL 2 classes (the DBLP seed file itself also says rdfs:Class; it is kept as is).
     assert not [c for c in schema.subjects(RDF.type, RDFS.Class) if str(c).startswith(HRN)]
     # Only the question's terms: an unrelated DBLP property is not exported.
@@ -126,7 +135,7 @@ def test_backbone_connects_the_papers_but_stays_out_of_the_scored_triples(tmp_pa
     reading = result["run"].readings[0]
     assert [triple.p for triple in reading.triples] == ["addresses", "addresses"]
     edges = {(edge.label, edge.origin) for edge in reading.graph.edges if edge.kind == "fact"}
-    assert {("addresses", "invented"), ("authoredBy", "dblp"), ("publishedInStream", "dblp"),
+    assert {("addresses", "core"), ("authoredBy", "dblp"), ("publishedInStream", "dblp"),
             ("cites", "core")} <= edges
     assert not any(edge.label in {"year", "yearOfPublication"} for edge in reading.graph.edges)
     venue = [node for node in reading.graph.nodes if node.label == "ACL 2025"]
@@ -141,8 +150,18 @@ def test_backbone_and_new_classes_can_be_switched_off(tmp_path: Path, monkeypatc
     result, _ = run(tmp_path)
     reading = result["run"].readings[0]
     assert not any(edge.label in {"authoredBy", "publishedInStream"} for edge in reading.graph.edges)
-    assert "Task" not in reading.classes and "ResearchEntity" in reading.classes
+    # The invented class becomes ResearchEntity; Task is a content-core class and stays.
+    assert "Skill" not in reading.classes and {"Task", "ResearchEntity"} <= set(reading.classes)
     assert "Someone%20Else" in result["artifacts"]["triples.ttl"].decode()   # the old corpus-wide export
+
+
+def test_without_the_content_core_addresses_and_task_are_invented(tmp_path: Path,
+                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HARNESS_CONTENT_CORE", "none")
+    result, schema_model = run(tmp_path)
+    assert "addresses" not in schema_model.payload["allowed_properties"]
+    terms = {term.name: term for term in result["run"].readings[0].schema_terms}
+    assert terms["hrn:Task"].origin == "invented" and "same as" not in (terms["hrn:Task"].definition or "")
 
 
 def test_graph_edge_ids_are_unique_with_the_backbone(tmp_path: Path) -> None:
@@ -159,7 +178,8 @@ def test_generic_parents_are_not_predicates_and_parent_names_are_normalised(tmp_
         def complete_json(self, system: str, user: str) -> dict:
             reply = super().complete_json(system, user)
             reply["properties"] = [*reply["properties"], "researchAttribute"]
-            reply["property_definitions"][0]["parent"] = "hrn:usesDataset (object)"
+            next(item for item in reply["property_definitions"]
+                 if item["name"] == "targetsSkill")["parent"] = "hrn:usesDataset (object)"
             return reply
 
     engine = ExtractionEngine(AnswerModel(), hand_written_subschema(), schema_model=ParentsAsProperties())
@@ -168,7 +188,7 @@ def test_generic_parents_are_not_predicates_and_parent_names_are_normalised(tmp_
     graph = engine.schema.graph
     attribute = URIRef(HRN + "researchAttribute")
     assert property_kind(graph, attribute) == "datatype" and (attribute, RDF.type, OWL.ObjectProperty) not in graph
-    assert (URIRef(HRN + "addresses"), RDFS.subPropertyOf, URIRef(HRN + "usesDataset")) in graph
+    assert (URIRef(HRN + "targetsSkill"), RDFS.subPropertyOf, URIRef(HRN + "usesDataset")) in graph
 
 
 

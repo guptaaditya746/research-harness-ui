@@ -43,6 +43,10 @@ from rdflib import OWL, RDF, RDFS, Graph, URIRef
 
 HRN_NS = "https://harness.local/schema#"
 DBLP_NS = "https://dblp.org/rdf/schema#"
+# CS-KG terms are keyed by local name like harness terms: runs and gold write "uses" / "usedBy", and
+# the harness names of the content core are the CS-KG local names (hrn:uses = cskg-ont:uses).
+CSKG_NS = "https://w3id.org/cskg/ontology#"
+LOCAL_NAMESPACES = (HRN_NS, CSKG_NS)
 RDF_TYPE = str(RDF.type)
 # Spellings of rdf:type that runs and people use; all mean the same predicate.
 TYPE_SPELLINGS = {"type", "rdf:type", "a", "instanceof", "isa", RDF_TYPE.casefold()}
@@ -162,13 +166,13 @@ def build_relations(graph: Graph, *, predicate_key, entity_key, sources: tuple[s
         text = str(node)
         if text == RDF_TYPE:
             return RDF_TYPE
-        return predicate_key(_local(text)) if text.startswith(HRN_NS) else predicate_key(text)
+        return predicate_key(_local(text)) if text.startswith(LOCAL_NAMESPACES) else predicate_key(text)
 
     def class_key(node: object) -> str | None:
         if not isinstance(node, URIRef):
             return None
         text = str(node)
-        return PredicateRelations.lookup(entity_key(_local(text) if text.startswith(HRN_NS) else text))
+        return PredicateRelations.lookup(entity_key(_local(text) if text.startswith(LOCAL_NAMESPACES) else text))
 
     supers: dict[str, set[str]] = {}
     for child, parent in graph.subject_objects(RDFS.subPropertyOf):
@@ -217,7 +221,9 @@ def build_relations(graph: Graph, *, predicate_key, entity_key, sources: tuple[s
 
 
 @lru_cache(maxsize=4)
-def _load_cached(path: str | None, mtime: float | None) -> PredicateRelations:
+def _load_cached(path: str | None, mtime: float | None, schema_key: tuple[object, ...] = ()) -> PredicateRelations:
+    """``schema_key``: what the harness schema depends on (content core setting, subset file and its
+    modification time), so a changed setting is not served from the cache."""
     from . import _entity_key, _predicate_key
 
     graph = _schema_graph()
@@ -239,8 +245,17 @@ def load_relations(path: Path | None = None) -> PredicateRelations:
     if chosen is not None and not chosen.exists():
         raise FileNotFoundError(f"predicate relations file not found: {chosen}")
     mtime = chosen.stat().st_mtime if chosen is not None else None
-    return _load_cached(str(chosen) if chosen is not None else None, mtime)
+    return _load_cached(str(chosen) if chosen is not None else None, mtime, _schema_key())
 
 
-__all__ = ["DBLP_NS", "HRN_NS", "PredicateRelations", "build_relations", "default_relations_path",
+def _schema_key() -> tuple[object, ...]:
+    from harness_semantic import content_core_on, cskg_subset_path
+
+    if not content_core_on():
+        return ("none",)
+    subset = cskg_subset_path()
+    return ("cskg", str(subset), subset.stat().st_mtime if subset.exists() else None)
+
+
+__all__ = ["CSKG_NS", "DBLP_NS", "HRN_NS", "PredicateRelations", "build_relations", "default_relations_path",
            "load_relations"]

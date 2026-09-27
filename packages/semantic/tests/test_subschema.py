@@ -62,3 +62,47 @@ def test_no_property_is_both_object_and_datatype_in_the_merged_graph() -> None:
         for left, right in graph.subject_objects(link):
             kinds = {property_kind(graph, left), property_kind(graph, right)} - {None}
             assert len(kinds) <= 1, (left, link, right)
+
+
+def test_the_cskg_content_core_is_named_by_harness_terms_equivalent_to_cskg() -> None:
+    from harness_semantic import CSKG, CSKG_INVERSES, TOP_RELATION, term_origin
+    from rdflib import OWL
+
+    schema = hand_written_subschema()
+    graph = schema.graph
+    assert schema.content_core == "cskg-2.0-subset" and len(schema.content_core_sha256 or "") == 64
+    assert {HRN.Method, HRN.Task, HRN.Material, HRN.Metric, HRN.OtherEntity} <= schema.classes
+    assert (HRN.Method, OWL.equivalentClass, CSKG.Method) in graph
+    assert (HRN.Dataset, RDFS.subClassOf, HRN.Material) in graph              # datasets are CS-KG Materials
+    assert (CSKG.usedBy, OWL.inverseOf, CSKG.uses) in graph                  # from the subset file
+    assert (HRN.uses, OWL.equivalentProperty, CSKG.uses) in graph
+    assert (HRN.uses, RDFS.subPropertyOf, TOP_RELATION) in graph
+    assert graph.value(HRN.solves, RDFS.range) == HRN.Task
+    # The fixed paper-level properties: one name and one type in every run.
+    assert (graph.value(HRN.addresses, RDFS.domain), graph.value(HRN.addresses, RDFS.range)) == (HRN.Paper, HRN.Task)
+    assert (HRN.evaluatesOn, RDFS.subPropertyOf, HRN.usesDataset) in graph
+    assert graph.value(HRN.evaluatesOn, RDFS.range) == HRN.Dataset
+    assert {term_origin(HRN.uses), term_origin(HRN.addresses), term_origin(CSKG.uses)} == {"core"}
+    assert CSKG_INVERSES["usedBy"] == "uses" and CSKG_INVERSES["outperformedBy"] == "outperforms"
+    # CS-KG's base relations have no domain or range; the harness terms carry them, so the seed conforms.
+    report = validate_subschema(graph)
+    assert report.conforms, report.text
+    owlrl_closure(graph)
+
+
+def test_the_content_core_can_be_switched_off(monkeypatch) -> None:
+    from harness_semantic import term_origin
+
+    monkeypatch.setenv("HARNESS_CONTENT_CORE", "none")
+    schema = hand_written_subschema()
+    assert schema.content_core is None and HRN.Task not in schema.classes and HRN.addresses not in schema.properties
+    assert not any(str(s).startswith("https://w3id.org/cskg/") for s in schema.graph.subjects())
+    assert term_origin(HRN.addresses) == "invented"
+
+
+def test_a_missing_cskg_subset_is_an_error(monkeypatch, tmp_path) -> None:
+    import pytest
+
+    monkeypatch.setenv("CSKG_SUBSET_PATH", str(tmp_path / "nowhere.ttl"))
+    with pytest.raises(FileNotFoundError, match="HARNESS_CONTENT_CORE=none"):
+        hand_written_subschema()

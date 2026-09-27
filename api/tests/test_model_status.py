@@ -66,3 +66,26 @@ def test_unreachable_status_api_is_reported_not_raised(monkeypatch) -> None:
     body = TestClient(app).get("/models/status").json()
     assert body["reachable"] is False and "is unreachable" in body["detail"]
     assert body["models"] and all(item["state"] == "unknown" for item in body["models"])
+
+
+def test_other_spellings_of_the_counts_and_provider_prefixed_aliases_are_read(monkeypatch) -> None:
+    document = {"overall": "busy", "models": {
+        "openai/heavy-model": {"state": "busy", "requestsRunning": 2, "queued": 5},
+        "lite-model": {"state": "healthy", "running": 0, "waiting": 0},
+        "Qwen/Qwen3-8B": {"state": "healthy", "running": 1, "waiting": 2},
+    }}
+
+    class Other(Client):
+        async def get(self, url: str) -> Response:
+            return Response(document)
+
+    monkeypatch.setenv("LLM_STATUS_URL", "http://status/v1/status")
+    monkeypatch.setenv("HARNESS_MODEL_HIGH", "openai/heavy-model")
+    monkeypatch.setattr(routes_status.httpx, "AsyncClient", Other)
+    body = TestClient(app).get("/models/status").json()
+    heavy = [item for item in body["models"] if item["alias"] == "heavy-model"]
+    assert len(heavy) == 1 and (heavy[0]["running"], heavy[0]["waiting"]) == (2, 5)
+    assert "schema and answers" in heavy[0]["roles"]                          # one row, not two
+    lite = next(item for item in body["models"] if item["alias"] == "lite-model")
+    assert (lite["running"], lite["waiting"]) == (0, 0)                       # zero is a value, not missing
+    assert next(item for item in body["models"] if item["alias"] == "Qwen/Qwen3-8B")["waiting"] == 2

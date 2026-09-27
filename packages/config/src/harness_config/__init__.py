@@ -140,6 +140,11 @@ class Settings(BaseSettings):
     # all ("off": they become hrn:ResearchEntity). Invented properties always get a parent property.
     schema_new_classes: Literal["subclass", "off"] = Field(
         "subclass", validation_alias=_env("HARNESS_SCHEMA_NEW_CLASSES"))
+    # Phase 4: the content core. "cskg": the CS-KG 2.0 subset (seed/cskg_ontology_2.0_subset.ttl) and
+    # the harness terms declared equivalent to it (Method, Task, Material, OtherEntity, uses, solves, ...)
+    # plus the paper-level addresses and evaluatesOn. "none": the seed before CS-KG (for comparisons).
+    content_core: Literal["cskg", "none"] = Field("cskg", validation_alias=_env("HARNESS_CONTENT_CORE"))
+    cskg_subset_path: str = Field("", validation_alias=_env("CSKG_SUBSET_PATH"))
     # Phase 4: add the DBLP backbone (authors, venue, citations among them) of the answer's papers
     # to the answer graph and export only the answer's subgraph in triples.ttl.
     dblp_backbone: bool = Field(True, validation_alias=_env("HARNESS_DBLP_BACKBONE"))

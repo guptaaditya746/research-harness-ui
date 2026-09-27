@@ -447,6 +447,8 @@ class RunOutcomes:
                     "ontology": "dblp_schema_2024-06-14.ttl",
                     "ontology_version": schema.seed_schema_version,
                     "ontology_sha256": schema.seed_schema_sha256,
+                    "content_core": schema.content_core,
+                    "content_core_sha256": schema.content_core_sha256,
                 },
                 indent=2,
             ).encode()

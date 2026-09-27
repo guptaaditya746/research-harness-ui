@@ -31,6 +31,7 @@ from typing import Any
 
 from harness_extraction import AnswerResult, ExtractedTriple, ModelFailure, SchemaInference
 from harness_extraction.call_control import call_interrupted
+from harness_semantic import CSKG_INVERSES, content_core_on
 
 from .pipeline import Baseline20
 from .state import BaselineResult, BaselineState, NoResults
@@ -44,7 +45,12 @@ _DBLP_NAMES = {
     "publishedInJournal": "venue", "publishedInBook": "venue", "publishedAsPartOf": "venue",
 }
 # Inverse properties: (author, authorOf, paper) is (paper, authoredBy, author).
+# Inverse names read the other way round: DBLP's, and CS-KG's ("usedBy" -> "uses") when the content core is on.
 _INVERSE = {"authorOf": "authoredBy", "creatorOf": "authoredBy"}
+
+
+def _inverse(raw: str) -> str | None:
+    return _INVERSE.get(raw) or (CSKG_INVERSES.get(raw) if content_core_on() else None)
 # Not relations between research entities: dropped (and counted).
 _META = {"type", "a", "label", "comment", "subClassOf", "subPropertyOf", "sameAs", "bibtexType", "numberOfCreators"}
 _NAME = re.compile(r"[a-z][A-Za-z0-9_]{0,63}")
@@ -311,8 +317,8 @@ class ExternalHarness(Baseline20):
         for row in rows:
             raw = re.split(r"[#/:]", str(row.get("predicate") or "").strip())[-1]
             subject, object_ = str(row["subject"]), str(row["object"])
-            if raw in _INVERSE:
-                name, subject, object_ = _INVERSE[raw], object_, subject
+            if _inverse(raw):
+                name, subject, object_ = _inverse(raw), object_, subject
             else:
                 name = predicate_name(raw)
             if name is None:

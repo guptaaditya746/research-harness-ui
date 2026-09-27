@@ -5,7 +5,8 @@ reading it reports:
 
 - **Vocabulary**: fact edges whose predicate is DBLP (a ``dblp:`` property, or one of the harness
   terms declared equivalent to one: title, authoredBy, year, venue), a harness seed term (cites,
-  usesDataset, reportsMetric, ...), or invented in the run.
+  usesDataset, reportsMetric, ...; with HARNESS_CONTENT_CORE=cskg also the content core: addresses,
+  evaluatesOn and the CS-KG relations uses, solves, ...), or invented in the run.
 - **Connectivity** of the knowledge part of the graph (fact, claim and derived edges; evidence
   edges and passage nodes are provenance, not knowledge; literal value nodes do not link): connected
   pieces, the largest piece's share of nodes, and the share of paper pairs connected at all.
@@ -37,7 +38,14 @@ from statistics import median
 from typing import Any
 
 from harness_schema.models import AnswerGraph, GraphEdge, GraphNode, Reading, Run
-from harness_semantic import CORE_TERMS, DBLP, HRN, hand_written_subschema
+from harness_semantic import (
+    DBLP,
+    DBLP_EQUIVALENTS,
+    HRN,
+    content_core_on,
+    core_terms,
+    hand_written_subschema,
+)
 from rdflib import OWL, RDF, RDFS, Graph
 
 KNOWLEDGE_EDGES = {"fact", "claim", "derived"}
@@ -57,16 +65,23 @@ def _local(iri: object) -> str:
     return re.split(r"[#/]", str(iri))[-1]
 
 
-@cache
 def vocabulary() -> Vocabulary:
+    """The vocabulary for the current HARNESS_CONTENT_CORE setting (evaluate runs with the setting
+    they were made with; ONTOLOGY_VERSION in the snapshot records it)."""
+    return _vocabulary(content_core_on())
+
+
+@cache
+def _vocabulary(core_on: bool) -> Vocabulary:
     schema = hand_written_subschema()
     graph = schema.graph
     dblp_props = {_local(p) for p in graph.subjects(RDF.type, RDF.Property) if str(p).startswith(str(DBLP))}
-    equivalent = {_local(p) for p, _ in graph.subject_objects(OWL.equivalentProperty)
-                  if str(p).startswith(str(HRN))}
+    # Harness terms equivalent to DBLP ones count as DBLP (those equivalent to CS-KG terms are core).
+    equivalent = {_local(p) for p in DBLP_EQUIVALENTS}
     # The harness core, including the generic parents (researchRelation, ResearchEntity, ...).
-    seed = ({_local(p) for p in schema.properties} | {_local(t) for t in CORE_TERMS}) - equivalent
-    classes = {_local(c) for c in schema.classes} | {_local(t) for t in CORE_TERMS if _local(t)[:1].isupper()}
+    core = core_terms()
+    seed = ({_local(p) for p in schema.properties} | {_local(t) for t in core}) - equivalent
+    classes = {_local(c) for c in schema.classes} | {_local(t) for t in core if _local(t)[:1].isupper()}
     classes |= {_local(c) for c in graph.subjects(RDF.type, OWL.Class) if str(c).startswith(str(DBLP))}
     return Vocabulary(
         dblp=frozenset(name.casefold() for name in dblp_props | equivalent | {"author"}),

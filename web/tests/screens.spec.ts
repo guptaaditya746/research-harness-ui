@@ -90,3 +90,22 @@ test('results show numbered references, removed sentences and the run timeline',
   await expect(page.getByRole('region', { name: 'Run timeline' })).toContainText('4 model calls');
   await expect(page.getByRole('button', { name: /Model status|Models|Harness API|Checking models/ })).toBeVisible();
 });
+
+test('model status table shows vLLM waiting counts and a row for harness runs waiting for a slot', async ({ page }) => {
+  await page.route('**/models/status', route => route.fulfill({ json: {
+    reachable: true, detail: null, overall: 'busy', updatedAt: '2026-09-27T10:00:00Z',
+    models: [
+      { alias: 'heavy-model', roles: ['schema and answers'], state: 'busy', running: 4, waiting: 3, kvCache: 0.83, queueP95Seconds: 2.4 },
+      { alias: 'lite-model', roles: ['agent'], state: 'healthy', running: 1, waiting: 0, kvCache: 0.12 },
+    ],
+    runs: { active: 2, queued: 5, capacity: 2 },
+  } }));
+  await page.goto('/');
+  await page.getByRole('button', { name: /Models busy · 5 runs queued/ }).click();
+  const table = page.getByRole('dialog', { name: 'Model status' }).locator('table');
+  await expect(table.getByRole('row', { name: /heavy/ }).getByRole('cell').nth(3)).toHaveText('3');
+  await expect(table.getByRole('row', { name: /lite/ }).getByRole('cell').nth(3)).toHaveText('0');
+  const runs = table.getByTestId('harness-runs-row');
+  await expect(runs.getByRole('cell').nth(2)).toHaveText('2');
+  await expect(runs.getByRole('cell').nth(3)).toHaveText('5');
+});

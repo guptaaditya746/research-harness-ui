@@ -16,6 +16,8 @@ const STATE_LABEL: Record<string, string> = {
 const shortName = (alias: string) => alias.replace(/-model$/, '').replace(/^qwen-/, '');
 const percent = (value?: number | null) => value == null ? '–' : `${Math.round(value * 100)}%`;
 const seconds = (value?: number | null) => value == null ? '–' : `${value.toFixed(1)} s`;
+// A count the status API did not send is unknown ('–'), even when the backend is reachable; 0 is shown as 0.
+const count = (value: number | null | undefined, reachable: boolean) => value == null || !reachable ? '–' : String(value);
 
 /** Model load, queue and availability in the header, polled every 5 s from the harness API (`GET /models/status`). */
 export function ModelStatus({ api }: { api: string }) {
@@ -58,6 +60,7 @@ export function ModelStatus({ api }: { api: string }) {
   const reachable = !!status?.reachable && !failed;
   const overall = reachable ? status?.overall ?? 'unknown' : 'unknown';
   const queued = status?.runs.queued ?? 0;
+  const runsState = !status ? 'unknown' : status.runs.queued ? 'saturated' : status.runs.active ? 'busy' : 'healthy';
   const summary = failed ? 'Harness API unreachable' : !status ? 'Checking models…' : !reachable ? 'Model status unknown'
     : `Models ${STATE_LABEL[overall]?.toLowerCase() ?? overall}${queued ? ` · ${queued} run${queued === 1 ? '' : 's'} queued` : ''}`;
 
@@ -70,14 +73,19 @@ export function ModelStatus({ api }: { api: string }) {
     {open && <div className="model-status-panel" id="model-status-panel" role="dialog" aria-label="Model status">
       {!reachable && <p className="muted micro">{failed ? 'The harness API did not answer.' : status?.detail ?? 'No status yet.'} Load and queue come from the thesis-llm-setup status API (LLM_STATUS_URL).</p>}
       <table className="model-table">
-        <thead><tr><th>Model</th><th>State</th><th>Running</th><th>Waiting</th><th>KV cache</th><th>Queue p95</th></tr></thead>
+        <thead><tr><th>Model</th><th>State</th><th title="Requests being generated">Running</th><th title="Requests queued: inside vLLM for a model, for a run slot for harness runs">Waiting</th><th>KV cache</th><th>Queue p95</th></tr></thead>
         <tbody>{models.map(model => <tr key={model.alias}>
           <td><strong>{shortName(model.alias)}</strong><div className="muted micro">{model.roles.join(', ') || 'not used by the harness'}</div></td>
           <td><span className={`model-dot state-${reachable ? model.state : 'unknown'}`} aria-hidden="true" /> {STATE_LABEL[reachable ? model.state : 'unknown'] ?? model.state}</td>
-          <td>{model.running ?? '–'}</td><td>{model.waiting ?? '–'}</td><td>{percent(model.kvCache)}</td><td>{seconds(model.queueP95Seconds)}</td>
-        </tr>)}</tbody>
+          <td>{count(model.running, reachable)}</td><td>{count(model.waiting, reachable)}</td><td>{percent(model.kvCache)}</td><td>{seconds(model.queueP95Seconds)}</td>
+        </tr>)}
+        {status && <tr className="model-table-runs" data-testid="harness-runs-row">
+          <td><strong>Harness runs</strong><div className="muted micro">{status.runs.capacity} run slots of this API</div></td>
+          <td><span className={`model-dot state-${runsState}`} aria-hidden="true" /> {STATE_LABEL[runsState]}</td>
+          <td>{status.runs.active}</td><td>{status.runs.queued}</td><td>–</td><td>–</td>
+        </tr>}</tbody>
       </table>
-      {status && <p className="micro">Harness runs: {status.runs.active} researching, {status.runs.queued} waiting for a slot, {status.runs.capacity} slots.</p>}
+      {status && <p className="muted micro">Model rows count requests inside vLLM; the last row counts harness runs holding or waiting for a run slot.</p>}
       {status?.updatedAt && reachable && <p className="muted micro">Updated {new Date(status.updatedAt).toLocaleTimeString()}. Busy: 2+ requests waiting or KV cache 80%+. Queueing: 5+ waiting or KV cache 92%+.</p>}
     </div>}
   </div>;

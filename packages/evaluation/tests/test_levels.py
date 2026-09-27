@@ -303,3 +303,22 @@ def test_ambiguous_row_keeps_its_own_gold_when_that_scores_best(relations) -> No
     result = evaluate_gold_row(run, row, relations=relations)
     assert result["accepted_reading"] is None
     assert result["chosen_levels"]["levels"]["strict"]["f1"] == result["chosen"]["f1"] == 1.0
+
+
+def test_the_content_core_credits_cskg_inverses_and_evaluates_on() -> None:
+    relations = load_relations()
+    # CS-KG inverse: a run's "MethodZ uses ToolQ" states the gold's "ToolQ usedBy MethodZ".
+    levels = score_levels([t("MethodZ", "uses", "ToolQ")], [t("ToolQ", "usedBy", "MethodZ")], key=key,
+                          relations=relations)["levels"]
+    assert levels["entailed"]["matched_gold"] == 1 and levels["strict"]["matched_gold"] == 0
+    # evaluatesOn is a kind of usesDataset: the more specific run triple states the gold fact.
+    levels = score_levels([t("p99", "evaluatesOn", "BenchY")], [t("p99", "usesDataset", "BenchY")], key=key,
+                          relations=relations)["levels"]
+    assert (levels["entailed"]["matched_gold"], levels["entailed"]["matched_predicted"]) == (1, 0)
+
+
+def test_without_the_content_core_those_rules_are_absent(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_CONTENT_CORE", "none")
+    levels = score_levels([t("MethodZ", "uses", "ToolQ")], [t("ToolQ", "usedBy", "MethodZ")], key=key,
+                          relations=load_relations())["levels"]
+    assert levels["entailed"]["matched_gold"] == 0

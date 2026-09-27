@@ -22,6 +22,7 @@ from harness_semantic import (
     TOP_CLASS,
     TOP_RELATION,
     Subschema,
+    content_core_on,
     is_datatype_range,
     property_kind,
 )
@@ -222,6 +223,23 @@ class ExtractionEngine:
         self.property_names[name] = iri
         return iri
 
+    def signatures(self, names: list[str]) -> list[str]:
+        """"name: Domain -> Range. definition" for each property (v2 prompts), so the models see which
+        properties are about a paper and which link two research entities (the CS-KG relations)."""
+        rows = []
+        for name in names:
+            iri = self.property_names.get(name)
+            if iri is None:
+                continue
+            graph = self.schema.graph
+            domain, range_ = graph.value(iri, RDFS.domain), graph.value(iri, RDFS.range)
+            if not isinstance(domain, URIRef) or not isinstance(range_, URIRef):
+                continue
+            range_name = f"xsd:{local_name(range_)}" if str(range_).startswith(str(XSD)) else local_name(range_)
+            comment = " ".join(str(graph.value(iri, RDFS.comment) or "").split())
+            rows.append(f"{name}: {local_name(domain)} -> {range_name}" + (f". {comment}" if comment else ""))
+        return rows
+
     @labelled("schema inference")
     def infer_schema(self, question: str, passages: list[dict[str, Any]],
                      notes: list[str] | None = None) -> SchemaInference:
@@ -241,10 +259,13 @@ class ExtractionEngine:
                 for row in passages
             ],
         }
+        core = content_core_on()
+        if core and settings().prompt_set != "v1":
+            payload["property_signatures"] = self.signatures(allowed_properties)
         if notes:
             payload["research_notes"] = list(notes)
         result = SchemaInference.model_validate(complete(self.schema_model, render(
-            "extraction/schema_inference", payload,
+            "extraction/schema_inference", payload, content_core=core,
         )))
         if not result.classes or not result.properties:
             raise ValueError("schema inference returned no classes or properties")
@@ -318,12 +339,16 @@ class ExtractionEngine:
     def extract(
         self, question: str, inferred: SchemaInference, passages: list[dict[str, Any]]
     ) -> ExtractionResult:
+        core = content_core_on()
+        signatures = ({"property_signatures": self.signatures(list(inferred.properties))}
+                      if core and settings().prompt_set != "v1" else {})
         result = ExtractionResult.model_validate(complete(self.model, render(
             "extraction/triple_extraction",
             {
                 "question": question,
                 "classes": inferred.classes,
                 "properties": inferred.properties,
+                **signatures,
                 "passages": [
                     {
                         "passage_id": row["passage_id"],
@@ -332,7 +357,7 @@ class ExtractionEngine:
                     }
                     for row in passages
                 ],
-            },
+            }, content_core=core,
         )))
         passage_ids = {row["passage_id"] for row in passages}
         # Models sometimes return a useful supported triple alongside a
@@ -413,11 +438,16 @@ class ExtractionEngine:
                 iri = self.property_names.get(relation)
                 domain = self.schema.graph.value(iri, RDFS.domain) if iri else None
                 range_ = self.schema.graph.value(iri, RDFS.range) if iri else None
-                property_catalog.append({
+                entry = {
                     "property": relation,
                     "domain": local_name(domain) if isinstance(domain, URIRef) else None,
                     "range": local_name(range_) if isinstance(range_, URIRef) else None,
-                })
+                }
+                if content_core_on() and settings().prompt_set != "v1" and iri is not None:
+                    # With the content core, the model tells paper-level from entity-level relations
+                    # (addresses vs solves) by their definitions too.
+                    entry["definition"] = " ".join(str(self.schema.graph.value(iri, RDFS.comment) or "").split())
+                property_catalog.append(entry)
             mapped = complete(self.edc_model, render(
                 "extraction/edc_map",
                 {"question": question, "unresolved": unresolved,

@@ -66,6 +66,29 @@ maps new classes to `hrn:ResearchEntity`. The DBLP seed gets OWL 2 declarations 
 (the seed file only says `rdf:Property`). Each reading lists its terms with their origin (DBLP / core
 / invented) in `schemaTerms`, and `subschema.ttl` holds only those terms and their parents.
 
+**Content core (CS-KG).** With `HARNESS_CONTENT_CORE=cskg` (default) the seed also holds a subset of
+the CS-KG 2.0 ontology (`seed/cskg_ontology_2.0_subset.ttl`, CC BY 4.0, namespace
+`https://w3id.org/cskg/ontology#`): the classes Method, Task, Material, Metric, OtherEntity and the base
+relations uses, solves, improves, outperforms, includes, produces, supports, analyzes with their
+inverses. The harness names them with its own terms declared equivalent (`hrn:Task owl:equivalentClass
+cskg-ont:Task`, `hrn:uses owl:equivalentProperty cskg-ont:uses`), because CS-KG's base relations have no
+domain or range (its per-target variants such as `usesMaterial` do): the harness terms carry one domain
+and one range each (research entity → research entity; `solves` → Task) and a definition. Two fixed
+paper-level properties complete it: `addresses` (Paper → Task) and `evaluatesOn` (Paper → Dataset, a
+sub-property of `usesDataset`); `hrn:Dataset` is a subclass of Material. So a paper addresses a task and
+a method solves that task, with the same names and types in every run. v2 prompts get each property's
+signature (`property_signatures`: "name: Domain -> Range. definition") for schema inference and
+extraction (and definitions in the EDC mapping catalog). The Subschema panel lists these terms by their
+harness names with origin "core" and "same as cskg-ont:…" in the definition; triples use the harness
+names. The scorer keys CS-KG terms by local name like harness terms, so its entailed level credits
+CS-KG inverses (a run's "X uses Y" states a gold "Y usedBy X") and `evaluatesOn` as a `usesDataset`. `seed_manifest.json` records `content_core` and its
+SHA-256; `make ontology` exports it for the External path (whose `onto` names each equivalence);
+`make cskg-subset ARGS="--source <file or URL>"` rebuilds the subset from the full CS-KG file.
+`HARNESS_CONTENT_CORE=none` gives the seed and the v2 schema/extraction prompts from before CS-KG, for
+comparisons. Scoring and `make graph-shape` follow the setting of the process that runs them, so
+evaluate runs with the setting they were made with, and change `ONTOLOGY_VERSION` with it (the
+snapshot then keeps the two apart).
+
 For research answers (not verified-fact answers), `backbone.py` adds the DBLP backbone of the
 answer's papers to the answer graph: authors, venue as one shared node per venue, and citations among
 them (`HARNESS_DBLP_BACKBONE`). The backbone is not part of `Reading.triples`, which gold scoring

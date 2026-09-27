@@ -1,4 +1,4 @@
-.PHONY: ontology benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: ontology cskg-subset benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -47,6 +47,10 @@ eval-planner:
 # The seed ontology as Turtle, for the external harness (its knowledge_base.ontology)
 ontology:
 	uv run --python 3.12 python scripts/export_ontology.py $(ARGS)
+
+# Rebuild seed/cskg_ontology_2.0_subset.ttl from the full CS-KG ontology (ARGS="--source file-or-url [--check]")
+cskg-subset:
+	uv run --python 3.12 python scripts/cskg_subset.py $(ARGS)
 
 # Summaries of recent runs (see docs/RUN_ANALYSIS.md): make runs ARGS="list -n 20"
 runs:

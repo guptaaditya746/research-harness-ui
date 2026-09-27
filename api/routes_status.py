@@ -18,6 +18,22 @@ from harness_config import settings
 router = APIRouter()
 FIELDS = ("state", "running", "waiting", "kvCache", "queueP95Seconds", "latencyP95Seconds", "preemptions",
           "lastHealthyAt")
+# Other spellings of the counts (older status APIs, Prometheus-style names); the first one present wins.
+SPELLINGS = {"running": ("running", "requestsRunning", "numRequestsRunning", "num_requests_running"),
+             "waiting": ("waiting", "queued", "requestsWaiting", "numRequestsWaiting", "num_requests_waiting")}
+
+
+def _value(entry: dict[str, Any], key: str) -> Any:
+    return next((entry[name] for name in SPELLINGS.get(key, (key,)) if entry.get(name) is not None), None)
+
+
+_PROVIDERS = ("openai/", "hosted_vllm/", "vllm/", "litellm_proxy/")
+
+
+def _alias(name: str) -> str:
+    """"openai/heavy-model" and "heavy-model" are one model (a LiteLLM provider prefix is dropped;
+    "Qwen/Qwen3-8B" keeps its organisation)."""
+    return next((name[len(prefix):] for prefix in _PROVIDERS if name.startswith(prefix)), name)
 
 
 def model_roles() -> dict[str, list[str]]:
@@ -60,13 +76,18 @@ async def models_status() -> dict[str, Any]:
                 document = body if isinstance(body, dict) else {}
         except (httpx.HTTPError, ValueError) as exc:
             detail = f"The status API at {url} is unreachable ({type(exc).__name__})."
-    reported = document.get("models") if isinstance(document.get("models"), dict) else {}
+    raw = document.get("models") if isinstance(document.get("models"), dict) else {}
+    reported = {_alias(str(name)): entry for name, entry in raw.items() if isinstance(entry, dict)}
+    merged: dict[str, list[str]] = {}
+    for alias, names in roles.items():
+        merged.setdefault(_alias(alias), []).extend(name for name in names if name not in merged.get(_alias(alias), []))
+    roles = merged
     aliases = list(dict.fromkeys([*roles, *reported]))
     models = []
     for alias in aliases:
-        entry = reported.get(alias) if isinstance(reported.get(alias), dict) else {}
+        entry = reported.get(alias, {})
         models.append({"alias": alias, "roles": roles.get(alias, []),
-                       **{key: entry.get(key) for key in FIELDS},
+                       **{key: _value(entry, key) for key in FIELDS},
                        "state": entry.get("state") or "unknown"})
     return {"reachable": detail is None, "detail": detail, "overall": document.get("overall", "unknown"),
             "updatedAt": document.get("updatedAt"), "models": models, "runs": run_queue()}

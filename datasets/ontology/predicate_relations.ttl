@@ -29,6 +29,10 @@
 # (dblp:authoredBy is a kind of dblp:createdBy, inverse of dblp:authorOf).
 # No invented-predicate rules are active yet: add them as invented predicates
 # appear in reviewed gold.
+# The CS-KG content core (harness_semantic, HARNESS_CONTENT_CORE=cskg) is part of
+# the harness schema: addresses, evaluatesOn (a kind of usesDataset), the relations
+# declared equivalent to CS-KG (hrn:uses = cskg-ont:uses, ...) and CS-KG's inverses
+# (cskg-ont:usedBy) are closed without rules here.
 
 # Examples (from the nlp27 worked example); enable only after checking they hold:
 # hrn:hasAttackTask   rdfs:subPropertyOf     hrn:evaluatesAttack .

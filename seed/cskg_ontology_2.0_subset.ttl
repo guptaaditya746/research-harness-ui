@@ -1,0 +1,78 @@
+# Subset of the Computer Science Knowledge Graph (CS-KG) Ontology 2.0: the harness content core.
+#
+# Source:  https://scholkg.kmi.open.ac.uk/cskg/ontology  (namespace https://w3id.org/cskg/ontology#)
+# Licence: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), (c) the CS-KG authors,
+#          Knowledge Media Institute, The Open University. Terms and comments are copied unchanged.
+#
+# What is in here: the five CS-KG research-entity classes with their parent, and the base relations
+# the harness uses with their inverses. Only statements CS-KG itself makes about these terms: base
+# relations are plain owl:ObjectProperty (CS-KG puts domains and ranges on its per-target variants,
+# e.g. usesMaterial); each inverse declares owl:inverseOf.
+#
+# The harness names these terms through its own vocabulary (hrn:Method owl:equivalentClass
+# cskg-ont:Method, hrn:uses owl:equivalentProperty cskg-ont:uses; harness_semantic), which is where
+# single domains and ranges for extraction live. Regenerate this file from the full ontology with
+#   make cskg-subset ARGS="--source cskg_ontology.ttl"
+# (scripts/cskg_subset.py), which copies every statement CS-KG makes about the same terms.
+
+@prefix owl:      <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:      <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:     <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix dct:      <http://purl.org/dc/terms/> .
+@prefix cskg-ont: <https://w3id.org/cskg/ontology#> .
+
+<https://harness.local/ontology/cskg-2.0-subset> rdf:type owl:Ontology ;
+    rdfs:label "CS-KG Ontology 2.0, harness subset" ;
+    dct:source <https://w3id.org/cskg/ontology#> ;
+    dct:license <https://creativecommons.org/licenses/by/4.0/> ;
+    owl:versionInfo "2.0" .
+
+# ── Classes ──────────────────────────────────────────────────────────────────────────────────
+
+cskg-ont:ResearchEntity rdf:type owl:Class .
+
+cskg-ont:Method rdf:type owl:Class ;
+    rdfs:subClassOf cskg-ont:ResearchEntity ;
+    rdfs:comment "A specific approach, usually adopted to address a task" .
+
+cskg-ont:Task rdf:type owl:Class ;
+    rdfs:subClassOf cskg-ont:ResearchEntity ;
+    rdfs:comment "A piece of work to carry out, usually to solve a specific challenge" .
+
+cskg-ont:Material rdf:type owl:Class ;
+    rdfs:subClassOf cskg-ont:ResearchEntity ;
+    rdfs:comment "An object that is processed, used, or returned by methods" .
+
+cskg-ont:Metric rdf:type owl:Class ;
+    rdfs:subClassOf cskg-ont:ResearchEntity ;
+    rdfs:comment "A measure of quantitative assessment, commonly used for comparing or assessing" .
+
+cskg-ont:OtherEntity rdf:type owl:Class ;
+    rdfs:subClassOf cskg-ont:ResearchEntity ;
+    rdfs:comment "A significant entity unable to classify as task, method, metric, or material" .
+
+# ── Relations between research entities (base relations and their inverses) ─────────────────
+
+cskg-ont:uses rdf:type owl:ObjectProperty .
+cskg-ont:usedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:uses .
+
+cskg-ont:solves rdf:type owl:ObjectProperty .
+cskg-ont:solvedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:solves .
+
+cskg-ont:improves rdf:type owl:ObjectProperty .
+cskg-ont:improvedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:improves .
+
+cskg-ont:outperforms rdf:type owl:ObjectProperty .
+cskg-ont:outperformedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:outperforms .
+
+cskg-ont:includes rdf:type owl:ObjectProperty .
+cskg-ont:includedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:includes .
+
+cskg-ont:produces rdf:type owl:ObjectProperty .
+cskg-ont:producedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:produces .
+
+cskg-ont:supports rdf:type owl:ObjectProperty .
+cskg-ont:supportedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:supports .
+
+cskg-ont:analyzes rdf:type owl:ObjectProperty .
+cskg-ont:analyzedBy rdf:type owl:ObjectProperty ; owl:inverseOf cskg-ont:analyzes .

@@ -35,6 +35,8 @@ triples = [
     {"subject": "p4", "predicate": "dblp:authoredBy", "object": "Ada Byron", "source_id": "p4-metadata", "evidence": ""},
     {"subject": "Grace Hopper", "predicate": "dblp:authorOf", "object": "p4", "source_id": "p4-metadata", "evidence": ""},
     {"subject": "p4", "predicate": "rdf:type", "object": "Paper", "source_id": "p4-metadata", "evidence": ""},
+    {"subject": "robot videos", "predicate": "cskg-ont:usedBy", "object": "MethodX",
+     "source_id": "p4-abstract", "evidence": "robot learning"},
 ]
 status = {"answered": "answered", "empty": "answered", "limits": "limits_exceeded", "other_corpus": "answered",
           "provider": "error"}[mode]
@@ -101,7 +103,10 @@ def test_an_external_run_becomes_a_normal_answered_run(tmp_path: Path, monkeypat
     assert run.path == "external" and run.status == "answered" and run.model_agent == "openai/heavy-model"
     reading = run.readings[0]
     assert {(t.p, t.o) for t in reading.triples} == {("usesDataset", "robot videos"), ("authoredBy", "Ada Byron"),
-                                                    ("authoredBy", "Grace Hopper")}      # authorOf inverted, type dropped
+                                                    ("authoredBy", "Grace Hopper"),      # authorOf inverted, type dropped
+                                                    ("uses", "robot videos")}            # CS-KG usedBy inverted
+    uses = next(t for t in reading.triples if t.p == "uses")
+    assert uses.s.endswith("MethodX")
     assert reading.answer == "Answer to: Which data does VPP use? [p4-abstract]."      # kept as the agent wrote it
     actions = [row.action for row in rows]
     assert actions[:4] == ["Starting external harness", "Model call finished", "External command",

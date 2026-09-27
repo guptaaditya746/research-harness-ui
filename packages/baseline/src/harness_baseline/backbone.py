@@ -8,8 +8,10 @@ something the run extracted, so it is not part of ``Reading.triples`` (which is 
 reads). Years are left out of the graph on purpose: a shared year node would link unrelated papers.
 
 ``schema_terms`` lists a reading's subschema with each term's origin (DBLP / core / invented) for
-the Subschema panel; ``subschema_slice`` exports only the terms a question uses, with their parents,
-instead of the whole seed ontology.
+the Subschema panel; harness terms declared equivalent to a DBLP term are shown by that name
+(dblp:title), those equivalent to a CS-KG term keep their harness name (hrn:uses, as in triples.ttl)
+and say "same as cskg-ont:uses" in their definition. ``subschema_slice`` exports only the terms a
+question uses, with their parents and equivalents, instead of the whole seed ontology.
 """
 
 from __future__ import annotations
@@ -18,14 +20,30 @@ from collections.abc import Iterable
 from typing import Any
 
 from harness_schema.models import SchemaTerm, Triple
-from harness_semantic import DBLP, DBLP_EQUIVALENTS, HRN, property_kind, term_origin
+from harness_semantic import (
+    CSKG,
+    CSKG_EQUIVALENTS,
+    DBLP,
+    DBLP_EQUIVALENTS,
+    HRN,
+    content_core_on,
+    property_kind,
+    term_origin,
+)
 from rdflib import OWL, RDF, RDFS, XSD, Graph, URIRef
 
 BACKBONE_PAPERS = 25          # at most this many papers get backbone edges
 BACKBONE_AUTHORS = 8          # per paper
 BACKBONE_PREFIX = "b-"        # edge ids of backbone facts in the answer graph
-PREFIXES = {"hrn": str(HRN), "dblp": str(DBLP), "xsd": str(XSD), "owl": str(OWL), "rdfs": str(RDFS)}
-FOLLOW = {RDFS.subClassOf, RDFS.subPropertyOf, OWL.equivalentProperty, RDFS.domain, RDFS.range}
+PREFIXES = {"hrn": str(HRN), "dblp": str(DBLP), "cskg-ont": str(CSKG), "xsd": str(XSD), "owl": str(OWL),
+            "rdfs": str(RDFS)}
+FOLLOW = {RDFS.subClassOf, RDFS.subPropertyOf, OWL.equivalentProperty, OWL.equivalentClass, RDFS.domain, RDFS.range}
+KNOWN = (str(HRN), str(DBLP), str(CSKG))
+
+
+def cskg_equivalent(iri: URIRef) -> URIRef | None:
+    """The CS-KG term a harness term is declared equivalent to (content core on), else None."""
+    return CSKG_EQUIVALENTS.get(iri) if content_core_on() else None
 
 
 def prefixed(iri: object) -> str:
@@ -40,7 +58,7 @@ def prefixed(iri: object) -> str:
 def _parent(graph: Graph, iri: URIRef, predicate: URIRef) -> URIRef | None:
     """One parent, preferring harness/DBLP ones (DBLP terms often have several external parents)."""
     parents = sorted(graph.objects(iri, predicate), key=str)
-    known = [item for item in parents if str(item).startswith((str(HRN), str(DBLP)))]
+    known = [item for item in parents if str(item).startswith(KNOWN)]
     return (known or parents or [None])[0]
 
 
@@ -120,8 +138,19 @@ def _term(graph: Graph, iri: URIRef, kind: str) -> SchemaTerm:
     shown = DBLP_EQUIVALENTS.get(iri, iri)          # harness equivalents are shown by their DBLP name
     relation = RDFS.subClassOf if kind == "class" else RDFS.subPropertyOf
     parent = _parent(graph, iri, relation) or _parent(graph, shown, relation)
-    domain, range_ = graph.value(shown, RDFS.domain), graph.value(shown, RDFS.range)
+
+    def named(predicate: URIRef) -> URIRef | None:
+        # CS-KG base relations have no domain/range (its per-target variants do): use the harness term's.
+        for node in (graph.value(shown, predicate), graph.value(iri, predicate)):
+            if isinstance(node, URIRef):
+                return node
+        return None
+
+    domain, range_ = named(RDFS.domain), named(RDFS.range)
     comment = graph.value(iri, RDFS.comment) or graph.value(shown, RDFS.comment)
+    same = cskg_equivalent(iri)
+    if same is not None:
+        comment = f"{comment or ''} (same as {prefixed(same)})".strip()
     return SchemaTerm(
         name=prefixed(shown), iri=str(shown), kind=kind, origin=term_origin(iri),
         parent=prefixed(parent) if parent is not None else None,
@@ -151,7 +180,7 @@ def schema_terms(graph: Graph, classes: Iterable[str], properties: Iterable[str]
 
 
 def subschema_slice(graph: Graph, terms: Iterable[SchemaTerm]) -> Graph:
-    """Only the question's terms, their equivalents, parents, domains and ranges (HRN and DBLP)."""
+    """Only the question's terms, their equivalents, parents, domains and ranges (HRN, DBLP, CS-KG)."""
     out = Graph()
     for prefix, namespace in PREFIXES.items():
         out.bind(prefix, namespace)
@@ -165,7 +194,7 @@ def subschema_slice(graph: Graph, terms: Iterable[SchemaTerm]) -> Graph:
         seen.add(iri)
         for predicate, obj in graph.predicate_objects(iri):
             out.add((iri, predicate, obj))
-            if predicate in FOLLOW and isinstance(obj, URIRef) and str(obj).startswith((str(HRN), str(DBLP))):
+            if predicate in FOLLOW and isinstance(obj, URIRef) and str(obj).startswith(KNOWN):
                 todo.append(obj)
     return out
 
