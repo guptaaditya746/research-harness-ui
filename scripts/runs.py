@@ -57,7 +57,7 @@ def _status(status: str) -> str:
 @app.command("list")
 def list_runs(
     n: Annotated[int, typer.Option("-n", help="How many runs.")] = 20,
-    path: Annotated[str | None, typer.Option(help="agentic, baseline or baseline-enhanced.")] = None,
+    path: Annotated[str | None, typer.Option(help="agentic, baseline, baseline-enhanced or external.")] = None,
     status: Annotated[str | None, typer.Option(help="answered, incomplete, ...")] = None,
     fixtures: Fixtures = False,
     as_json: Annotated[bool, typer.Option("--json", help="One JSON object per run.")] = False,
@@ -194,7 +194,7 @@ def failures(n: Annotated[int, typer.Option("-n", help="Latest runs to look thro
 
 @app.command()
 def schema(n: Annotated[int, typer.Option("-n", help="Latest answered runs to look through.")] = 60,
-           path: Annotated[str | None, typer.Option(help="agentic, baseline or baseline-enhanced.")] = None,
+           path: Annotated[str | None, typer.Option(help="agentic, baseline, baseline-enhanced or external.")] = None,
            fixtures: Fixtures = False) -> None:
     """Per answered run: answered from facts or research, what schema inference proposed, which invented
     terms the reading kept and how many of its facts use one. Explains a run without invented terms."""

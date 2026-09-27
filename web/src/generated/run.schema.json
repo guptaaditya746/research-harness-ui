@@ -1046,7 +1046,8 @@
       "enum": [
         "agentic",
         "baseline",
-        "baseline-enhanced"
+        "baseline-enhanced",
+        "external"
       ],
       "title": "Path",
       "type": "string"
@@ -1140,7 +1141,8 @@
             "agentic",
             "baseline",
             "baseline-enhanced",
-            "baseline_fallback"
+            "baseline_fallback",
+            "external"
           ],
           "type": "string"
         },

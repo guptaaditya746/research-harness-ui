@@ -143,6 +143,10 @@ class Settings(BaseSettings):
     # Phase 4: add the DBLP backbone (authors, venue, citations among them) of the answer's papers
     # to the answer graph and export only the answer's subgraph in triples.ttl.
     dblp_backbone: bool = Field(True, validation_alias=_env("HARNESS_DBLP_BACKBONE"))
+    # The External path: a separate repo (external-harness) run as a subprocess per question, e.g.
+    # "uv run --project /srv/external-harness xh", with its YAML config. Empty = the path is off.
+    external_command: str = Field("", validation_alias=_env("HARNESS_EXTERNAL_COMMAND"))
+    external_config: str = Field("", validation_alias=_env("HARNESS_EXTERNAL_CONFIG"))
 
     # ─── Paths and datasets (None = the repository default) ──────────────────
     corpus_root: Path | None = Field(None, validation_alias=_env("CORPUS_ROOT"))
@@ -225,6 +229,8 @@ class Settings(BaseSettings):
         dynamically because the variable name depends on the path.
         """
         default = 300.0 if (path == "agentic" and budget == "slow") else {"fast": 300.0, "slow": 900.0}[budget]
+        if path == "external":
+            default = 960.0             # a safety net: the external agent enforces its own wall time (config)
         path_key = f"HARNESS_RUN_DEADLINE_{path.upper().replace('-', '_')}_{budget.upper()}_S"
         return float(os.environ.get(path_key, os.environ.get(f"HARNESS_RUN_DEADLINE_{budget.upper()}_S", default)))
 

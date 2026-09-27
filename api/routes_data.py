@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException
 from harness_config import settings
 from harness_corpus.store import CorpusStore
 from paths import corpus_root, datasets_root
+from runtime import external_configured
 
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
@@ -110,7 +111,7 @@ def questions() -> dict[str, list[dict]]:
             source="gold",
         )
     for run in app_state.runtime.artifacts.list_runs()[:50]:
-        if run.path in {"agentic", "baseline", "baseline-enhanced"} and not run.evaluation_mode:
+        if run.path in {"agentic", "baseline", "baseline-enhanced", "external"} and not run.evaluation_mode:
             add(run.question, id=run.id, category="recent", type=run.status, source="runs")
     recent = [item for item in items if item["category"] == "recent"][:10]
     return {"questions": [item for item in items if item["category"] != "recent"] + recent}
@@ -118,7 +119,8 @@ def questions() -> dict[str, list[dict]]:
 
 @router.get("/settings")
 def get_budget_settings() -> dict[str, str]:
-    return dict(app_state.runtime.settings)
+    """The budgets, plus whether the External path is configured (``external``: on / off)."""
+    return {**app_state.runtime.settings, "external": "on" if external_configured() else "off"}
 
 
 @router.put("/settings")

@@ -46,6 +46,11 @@ from .state import (
 
 
 class RunOutcomes:
+    @property
+    def path_name(self) -> str:
+        """The run's path; the external harness overrides it with "external"."""
+        return "baseline-enhanced" if self.enhanced else "baseline"
+
     def _failure(
         self,
         run_id: str,
@@ -61,16 +66,16 @@ class RunOutcomes:
             startedAt=started_at,
             durationS=round(time.monotonic() - self.started, 3),
             question=question,
-            path="baseline-enhanced" if self.enhanced else "baseline",
+            path=self.path_name,
             budget=budget,
             status="incomplete",
             reason=reason,
             trace=self.trace,
             modelAgent="",
             modelSmall=getattr(self.extraction.model, "model", "recorded"),
-            artifacts=list(required_artifacts("baseline-enhanced" if self.enhanced else "baseline")),
+            artifacts=list(required_artifacts(self.path_name)),
         )
-        path = "baseline-enhanced" if self.enhanced else "baseline"
+        path = self.path_name
         artifacts = {name: b"" for name in required_artifacts(path) if name != "run.json"}
         artifacts["trace.json"] = json.dumps(
             [r.model_dump(by_alias=True) for r in self.trace], indent=2
@@ -83,7 +88,7 @@ class RunOutcomes:
         absence: CorpusAbsent,
     ) -> tuple[Run, dict[str, bytes]]:
         self._emit("Corpus absence verified", str(absence))
-        path = "baseline-enhanced" if self.enhanced else "baseline"
+        path = self.path_name
         coverage = {"exhaustive": True, "inspected": absence.inspected, "matches": 0, "failures": 0}
         run = Run(
             id=run_id, startedAt=started_at,
@@ -110,7 +115,7 @@ class RunOutcomes:
         absence: NoEvidenceFound,
     ) -> tuple[Run, dict[str, bytes]]:
         self._emit("Semantic search completed", str(absence))
-        path = "baseline-enhanced" if self.enhanced else "baseline"
+        path = self.path_name
         run = Run(
             id=run_id, startedAt=started_at, durationS=round(time.monotonic() - self.started, 3),
             question=question, path=path, budget=budget, status="no_evidence_found",
@@ -160,7 +165,7 @@ class RunOutcomes:
         extracted = state["extracted"]
         answer = state["answer"]
         schema = self.extraction.schema
-        path = "baseline-enhanced" if self.enhanced else "baseline"
+        path = self.path_name
         source_ids = {row["passage_id"] for row in state["passages"]}
         source_ids |= {
             str(row.get("source_id")) for row in self.corpus.fact_rows if row.get("source_id")
@@ -305,7 +310,8 @@ class RunOutcomes:
                 answer = answer.model_copy(update={"sentences": []})     # falls back to the claim list below
         # A verified answer (sentences with verdicts) is shown as written; an unverified one (Fast)
         # is replaced by the list of source-backed claims.
-        if state.get("retrieval", {}).get("stop_reason") != "verified_facts" and claims and not answer.sentences:
+        if state.get("retrieval", {}).get("stop_reason") not in {"verified_facts", "external"} and claims \
+                and not answer.sentences:
             grouped: dict[str, list[str]] = {}
             for claim in claims:
                 if "object" not in claim.fields:
@@ -410,7 +416,7 @@ class RunOutcomes:
                 },
                 "claim_subgraph_ids": [claim.id for claim in claims],
                 "execution_metadata": {
-                    "controller": "adaptive" if self.enhanced else "fast",
+                    "controller": {"baseline-enhanced": "adaptive", "baseline": "fast"}.get(self.path_name, self.path_name),
                     "run_id": run_id,
                 },
             }, ensure_ascii=False, indent=2).encode(),

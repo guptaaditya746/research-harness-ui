@@ -7,6 +7,8 @@ const MILESTONES: Record<string, Lane> = {
   'Understanding question': 'Planning', 'Routing the reading': 'Planning', 'Bounding extraction scope': 'Extraction',
   'Inferring schema': 'Schema', 'Extracting triples': 'Extraction', 'Adding DBLP backbone': 'Answer',
   'Querying graph and composing answer': 'Answer', 'Answer unsupported': 'Answer',
+  // The External path: the agent's commands and its start and end.
+  'Starting external harness': 'Agent', 'External command': 'Agent', 'External harness finished': 'Agent',
 };
 
 type Call = { lane: Lane; start: number; end: number; label: string; failed: boolean };

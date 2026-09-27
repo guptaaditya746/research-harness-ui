@@ -24,7 +24,7 @@ from rich.table import Table
 
 ROOT = Path(__file__).resolve().parents[1]
 console = Console()
-PATHS = {"baseline": "Fast", "baseline-enhanced": "Adapt", "agentic": "Agent"}
+PATHS = {"baseline": "Fast", "baseline-enhanced": "Adapt", "agentic": "Agent", "external": "Ext"}
 LEGEND = ("Facts = fact edges in the answer graph = BB (DBLP backbone, added) + Ext (extracted by the run); DBLP = share of "
           "all facts using DBLP predicates; Inv = share of extracted facts using invented predicates; Pieces = "
           "disconnected parts; Pairs = paper pairs connected at all (– when fewer than 2 papers); Dead = invented "
@@ -43,7 +43,7 @@ def _num(value: float | None) -> str:
 
 def main(
     n: Annotated[int, typer.Option("-n", help="How many recent runs.")] = 30,
-    path: Annotated[str | None, typer.Option(help="baseline, baseline-enhanced or agentic.")] = None,
+    path: Annotated[str | None, typer.Option(help="baseline, baseline-enhanced, agentic or external.")] = None,
     run: Annotated[str | None, typer.Option("--run", help="One run id (shows examples).")] = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print everything as JSON.")] = False,
     out: Annotated[Path | None, typer.Option(help="Also write the JSON to this file.")] = None,

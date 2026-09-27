@@ -23,11 +23,17 @@ from time import monotonic
 from api_models import RunRequest
 from capacity import run_slots
 from harness_agent import AgenticResearch
-from harness_baseline import Baseline20
+from harness_baseline import Baseline20, ExternalHarness
 from harness_baseline.planner import QueryPlanner
 from harness_config import settings
 from harness_corpus.store import CorpusStore
-from harness_extraction import ExtractionEngine, OpenAICompatibleModel, call_budget, model_events
+from harness_extraction import (
+    ExtractionEngine,
+    ModelFailure,
+    OpenAICompatibleModel,
+    call_budget,
+    model_events,
+)
 from harness_observability import run_observation
 from harness_runs import ArtifactStore, ClaimStore, GoldCandidateStore, RelationRegistry
 from harness_schema.models import ConceptChoice, Run, TraceRow, required_artifacts
@@ -58,6 +64,20 @@ class RunCancelled(BaseException):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+def external_configured() -> bool:
+    config = settings()
+    return bool(config.external_command.strip() and config.external_config.strip())
+
+
+class _NoHarnessModel:
+    """Stands in for a model on the External path, where only the external agent calls models."""
+
+    model = "none"
+
+    def complete_json(self, system: str, user: str) -> dict:
+        raise ModelFailure("the External path makes no harness model calls")
 
 
 def run_deadline_seconds(path: str, budget: str) -> float:
@@ -141,13 +161,24 @@ class RunRuntime:
             ),
         )
 
+    def _external_runner(self, sink: Callable[[TraceRow], None]) -> ExternalHarness:
+        """The External path: no harness model is called (claim enrichment finds none and skips)."""
+        config = settings()
+        return ExternalHarness(
+            CorpusStore(corpus_root()), ExtractionEngine(_NoHarnessModel(), hand_written_subschema()), trace_sink=sink,
+            command=config.external_command, config_path=config.external_config,
+        )
+
     def start(
         self,
         request: RunRequest,
         reserved_slots: list[threading.BoundedSemaphore] | None = None,
     ) -> str:
-        if request.path not in {"agentic", "baseline", "baseline-enhanced"}:
+        if request.path not in {"agentic", "baseline", "baseline-enhanced", "external"}:
             raise ValueError("unknown research path")
+        if request.path == "external" and not external_configured():
+            raise ValueError("the External path is off: set HARNESS_EXTERNAL_COMMAND and HARNESS_EXTERNAL_CONFIG "
+                             "(see the external-harness README)")
         if request.origin not in {"private", "public"}:
             raise ValueError("unknown run origin")
         if request.origin == "public" and reserved_slots is None:
@@ -334,6 +365,13 @@ class RunRuntime:
 
     def _execute(self, request: RunRequest, question: str, run_id: str, sink, acquire) -> dict:
         """Run one request, holding model slots only while research runs."""
+        if request.path == "external" and not self.custom_runner:
+            held = acquire(*run_slots(request.origin))
+            try:
+                return self._external_runner(sink).run(question, request.budget, run_id)
+            finally:
+                for slot in held:
+                    slot.release()
         if request.path != "agentic" or self.custom_runner:
             runner = (
                 self.runner_factory(sink)

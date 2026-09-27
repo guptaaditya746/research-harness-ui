@@ -3,7 +3,7 @@
     make run-questions                                   # nlp01-30, Agentic, every reading
     make run-questions ARGS="--questions datasets/question_library_2025_b.json"   # nlp32-61
     make run-questions ARGS="--ids nlp07,nlp27"          # a few questions
-    make run-questions ARGS="--path baseline"            # Fast (baseline-enhanced = Adaptive)
+    make run-questions ARGS="--path baseline"            # Fast (baseline-enhanced = Adaptive, external = External)
     make run-questions ARGS="--parallel 3"               # questions at a time (default 2)
     make run-questions ARGS="--resume results/run_questions-<time>.jsonl"   # skip what already answered
 
@@ -91,7 +91,7 @@ def main(
     questions: Annotated[Path, typer.Option(help="Question set (JSON list with id and question).")] =
         ROOT / "datasets" / "question_library_2025.json",
     ids: Annotated[str | None, typer.Option(help="Only these question ids, comma-separated.")] = None,
-    path: Annotated[str, typer.Option(help="agentic, baseline or baseline-enhanced.")] = "agentic",
+    path: Annotated[str, typer.Option(help="agentic, baseline, baseline-enhanced or external.")] = "agentic",
     budget: Annotated[str, typer.Option(help="fast or slow.")] = "slow",
     parallel: Annotated[int, typer.Option(help="Questions processed at the same time.")] = 2,
     api: Annotated[str, typer.Option(help="Harness API base URL.")] = "http://127.0.0.1:8000",

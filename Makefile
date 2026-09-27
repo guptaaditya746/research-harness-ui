@@ -1,4 +1,4 @@
-.PHONY: run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: ontology run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -43,6 +43,10 @@ preflight:
 
 eval-planner:
 	uv run --python 3.12 python scripts/eval_planner.py
+
+# The seed ontology as Turtle, for the external harness (its knowledge_base.ontology)
+ontology:
+	uv run --python 3.12 python scripts/export_ontology.py $(ARGS)
 
 # Summaries of recent runs (see docs/RUN_ANALYSIS.md): make runs ARGS="list -n 20"
 runs:

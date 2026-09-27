@@ -62,7 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("run", nargs="?", default="run")
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts"))
     parser.add_argument("--dataset", type=Path, required=True)
-    parser.add_argument("--path", choices=["agentic", "baseline", "baseline-enhanced"])
+    parser.add_argument("--path", choices=["agentic", "baseline", "baseline-enhanced", "external"])
     parser.add_argument("--repetitions", type=int, default=1, help="expected repetitions in evaluation mode")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)

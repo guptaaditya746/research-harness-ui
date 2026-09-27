@@ -51,7 +51,7 @@ def validate_benchmark() -> dict:
 @router.post("/benchmark/execute", status_code=202)
 def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
     """Launch explicit evaluation repetitions; ordinary runs remain single-pass."""
-    if request.path not in {"baseline", "baseline-enhanced", "agentic"}:
+    if request.path not in {"baseline", "baseline-enhanced", "agentic", "external"}:
         raise HTTPException(422, "unknown research path")
     if request.budget not in {"fast", "slow"}:
         raise HTTPException(422, "budget must be fast or slow")

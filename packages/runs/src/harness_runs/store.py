@@ -25,6 +25,9 @@ def invariant_failure(run: Run, number: int) -> Run:
     )
 
 
+# Every artifact name any path writes.
+_ALLOWED = frozenset(name for path in ("agentic", "baseline-enhanced", "external") for name in required_artifacts(path))
+
 class ArtifactStore:
     def __init__(self, root: Path):
         self.root = root.resolve()
@@ -38,7 +41,7 @@ class ArtifactStore:
         return self.root / run_id
 
     def write(self, run_id: str, name: str, body: bytes) -> dict[str, str | int]:
-        allowed = set(required_artifacts("agentic")) | set(required_artifacts("baseline-enhanced"))
+        allowed = _ALLOWED
         if name not in allowed:
             raise ValueError("unknown artifact name")
         target_dir = self._run_dir(run_id)
@@ -57,7 +60,7 @@ class ArtifactStore:
         }
 
     def read(self, run_id: str, name: str) -> bytes:
-        allowed = set(required_artifacts("agentic")) | set(required_artifacts("baseline-enhanced"))
+        allowed = _ALLOWED
         if name not in allowed:
             raise ValueError("unknown artifact name")
         return (self._run_dir(run_id) / name).read_bytes()

@@ -21,7 +21,7 @@ from .relations import PredicateRelations
 from .stats import mean_ci, paired_difference_ci
 
 LOGGER = logging.getLogger(__name__)
-PATHS = ("baseline", "baseline-enhanced", "agentic")
+PATHS = ("baseline", "baseline-enhanced", "agentic", "external")
 
 
 def _score_aggregate(scores: list[dict], metric: str) -> dict[str, float | None]:

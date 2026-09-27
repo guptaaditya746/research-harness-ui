@@ -229,7 +229,7 @@ class Run(Contract):
     started_at: datetime = Field(alias="startedAt")
     duration_s: float = Field(alias="durationS")
     question: str
-    path: Literal["agentic", "baseline", "baseline-enhanced"]
+    path: Literal["agentic", "baseline", "baseline-enhanced", "external"]
     budget: Literal["fast", "slow"]
     status: Literal["answered", "corpus_absent", "no_evidence_found", "awaiting_reading", "incomplete", "stopped"]
     readings: list[Reading] = Field(default_factory=list)
@@ -238,7 +238,8 @@ class Run(Contract):
     trace: list[TraceRow] = Field(default_factory=list)
     rating: Literal["useful", "partial", "not_useful"] | None = None
     reason: str | None = None
-    producing_path: Literal["agentic", "baseline", "baseline-enhanced", "baseline_fallback"] | None = Field(default=None, alias="producingPath")
+    producing_path: Literal["agentic", "baseline", "baseline-enhanced", "baseline_fallback", "external"] | None = Field(
+        default=None, alias="producingPath")
     execution_status: Literal["completed", "degraded", "failed"] | None = Field(default=None, alias="executionStatus")
     evidence_surface: str | None = Field(default=None, alias="evidenceSurface")
     search_coverage: dict[str, str | int | bool] | None = Field(default=None, alias="searchCoverage")
@@ -307,6 +308,8 @@ BASELINE_ARTIFACTS = tuple(
                     "verification.json", "agent_draft.md", *ENHANCED_ONLY}
 )
 ENHANCED_BASELINE_ARTIFACTS = BASELINE_ARTIFACTS + ENHANCED_ONLY
+# The external harness (a separate repo run as a subprocess): its own result and trajectory are kept too.
+EXTERNAL_ARTIFACTS = BASELINE_ARTIFACTS + ("external_result.json", "external_trajectory.json")
 
 
 def required_artifacts(path: str) -> tuple[str, ...]:
@@ -317,6 +320,8 @@ def required_artifacts(path: str) -> tuple[str, ...]:
             return BASELINE_ARTIFACTS
         case "baseline-enhanced":
             return ENHANCED_BASELINE_ARTIFACTS
+        case "external":
+            return EXTERNAL_ARTIFACTS
         case _:
             raise ValueError(f"unknown path: {path}")
 

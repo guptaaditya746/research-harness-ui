@@ -162,7 +162,7 @@ export interface Run {
   startedAt: string;
   durationS: number;
   question: string;
-  path: "agentic" | "baseline" | "baseline-enhanced";
+  path: "agentic" | "baseline" | "baseline-enhanced" | "external";
   budget: "fast" | "slow";
   status: "answered" | "corpus_absent" | "no_evidence_found" | "awaiting_reading" | "incomplete" | "stopped";
   readings: Array<Reading>;
@@ -171,7 +171,7 @@ export interface Run {
   trace: Array<TraceRow>;
   rating: "useful" | "partial" | "not_useful" | null;
   reason: string | null;
-  producingPath: "agentic" | "baseline" | "baseline-enhanced" | "baseline_fallback" | null;
+  producingPath: "agentic" | "baseline" | "baseline-enhanced" | "baseline_fallback" | "external" | null;
   executionStatus: "completed" | "degraded" | "failed" | null;
   evidenceSurface: string | null;
   searchCoverage: Record<string, string | number | boolean> | null;

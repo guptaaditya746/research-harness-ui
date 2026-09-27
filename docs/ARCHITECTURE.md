@@ -26,6 +26,7 @@ Every path first turns the question into a typed plan (`planner.py`). Metadata a
 | Fast | `baseline` | Lexical retrieval (or hybrid, see below), schema inference, extraction, answer. |
 | Adaptive | `baseline-enhanced` | Fast plus phrase expansion, a passage cap (`HARNESS_ADAPTIVE_MAX_PASSAGES`), evidence review and answer verification by the judge model. |
 | Agentic | `agentic` | Passages are retrieved and the agent proposes concept readings grounded in them; the user picks one; the agent researches with MCP tools and records findings; paper readers add findings in parallel; the findings and their evidence seed the Adaptive pipeline; an independent verifier checks the cited evidence. |
+| External | `external` | Not ours: the separate [external-harness](https://github.com/guptaaditya746/external-harness) repo runs mini-SWE-agent (bash plus read-only corpus and ontology commands) as a subprocess (`HARNESS_EXTERNAL_COMMAND`, `HARNESS_EXTERNAL_CONFIG`). Its events become trace rows; its `result.json` triples go through the same outcome code (answer graph, backbone, checks, artifacts plus `external_result.json` and `external_trajectory.json`). None of the steps below run; no harness model is called. A baseline for evaluation. |
 
 The research pipeline (`harness_baseline.pipeline.Baseline20`) is a fixed LangGraph workflow:
 
