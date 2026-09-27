@@ -1,18 +1,15 @@
 """Rebuild seed/cskg_ontology_2.0_subset.ttl from the full CS-KG 2.0 ontology.
 
-    make cskg-subset ARGS="--source cskg_ontology.ttl"                       # a downloaded copy
-    make cskg-subset ARGS="--source https://scholkg.kmi.open.ac.uk/cskg/ontology"
-    make cskg-subset ARGS="--source cskg_ontology.ttl --check"               # compare, write nothing
+    make cskg-subset                                                     # from seed/cskg_ontology_2.0.ttl
+    make cskg-subset ARGS="--check"                                      # compare, write nothing
+    make cskg-subset ARGS="--source other.ttl"                           # another copy (file or URL)
 
-The subset holds the terms the harness names (harness_semantic.CSKG_CLASSES and CSKG_RELATIONS: the
-research-entity classes, the base relations and their inverses) with every statement the source makes
-about them, blank nodes included (e.g. an owl:unionOf domain). Download the file once on a machine
-with internet access, e.g.
-
-    curl -L -H 'Accept: text/turtle' -o cskg_ontology.ttl https://scholkg.kmi.open.ac.uk/cskg/ontology
-
-then commit the rebuilt subset: runs record its SHA-256 (seed_manifest.json content_core_sha256).
-CS-KG is CC BY 4.0; the header keeps the attribution.
+The full ontology is kept unchanged in seed/cskg_ontology_2.0.ttl (downloaded from
+https://scholkg.kmi.open.ac.uk/cskg/ontology). The subset holds the terms the harness names
+(harness_semantic.CSKG_CLASSES and CSKG_RELATIONS: the research-entity classes, the base relations
+and their inverses) with every statement the source makes about them, blank nodes included (e.g.
+an owl:unionOf domain). Commit the rebuilt subset: runs record its SHA-256 (seed_manifest.json
+content_core_sha256). CS-KG is CC BY 4.0; the header keeps the attribution.
 """
 
 from __future__ import annotations
@@ -25,10 +22,12 @@ import typer
 from harness_semantic import CSKG, CSKG_CLASSES, CSKG_RELATIONS, cskg_subset_path
 from rdflib import DCTERMS, OWL, RDF, RDFS, BNode, Graph, Literal, URIRef
 
+ROOT = Path(__file__).resolve().parents[1]
+FULL_ONTOLOGY = ROOT / "seed" / "cskg_ontology_2.0.ttl"
 HEADER = """# Subset of the Computer Science Knowledge Graph (CS-KG) Ontology 2.0: the harness content core.
 #
-# Source:  {source}  (namespace https://w3id.org/cskg/ontology#)
-#          SHA-256 of the source file: {digest}
+# Source:  https://scholkg.kmi.open.ac.uk/cskg/ontology  (namespace https://w3id.org/cskg/ontology#)
+#          read from {source}, SHA-256 {digest}
 # Licence: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), (c) the CS-KG authors,
 #          Knowledge Media Institute, The Open University. Terms and statements are copied unchanged.
 #
@@ -94,11 +93,13 @@ def read_source(source: str) -> bytes:
 
 
 def main(
-    source: Annotated[str, typer.Option(help="The full CS-KG ontology: a Turtle file or its URL.")],
+    source: Annotated[str, typer.Option(help="The full CS-KG ontology: a Turtle file or its URL.")] = "",
     out: Annotated[Path | None, typer.Option(help="Target file (default: the subset the harness loads).")] = None,
     check: Annotated[bool, typer.Option(help="Only compare with the current subset; write nothing.")] = False,
 ) -> None:
-    data = read_source(source)
+    source = source or str(FULL_ONTOLOGY.relative_to(ROOT))
+    data = read_source(source if source.startswith(("http://", "https://")) or Path(source).is_absolute()
+                       else str(ROOT / source))
     graph = Graph()
     graph.parse(data=data, format="turtle")
     chosen, missing = subset(graph)

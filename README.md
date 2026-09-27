@@ -239,7 +239,7 @@ the previously pinned Docker setup.
 The immutable ontology seed is `seed/dblp_schema_2024-06-14.ttl`, the official
 DBLP RDF schema. Enhanced run artifacts record its version and SHA-256. The content
 core next to it, `seed/cskg_ontology_2.0_subset.ttl`, is a subset of the CS-KG 2.0
-ontology (CC BY 4.0, the CS-KG authors, KMi, The Open University; see
+ontology (full file: `seed/cskg_ontology_2.0.ttl`, `make cskg-subset` rebuilds the subset) (CC BY 4.0, the CS-KG authors, KMi, The Open University; see
 docs/ARCHITECTURE.md, "Content core"). Verified
 paper individuals use their DBLP record IRIs in graph artifacts; internal `pN`
 keys remain only in corpus storage and provenance.

@@ -83,7 +83,8 @@ harness names with origin "core" and "same as cskg-ont:…" in the definition; t
 names. The scorer keys CS-KG terms by local name like harness terms, so its entailed level credits
 CS-KG inverses (a run's "X uses Y" states a gold "Y usedBy X") and `evaluatesOn` as a `usesDataset`. `seed_manifest.json` records `content_core` and its
 SHA-256; `make ontology` exports it for the External path (whose `onto` names each equivalence);
-`make cskg-subset ARGS="--source <file or URL>"` rebuilds the subset from the full CS-KG file.
+`make cskg-subset` rebuilds the subset from the full CS-KG file kept unchanged in
+`seed/cskg_ontology_2.0.ttl` (downloaded 27 Sep 2026; `ARGS="--check"` compares, `--source` takes another copy).
 `HARNESS_CONTENT_CORE=none` gives the seed and the v2 schema/extraction prompts from before CS-KG, for
 comparisons. Scoring and `make graph-shape` follow the setting of the process that runs them, so
 evaluate runs with the setting they were made with, and change `ONTOLOGY_VERSION` with it (the

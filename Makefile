@@ -48,7 +48,7 @@ eval-planner:
 ontology:
 	uv run --python 3.12 python scripts/export_ontology.py $(ARGS)
 
-# Rebuild seed/cskg_ontology_2.0_subset.ttl from the full CS-KG ontology (ARGS="--source file-or-url [--check]")
+# Rebuild seed/cskg_ontology_2.0_subset.ttl from seed/cskg_ontology_2.0.ttl (ARGS="--check" or "--source file-or-url")
 cskg-subset:
 	uv run --python 3.12 python scripts/cskg_subset.py $(ARGS)
 
