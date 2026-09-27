@@ -5,6 +5,7 @@
     uv run python scripts/runs.py compare r-1a2b3c4d r-5e6f7a8b
     uv run python scripts/runs.py stats -n 50
     uv run python scripts/runs.py failures -n 200     # every incomplete run with the check that failed
+    uv run python scripts/runs.py schema -n 60        # which runs invented classes or properties, and why not
     uv run python scripts/runs.py list --fixtures        # the recorded demo runs
 
 Reads ARTIFACT_ROOT (default ./artifacts). See docs/RUN_ANALYSIS.md.
@@ -189,6 +190,40 @@ def failures(n: Annotated[int, typer.Option("-n", help="Latest runs to look thro
             details = "; ".join(f"{check.name}: {check.detail}" for check in run.checks if check.status == "fail")
             console.print(f"  {run.id} [{run.path}] {run.question[:60]}")
             console.print(f"    {details or run.reason}", highlight=False)
+
+
+@app.command()
+def schema(n: Annotated[int, typer.Option("-n", help="Latest answered runs to look through.")] = 60,
+           path: Annotated[str | None, typer.Option(help="agentic, baseline or baseline-enhanced.")] = None,
+           fixtures: Fixtures = False) -> None:
+    """Per answered run: answered from facts or research, what schema inference proposed, which invented
+    terms the reading kept and how many of its facts use one. Explains a run without invented terms."""
+    _, summaries = _summaries(fixtures)
+    runs = [item.run for item in summaries if item.run.status == "answered" and (path is None or item.run.path == path)]
+    table = Table(title=f"Schema invention in the latest {min(n, len(runs))} answered runs "
+                        f"(HARNESS_SCHEMA_NEW_CLASSES={settings().schema_new_classes})")
+    for column in ("Run", "Path", "Kind", "Proposed by schema inference", "Invented in reading", "Facts using them"):
+        table.add_column(column, no_wrap=column == "Run")
+    counts = {"facts": 0, "research": 0, "proposed": 0, "kept": 0, "used": 0}
+    for run in runs[:n]:
+        from_facts = any(check.name == "verified facts" and check.status == "pass" for check in run.checks)
+        kind = "facts" if from_facts else "research"
+        counts[kind] += 1
+        proposed = next((row.returned for row in run.trace if row.action == "Schema extension proposed"), "")
+        reading = run.readings[run.chosen_reading] if run.chosen_reading is not None and run.readings else None
+        invented = [term for term in (reading.schema_terms if reading else []) if term.origin == "invented"]
+        names = {term.name.split(":")[-1] for term in invented if term.kind != "class"}
+        used = sum(triple.p.split(":")[-1] in names for triple in (reading.triples if reading else []))
+        counts["proposed"] += bool(proposed)
+        counts["kept"] += bool(invented)
+        counts["used"] += bool(used)
+        table.add_row(run.id, run.path, kind,
+                      proposed or ("– (DBLP facts need no new terms)" if from_facts else "none"),
+                      ", ".join(f"{term.name} ({term.kind})" for term in invented) or "none", str(used))
+    console.print(table)
+    console.print(f"{counts['facts']} answered from verified facts (DBLP vocabulary only, by design); "
+                  f"{counts['research']} research runs: {counts['proposed']} had schema inference propose an "
+                  f"invented term, {counts['kept']} kept one in the reading, {counts['used']} have a fact that uses one.")
 
 
 if __name__ == "__main__":
