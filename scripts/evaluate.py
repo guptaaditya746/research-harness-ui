@@ -67,6 +67,9 @@ def main(
     result = build_benchmark(candidates, runs, relations=load_relations(), judge=scorer)
     result["judge"] = "off" if scorer is None else ("live" if judge else "cache")
     result["judge_calls"] = scorer.calls if scorer else 0
+    # Who labelled the gold: people (Argilla), computed (structural) or a model (silver versions).
+    sources = sorted({str(row.get("label_source") or "people") for row in candidates})
+    result["gold_label_sources"] = sources
     if out:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(json.dumps(result, indent=2, default=str) + "\n")
@@ -75,6 +78,9 @@ def main(
         return
     console.print(f"{len(candidates)} approved gold questions, {len(runs)} runs; rules: "
                   f"{', '.join(result['relations'])}")
+    if "model" in sources:
+        console.print("[bold yellow]Silver gold: some rows were labelled by a model, not by people "
+                      "(label_source: model). These numbers are provisional.[/]")
     table = Table(title="Triple F1 by complexity and path (mean [95% CI] over questions)")
     table.add_column("Complexity")
     table.add_column("Level")
