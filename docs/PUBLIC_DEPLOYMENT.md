@@ -1,12 +1,46 @@
 # Public deployment preparation
 
-No Pages deployment or Tunnel is created by this change. A public hostname and Tunnel require prior approval under university/cluster policy.
+No Pages deployment or Tunnel is created by this repository on its own. Check your university/cluster rules before exposing a service from a compute node.
 
 ## Temporary no-domain preview
 
 For an interactive temporary preview without a custom domain, create a free Turnstile widget in Cloudflare first, then run `./scripts/public-preview.sh` from the repository root on the Slurm node. The script prompts for the site key and (hidden) secret if they are not already exported, creates a fresh local identity salt, builds the public frontend, and starts MCP, the private API, and the public gateway. The public gateway serves both the static UI and its narrow API on `127.0.0.1:8787`; private API and MCP remain on loopback. Press Ctrl-C to stop the processes.
 
 Point a Cloudflare Quick Tunnel at **only** `http://127.0.0.1:8787`. Open the generated `trycloudflare.com` URL to use the site. Quick Tunnel URLs are temporary and change after restart. Quick Tunnels are for testing, do not provide an uptime guarantee, and do not support SSE; this UI polls run state as a fallback. No Cloudflare login or custom domain is needed for a Quick Tunnel. Do not use the development Turnstile bypass for an internet-facing preview.
+
+## Full site behind a password (free)
+
+Every page and every path (Fast, Adaptive, Agentic, External, runs, gold, benchmark) for the people
+you give the password to. One command on the node:
+
+```sh
+# once, without root: the Cloudflare tunnel client
+mkdir -p ~/.local/bin && curl -L -o ~/.local/bin/cloudflared \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 && chmod +x ~/.local/bin/cloudflared
+
+# stop `make demo` first (same ports), then:
+SITE_USERS='aditya:<long passphrase>,prof:<another long passphrase>' make public
+```
+
+It builds the UI, starts the corpus server, the API (loopback) and `api/public_site.py` on
+`127.0.0.1:8080`, opens a Cloudflare quick tunnel to that port only and prints the address
+(`https://<words>.trycloudflare.com`). Free: no account, no domain. The address changes on every
+start and quick tunnels have no uptime guarantee; the UI falls back to polling where run events do
+not stream. Keep it running in `tmux` or `screen`; Ctrl-C stops everything. Logs:
+`artifacts/public-full/`.
+
+- Login: HTTP Basic auth for every request. `SITE_USERS` (name:password pairs) or `SITE_PASSWORD`
+  (any name); at least 12 characters; 10 failed logins lock a client out for 10 minutes.
+- The API, corpus server and models stay on loopback; only the site port is behind the tunnel.
+- Anyone with a login can start any run, including long Agentic and External runs on the GPUs, and
+  edit gold rows: give logins only to people you trust, and stop the site while benchmark runs need
+  the capacity.
+- `TUNNEL=none make public` starts the site without a tunnel (for your own tunnel in front of
+  port 8080). A stable address needs a named tunnel (a Cloudflare account and a domain) or another
+  service; the site itself stays the same.
+
+The limited public preview below (Fast and Adaptive, CAPTCHA, daily quota, no login) remains the
+option for anonymous visitors.
 
 ## Build and launch
 
