@@ -440,6 +440,8 @@ class RunOutcomes:
         if self.enhanced:
             artifacts["retrieval.json"] = json.dumps(state.get("retrieval", {}), indent=2).encode()
             artifacts["extraction_batches.json"] = json.dumps(state.get("extraction_batches", []), indent=2).encode()
+            artifacts["evidence_graph.json"] = json.dumps(evidence_graph(state, inferred), ensure_ascii=False,
+                                                          indent=2).encode()
             artifacts["seed_manifest.json"] = json.dumps(
                 {
                     "facts": len(seed_rows),
@@ -506,4 +508,34 @@ class RunOutcomes:
             records.append(record)
             record_tool_call(record, run_id=run_id)
         return records
+
+
+def evidence_graph(state: BaselineState, inferred: Any) -> dict[str, Any]:
+    """Everything the run extracted, not only what the answer used.
+
+    ``triples``: every extracted triple with the evidence review's verdict (``relevant``: true, false,
+    or null when there was no review) and its reason. ``unmapped_dropped``: open facts lost because their
+    relation fit no subschema term (only with HARNESS_UNMAPPED_RELATIONS=drop). Paths that answer from
+    verified facts have no extraction; their evidence graph is empty.
+    """
+    rows = list(state.get("evidence_graph") or [])
+    unmapped = [triple for batch in state.get("extraction_batches") or [] if isinstance(batch, dict)
+                for report in batch.get("edc") or [] if isinstance(report, dict)
+                and report.get("stage") == "unmapped_dropped" for triple in report.get("triples") or []]
+    config = settings()
+    return {
+        "properties": list(getattr(inferred, "properties", []) or []),
+        "classes": list(getattr(inferred, "classes", []) or []),
+        "counts": {
+            "triples": len(rows),
+            "relevant": sum(1 for row in rows if row.get("relevant") is True),
+            "not_relevant": sum(1 for row in rows if row.get("relevant") is False),
+            "unreviewed": sum(1 for row in rows if row.get("relevant") is None),
+            "unmapped_dropped": len(unmapped),
+        },
+        "settings": {"schema_scope": config.schema_scope, "graph_linking": config.graph_linking,
+                     "unmapped_relations": config.unmapped_relations, "profile": config.profile},
+        "triples": rows,
+        "unmapped_dropped": unmapped,
+    }
 

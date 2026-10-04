@@ -22,6 +22,10 @@ def test_refinement_cannot_invent_a_triple_or_select_invalid_ids() -> None:
     selected, report = engine.refine_triples("Which paper introduced Video Prediction Policy?", candidates, [])
 
     assert selected == candidates[:1]
+    # Every candidate with its verdict, for the run's evidence graph.
+    labelled = report.pop("labelled")
+    assert [(row["subject"], row["relevant"], row.get("why")) for row in labelled] == [
+        ("p4", True, None), ("p2", False, "irrelevant")]
     assert report == {"candidates": 2, "unique": 2, "kept": 1, "model_calls": 1, "dropped": {"irrelevant": 1},
                       "dropped_examples": [{"triple": "p2 —title→ Other Paper", "source": "p2-metadata",
                                             "why": "irrelevant"}]}

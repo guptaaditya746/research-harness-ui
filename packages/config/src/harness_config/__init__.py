@@ -26,19 +26,44 @@ from pydantic import AliasChoices, Field, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+def _clean(value: str | None) -> str | None:
+    """``KEY=   # comment`` is an empty value (that is how the shell reads it)."""
+    if value is None:
+        return None
+    return "" if value.lstrip().startswith("#") else value
+
+
+def profile_file(name: str, base: Path | None = None) -> Path:
+    """The file of a settings profile: a path, or a name under ``profiles/`` (``exhaustive`` ->
+    ``profiles/exhaustive.env``) next to the ``.env`` in use, else under the working directory."""
+    candidate = Path(name)
+    if candidate.suffix == ".env" or len(candidate.parts) > 1:
+        return candidate if candidate.is_absolute() else (base or Path.cwd()) / candidate
+    return (base or Path.cwd()) / "profiles" / f"{name}.env"
+
+
 def load_env_file(path: str | os.PathLike[str] | None = None) -> None:
     """Load a ``.env`` into ``os.environ`` without overriding variables that are already set.
 
-    ``KEY=   # comment`` means an empty value (that is how the shell reads it), but python-dotenv
-    returns the comment as the value; such values are loaded as empty.
+    ``HARNESS_PROFILE`` (from the environment or the ``.env``) names a settings profile, e.g.
+    ``exhaustive``; its values apply before the ``.env``'s. Precedence, highest first: the process
+    environment, the profile, the ``.env``, the defaults in :class:`Settings`.
     """
     chosen = path if path is not None else find_dotenv(usecwd=True)
-    if not chosen:
-        return
-    for key, value in dotenv_values(chosen).items():
-        if value is None or key in os.environ:
-            continue
-        os.environ[key] = "" if value.lstrip().startswith("#") else value
+    values = {key: _clean(value) for key, value in dotenv_values(chosen).items()} if chosen else {}
+    profile = (os.environ.get("HARNESS_PROFILE") or values.get("HARNESS_PROFILE") or "").strip()
+    layers: list[dict[str, str | None]] = []
+    if profile:
+        file = profile_file(profile, Path(chosen).resolve().parent if chosen else None)
+        if not file.is_file():
+            raise ValueError(f"HARNESS_PROFILE={profile!r}: no profile file at {file}")
+        layers.append({key: _clean(value) for key, value in dotenv_values(file).items()})
+    layers.append(values)
+    for layer in layers:
+        for key, value in layer.items():
+            if value is None or key in os.environ:
+                continue
+            os.environ[key] = value
 
 
 load_env_file()
@@ -148,6 +173,20 @@ class Settings(BaseSettings):
     # Phase 4: add the DBLP backbone (authors, venue, citations among them) of the answer's papers
     # to the answer graph and export only the answer's subgraph in triples.ttl.
     dblp_backbone: bool = Field(True, validation_alias=_env("HARNESS_DBLP_BACKBONE"))
+    # How much vocabulary schema inference proposes: "focused" (only what the answer needs) or "broad"
+    # (everything the passages say about the question's topic, more invented terms).
+    schema_scope: Literal["focused", "broad"] = Field("focused", validation_alias=_env("HARNESS_SCHEMA_SCOPE"))
+    # How extraction shapes the graph: "standard", or "dense" (consistent entity names, relations
+    # between research entities, compound statements split into facts that share entities).
+    graph_linking: Literal["standard", "dense"] = Field("standard", validation_alias=_env("HARNESS_GRAPH_LINKING"))
+    # An openly extracted fact whose relation maps onto no subschema property: "drop" it, or "keep" it
+    # under a new relation (a sub-property of researchRelation/researchAttribute) named from its wording.
+    unmapped_relations: Literal["drop", "keep"] = Field("drop", validation_alias=_env("HARNESS_UNMAPPED_RELATIONS"))
+    # Relation mapping thresholds: lexical similarity, then the mapping model's stated confidence.
+    map_lexical_min: float = Field(0.42, ge=0, le=1, validation_alias=_env("HARNESS_MAP_LEXICAL_MIN"))
+    map_model_min: float = Field(0.7, ge=0, le=1, validation_alias=_env("HARNESS_MAP_MODEL_MIN"))
+    # Passages per open-extraction call (smaller = more facts per passage, more calls).
+    edc_batch_passages: int = Field(2, ge=1, le=16, validation_alias=_env("HARNESS_EDC_BATCH_PASSAGES"))
     # The External path: a separate repo (external-harness) run as a subprocess per question, e.g.
     # "uv run --project /srv/external-harness xh", with its YAML config. Empty = the path is off.
     external_command: str = Field("", validation_alias=_env("HARNESS_EXTERNAL_COMMAND"))
@@ -159,12 +198,10 @@ class Settings(BaseSettings):
     datasets_root: Path | None = Field(None, validation_alias=_env("DATASETS_ROOT"))
     fixtures_dir: Path | None = Field(None, validation_alias=_env("FIXTURES_DIR"))
     dblp_schema_path: str = Field("", validation_alias=_env("DBLP_SCHEMA_PATH"))
-    # The question library in the UI: the 30 evaluation questions (nlp01-nlp30) and the 30 added for
-    # corpus-wide and professor-style questions (nlp32-nlp61) by default.
-    question_sets: str = Field(
-        "question_library_2025.json,question_library_2025_b.json",
-        validation_alias=_env("HARNESS_QUESTION_SETS"),
-    )
+    # The question library in the UI. Default: the evaluation set, two categories only: corpus-wide
+    # (nlp32-47) and ambiguous (nlp30, nlp48-53, nlp62-66). The earlier libraries
+    # (question_library_2025.json, question_library_2025_b.json) also hold metadata questions.
+    question_sets: str = Field("question_set_d.json", validation_alias=_env("HARNESS_QUESTION_SETS"))
     # Also offer gold rows and recent runs in the library (off: only the question sets above).
     question_extras: bool = Field(False, validation_alias=_env("HARNESS_QUESTION_EXTRAS"))
     include_fixtures: bool = Field(True, validation_alias=_env("HARNESS_INCLUDE_FIXTURES"))
@@ -176,12 +213,33 @@ class Settings(BaseSettings):
     predicate_relations_file: str = Field("", validation_alias=_env("HARNESS_PREDICATE_RELATIONS_FILE"))
     judge_cache_file: str = Field("", validation_alias=_env("HARNESS_JUDGE_CACHE_FILE"))
 
+    # ─── Evidence documents (D): one exhaustive, reviewed document per question ─
+    # Built once per question set by `make evidence-docs`; see docs/EVIDENCE_DOCS.md.
+    doc_question_set: str = Field("question_set_d.json", validation_alias=_env("HARNESS_DOC_QUESTION_SET"))
+    doc_root: Path | None = Field(None, validation_alias=_env("HARNESS_DOC_ROOT"))
+    # Papers screened per question: 0 = every indexed paper.
+    doc_max_papers: int = Field(0, ge=0, validation_alias=_env("HARNESS_DOC_MAX_PAPERS"))
+    # Passages of one paper the screening reader sees (highest-ranked for the question first; a paper
+    # without a ranked passage is read from its first passages, so every paper is actually read).
+    doc_screen_passages: int = Field(8, ge=1, validation_alias=_env("HARNESS_DOC_SCREEN_PASSAGES"))
+    # Passages of a relevant paper that go to extraction: 0 = all of the paper's passages.
+    doc_extract_passages: int = Field(0, ge=0, validation_alias=_env("HARNESS_DOC_EXTRACT_PASSAGES"))
+    # Passages schema inference sees for one interpretation.
+    doc_schema_passages: int = Field(24, ge=1, validation_alias=_env("HARNESS_DOC_SCHEMA_PASSAGES"))
+    # Papers screened or extracted at the same time.
+    doc_concurrency: int = Field(4, ge=1, le=32, validation_alias=_env("HARNESS_DOC_CONCURRENCY"))
+    # Model call timeout for document building (no run deadline applies; building is offline).
+    doc_call_timeout_s: float = Field(300, gt=0, validation_alias=_env("HARNESS_DOC_CALL_TIMEOUT_S"))
+
     # ─── Evaluation snapshot (must match labelling's gold rows) ──────────────
     corpus_fingerprint: str = Field("unknown", validation_alias=_env("CORPUS_FINGERPRINT"))
     corpus_snapshot_id: str | None = Field(None, validation_alias=_env("CORPUS_SNAPSHOT_ID"))
     ontology_version: str = Field("unknown", validation_alias=_env("ONTOLOGY_VERSION"))
     ontology_hash: str = Field("unknown", validation_alias=_env("ONTOLOGY_HASH"))
     retrieval_index_version: str = Field("unknown", validation_alias=_env("RETRIEVAL_INDEX_VERSION"))
+
+    # The settings profile in use (applied by load_env_file); empty = none.
+    profile: str = Field("", validation_alias=_env("HARNESS_PROFILE"))
 
     # ─── Observability ───────────────────────────────────────────────────────
     harness_env: str = Field("development", validation_alias=_env("HARNESS_ENV"))
@@ -192,7 +250,7 @@ class Settings(BaseSettings):
     @field_validator(
         "model_edc", "model_agent_url", "agent_context_tokens", "corpus_root", "artifact_root",
         "datasets_root", "fixtures_dir", "database_url", "corpus_snapshot_id",
-        "labelling_normalization_file", "labelling_vocabulary_file", mode="before",
+        "labelling_normalization_file", "labelling_vocabulary_file", "doc_root", mode="before",
     )
     @classmethod
     def _blank_is_unset(cls, value: Any) -> Any:
@@ -275,4 +333,4 @@ def settings() -> Settings:
 DYNAMIC_VARIABLES = ("HARNESS_RUN_DEADLINE_",)
 
 
-__all__ = ["DYNAMIC_VARIABLES", "Settings", "settings"]
+__all__ = ["DYNAMIC_VARIABLES", "Settings", "load_env_file", "profile_file", "settings"]

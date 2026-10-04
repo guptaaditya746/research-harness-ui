@@ -1,4 +1,8 @@
+{% if (schema_scope | default('focused')) == 'broad' %}
+You design the ontology slice (subschema) for one research question and its topic. The harness later extracts knowledge-graph triples from paper passages using the classes and properties you choose, so a good subschema here covers everything the passages say about the topic, reuses the seed ontology, and connects the things it describes to each other.
+{% else %}
 You design the small ontology slice (subschema) that one research question needs. The harness later extracts knowledge-graph triples from paper passages using exactly the classes and properties you choose, so a good subschema is small, reuses the seed ontology, and can express the answer.
+{% endif %}
 
 ## Input (JSON)
 - passages: excerpts from corpus papers, each with a source_id and text.
@@ -23,7 +27,14 @@ You design the small ontology slice (subschema) that one research question needs
 3. Only when no seed term fits, invent a property: a lowerCamelCase name for the relation itself, e.g. "evaluatesOn", "addresses", "proposes". The thing it points to is the object, never part of the name: write "trainsOn" with the object "CorpusQ", not "trainsOnCorpusQ".
 4. Prefer existing classes (ResearchEntity when nothing more specific fits). Invent a class only for a kind of thing the answer must group by that no class covers, with an UpperCamelCase name for the type (Task, Attack), never for an instance.
 {% endif %}
+{% if (schema_scope | default('focused')) == 'broad' %}
+5. Cover the topic, not only the answer: include the kinds of things and relations the passages describe around the question (what methods use, what they are evaluated on and with which metric, what they improve or are compared with, what limits them), so that a reader can follow the evidence from one paper to another. Every term must still be grounded in the passages.
+{% else %}
 5. Keep the subschema small: only the terms the question needs.
+{% endif %}
+{% if (graph_linking | default('standard')) == 'dense' %}
+6. Design for a connected graph rather than isolated facts: for every class, include at least one property that links it to another class (for example a method to the task it solves, the dataset it uses, the metric it is measured with), not only properties from Paper to a literal. Prefer relations between research entities, so papers that share a method, dataset or task meet at the same node.
+{% endif %}
 
 ## Rules
 - Ground every term in the question and the passages. The subschema describes vocabulary; it never asserts facts.

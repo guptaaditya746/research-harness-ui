@@ -44,6 +44,15 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 - **v1** is the text the harness sent before templating, reproduced byte for byte and checked against `packages/prompts/tests/golden/`. Never edit it; it exists so runs can be compared.
 - **v2** follows current guidance for non-thinking instruct models (Anthropic prompt-engineering docs, OpenAI GPT-4.1/GPT-5 prompting guides, Qwen3-2507 and Granite 4.x documentation): role and task first; inputs described; numbered steps where order matters; rules with the reason behind them, stated positively; explicit output schema with an example using real ontology terms; what to return when evidence is missing; evidence quoted before the claim; documents before the question.
 
+## Graph shape variables
+
+`schema_inference`, `edc_extract` and `triple_extraction` (v2) take `schema_scope`
+(`focused`/`broad`) and `graph_linking` (`standard`/`dense`) from `HARNESS_SCHEMA_SCOPE` and
+`HARNESS_GRAPH_LINKING`. With the defaults they render the same text as before; `broad` replaces
+"keep the subschema small" with covering the question's topic, `dense` asks for one name per
+entity, relations between research entities, and compound statements split into linked facts.
+Their examples use made-up entities only (MethodX, ModelZ, BenchY). See `docs/EVIDENCE_DOCS.md`.
+
 ## Changing a prompt
 
 1. Edit the v2 template (or add a v3 set for a larger experiment: copy `v2/`, add the set name to `SETS`).

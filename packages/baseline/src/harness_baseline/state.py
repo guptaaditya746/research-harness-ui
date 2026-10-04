@@ -34,6 +34,7 @@ class BaselineState(TypedDict, total=False):
     answer: AnswerResult
     retrieval: dict[str, Any]
     extraction_batches: list[dict[str, Any]]
+    evidence_graph: list[dict[str, Any]]
 
 
 class BaselineResult(TypedDict):

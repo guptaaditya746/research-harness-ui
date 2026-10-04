@@ -64,10 +64,12 @@ Open `http://127.0.0.1:25173` on the laptop.
 
 The header shows the harness mark (it reacts to the run: idle, researching, answered, failed) and a model status button: one dot per model from the thesis-llm-setup status API (`LLM_STATUS_URL`) — green ready, yellow busy, orange queueing, magenta down — with running and waiting requests, KV cache and the harness's own run queue in its panel. Results start with the answer and numbered references, and end with a run timeline of the model and tool calls.
 
-No typing is needed. The start screen lists the 60 evaluation questions (nlp01-nlp30 and nlp32-nlp61,
-the same list as **Question library** under the question box). Hover a question to run it with **Fast**,
+No typing is needed. The start screen lists the evaluation questions in two categories, corpus-wide
+(nlp32-nlp47) and ambiguous (nlp30, nlp48-nlp53, nlp62-nlp66), from `datasets/question_set_d.json`
+(the same list as **Question library** under the question box). Hover a question to run it with **Fast**,
 **Adaptive**, **Agentic** or **Compare**; click its text to put it in the box and edit it first.
 Filter by any word. The list comes from `HARNESS_QUESTION_SETS` (default
+`question_set_d.json`; the earlier libraries with metadata questions are
 `question_library_2025.json,question_library_2025_b.json`); set `HARNESS_QUESTION_EXTRAS=true` to also list gold candidates and
 recent runs.
 

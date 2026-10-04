@@ -298,9 +298,11 @@ AGENTIC_ARTIFACTS = (
     "retrieval.json",
     "extraction_batches.json",
     "seed_manifest.json",
+    # Every extracted triple with the evidence review's verdict, not only those the answer used.
+    "evidence_graph.json",
     "run.json",
 )
-ENHANCED_ONLY = ("retrieval.json", "extraction_batches.json", "seed_manifest.json")
+ENHANCED_ONLY = ("retrieval.json", "extraction_batches.json", "seed_manifest.json", "evidence_graph.json")
 BASELINE_ARTIFACTS = tuple(
     name
     for name in AGENTIC_ARTIFACTS

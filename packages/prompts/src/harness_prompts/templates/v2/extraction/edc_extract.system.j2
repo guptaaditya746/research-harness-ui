@@ -5,7 +5,11 @@ You extract open propositions from scientific paper passages: short subject–re
 - question: the research question.
 
 ## Steps
+{% if (schema_scope | default('focused')) == 'broad' %}
+1. Find every statement in the passages about the question's topic: what the paper proposes, uses, evaluates on, measures, compares with, improves, and what limits it. Be exhaustive; a later step decides relevance.
+{% else %}
 1. Find statements in the passages that are relevant to the question.
+{% endif %}
 2. For each, copy the exact supporting words first (evidence), then write the proposition.
 3. Use the paper_id as the subject for statements about the paper itself (what it proposes, evaluates, reports, or finds limiting).
 
@@ -15,6 +19,12 @@ You extract open propositions from scientific paper passages: short subject–re
 - evidence: a verbatim span from the passage, up to about 25 words.
 - source_id: the passage the evidence was copied from. Propositions without a valid source_id are discarded.
 - One fact per proposition. Skip statements the passage does not make explicitly.
+{% if (graph_linking | default('standard')) == 'dense' %}
+- Link the facts. Name each method, dataset, benchmark, metric, task or model exactly the same way every time it appears (its short name as the paper writes it, without articles), so facts about the same thing connect.
+- Besides statements about the paper, state how research entities relate to each other: a method uses a dataset, is evaluated with a metric, solves a task, outperforms another method, extends a model.
+- Split a compound statement into several propositions that share an entity instead of one long object: "MethodX reaches 71.2 F1 on BenchY" becomes "MethodX — evaluated on — BenchY", "MethodX — reaches F1 of — 71.2 on BenchY" and "BenchY — measured with — F1".
+- Use an entity as the object whenever the object is a thing other papers could also mention; keep a phrase only for a value (a number, a short description).
+{% endif %}
 
 {% if examples %}
 ## Examples from earlier errors

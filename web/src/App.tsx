@@ -219,8 +219,8 @@ function Result({ run, pick, setPick, onDeeper, labels }: { run: Run; pick: numb
   </div>;
 }
 
-const categoryOrder = ['metadata', 'citation', 'aggregation', 'synthesis', 'ambiguity', 'gold', 'recent'];
-const categoryLabel: Record<string, string> = { metadata: 'Metadata', citation: 'Citations', aggregation: 'Aggregation', synthesis: 'Synthesis over full text', ambiguity: 'Ambiguous — agent interprets', gold: 'Gold candidates', recent: 'Recent runs' };
+const categoryOrder = ['corpus_wide', 'ambiguous', 'metadata', 'citation', 'aggregation', 'synthesis', 'ambiguity', 'gold', 'recent'];
+const categoryLabel: Record<string, string> = { corpus_wide: 'Corpus-wide', ambiguous: 'Ambiguous — agent interprets', metadata: 'Metadata', citation: 'Citations', aggregation: 'Aggregation', synthesis: 'Synthesis over full text', ambiguity: 'Ambiguous — agent interprets', gold: 'Gold candidates', recent: 'Recent runs' };
 
 function QuestionLibrary({ items, filter, setFilter, onPick, onRun, onCompare, autoFocus = true }: { items: LibraryQuestion[]; filter: string; setFilter: (value: string) => void; onPick: (text: string) => void; onRun: (kind: RunPath, text: string) => void; onCompare: (text: string) => void; autoFocus?: boolean }) {
   const needle = filter.trim().toLowerCase();

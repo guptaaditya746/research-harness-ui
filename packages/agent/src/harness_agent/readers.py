@@ -73,10 +73,12 @@ def _passages(corpus: Any, query: str, paper_id: str, limit: int) -> list[dict[s
 
 
 def read_paper(model: Any, corpus: Any, question: str, concept: dict | None, paper_id: str,
-               limit: int) -> ReaderResult:
+               limit: int, rows: list[dict[str, Any]] | None = None) -> ReaderResult:
+    """``rows``: the passages to read; by default the paper's passages that rank highest."""
     started = monotonic()
     interpretation = f"{(concept or {}).get('label', '')}: {(concept or {}).get('gloss', '')}".strip(": ")
-    rows = _passages(corpus, f"{question} {interpretation}".strip(), paper_id, limit)
+    if rows is None:
+        rows = _passages(corpus, f"{question} {interpretation}".strip(), paper_id, limit)
     result = ReaderResult(paper_id=paper_id, passage_ids=[str(row["passage_id"]) for row in rows])
     if not rows:
         result.error = "no passages"

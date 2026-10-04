@@ -64,7 +64,7 @@ class ResearchSteps:
             # Small evidence batches keep the structured response focused and
             # avoid a single long generation blocking the whole run.
             # Batches run in parallel (HARNESS_EXTRACTION_CONCURRENCY); results keep batch order.
-            batch_size = 2
+            batch_size = settings().edc_batch_passages
             batches = [state["passages"][start : start + batch_size]
                        for start in range(0, len(state["passages"]), batch_size)]
             workers = min(settings().extraction_concurrency, max(1, len(batches)))
@@ -83,6 +83,13 @@ class ResearchSteps:
             for batch_no, (batch, (extraction, batch_reports)) in enumerate(zip(batches, results, strict=True), start=1):
                 extracted.extend(extraction.triples)
                 reports.append({"batch": batch_no, "passages": len(batch), "edc": batch_reports})
+            kept = [name for name in self.extraction.kept_relations if name not in state["inferred"].properties]
+            if kept:
+                # Relations kept from open extraction join the run's subschema (HARNESS_UNMAPPED_RELATIONS=keep).
+                state["inferred"] = state["inferred"].model_copy(
+                    update={"properties": [*state["inferred"].properties, *kept]})
+                self._emit("Keeping unmapped relations", f"{len(kept)} new relations: {', '.join(kept[:6])}"
+                                                         + (" …" if len(kept) > 6 else ""))
         elif self.enhanced:
             extracted, reports = self.extraction.extract_batches(
                 self._research_question(state), state["inferred"], state["passages"]
@@ -124,16 +131,21 @@ class ResearchSteps:
         ]
         if not extracted:
             raise NoResults("extraction contained no valid supported propositions")
+        # The evidence graph: every extracted triple, with the evidence review's verdict when there is one.
+        # The answer uses only the relevant ones; this keeps the rest (evidence_graph.json).
+        evidence = [{**item.model_dump(), "relevant": None} for item in extracted]
         if self.refine:
             extracted, review = self.extraction.refine_triples(
                 self._research_question(state), extracted, state["passages"], reviewer=self.refinement_model
             )
+            evidence = review.pop("labelled", evidence)
             reports.append({"stage": "evidence_review", **review})
             if not extracted:
                 raise NoResults("evidence review kept no extracted triple as relevant to the question")
         self._emit("Extracting triples", f"{len(extracted)} supported triples")
         self._check("extraction", "pass", f"{len(extracted)} supported triples")
-        return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports}
+        return {"extracted": extracted, "inferred": state["inferred"], "extraction_batches": reports,
+                "evidence_graph": evidence}
 
     def _facts_answer(self, triples: list[ExtractedTriple], removed: list[dict[str, Any]]) -> AnswerResult:
         """An answer that states the extracted facts, one sentence each (at most 12), with the

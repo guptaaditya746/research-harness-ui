@@ -1,0 +1,198 @@
+[
+  {
+    "id": "nlp32",
+    "category": "corpus_wide",
+    "type": "corpus_limitations",
+    "question": "What limitations do the indexed ACL 2025 and EMNLP 2025 papers on retrieval-augmented generation report?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp33",
+    "category": "corpus_wide",
+    "type": "corpus_benchmarks",
+    "question": "Which benchmarks and datasets do the indexed retrieval-augmented generation papers evaluate on?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp34",
+    "category": "corpus_wide",
+    "type": "corpus_safety_risks",
+    "question": "What kinds of attacks or safety risks do the indexed LLM safety and red-teaming papers evaluate?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp35",
+    "category": "corpus_wide",
+    "type": "corpus_languages",
+    "question": "Which low-resource languages do the indexed papers study, and for which tasks?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp36",
+    "category": "corpus_wide",
+    "type": "corpus_hallucination_methods",
+    "question": "What approaches do the indexed papers propose to detect or reduce hallucinations in large language models?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp37",
+    "category": "corpus_wide",
+    "type": "corpus_llm_judges",
+    "question": "Which indexed papers report limitations of using large language models as judges or evaluators, and what are those limitations?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp38",
+    "category": "corpus_wide",
+    "type": "corpus_faithfulness",
+    "question": "How do the indexed summarization papers evaluate whether a summary is faithful to its source?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp39",
+    "category": "corpus_wide",
+    "type": "corpus_multi_agent",
+    "question": "Which indexed papers build multi-agent systems with large language models, and what does each agent do?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp40",
+    "category": "corpus_wide",
+    "type": "corpus_future_work",
+    "question": "What future work do the indexed retrieval-augmented generation papers propose?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp41",
+    "category": "corpus_wide",
+    "type": "corpus_clinical",
+    "question": "Which indexed papers work on medical or clinical text, and which tasks do they address?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp42",
+    "category": "corpus_wide",
+    "type": "corpus_hallucination_metrics",
+    "question": "Which metrics do the indexed papers use to measure hallucination or factual errors?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp43",
+    "category": "corpus_wide",
+    "type": "corpus_long_context",
+    "question": "How do the indexed papers on long documents or long contexts handle inputs that exceed the model's context window?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp44",
+    "category": "corpus_wide",
+    "type": "corpus_new_resources",
+    "question": "Which indexed EMNLP 2025 papers introduce a new benchmark for evaluating large language models, and what does each benchmark measure?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp45",
+    "category": "corpus_wide",
+    "type": "corpus_bias",
+    "question": "What kinds of bias or cultural misalignment do the indexed papers measure in language models?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp46",
+    "category": "corpus_wide",
+    "type": "corpus_human_evaluation",
+    "question": "Which indexed summarization or dialogue papers evaluate with human judges, and what do the annotators rate?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp47",
+    "category": "corpus_wide",
+    "type": "corpus_structured_rag",
+    "question": "Which indexed retrieval-augmented generation methods organise evidence as graphs or trees, and how do they use that structure?",
+    "expected": "evidence_bounded_answer"
+  },
+  {
+    "id": "nlp30",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Which retrieval-augmented generation approach is best among the indexed 2025 papers, and by which evaluation measure?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp48",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Which paper in this corpus is the most influential?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp49",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Who are the leading researchers on retrieval-augmented generation in this corpus?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp50",
+    "category": "ambiguous",
+    "type": "ambiguous_comparison",
+    "question": "Does this corpus contain more work on LLM safety or on hallucination?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp51",
+    "category": "ambiguous",
+    "type": "ambiguous_comparison",
+    "question": "Which venue in this corpus has more papers on multilingual NLP, ACL 2025 or EMNLP 2025?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp52",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "What is the biggest open problem that the indexed papers identify?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp53",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Which evaluation benchmark is the most popular among the indexed papers?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp62",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Which large language model is used most successfully across the indexed papers?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp63",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Which task is the hardest for current large language models according to this corpus?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp64",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "Who is the most important contributor to this corpus?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp65",
+    "category": "ambiguous",
+    "type": "ambiguous_superlative",
+    "question": "What is the most effective way to reduce hallucinations according to the indexed papers?",
+    "expected": "clarification_or_scoped_answer"
+  },
+  {
+    "id": "nlp66",
+    "category": "ambiguous",
+    "type": "ambiguous_comparison",
+    "question": "Is retrieval augmentation or fine-tuning the better approach according to this corpus?",
+    "expected": "clarification_or_scoped_answer"
+  }
+]

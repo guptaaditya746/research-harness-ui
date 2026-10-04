@@ -1218,6 +1218,7 @@
     "retrieval.json",
     "extraction_batches.json",
     "seed_manifest.json",
+    "evidence_graph.json",
     "run.json"
   ]
 }

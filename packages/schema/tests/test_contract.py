@@ -63,7 +63,9 @@ def test_artifact_contract_per_path() -> None:
     assert "run.json" in required_artifacts("agentic")
     assert "verification.json" not in required_artifacts("baseline")
     assert "claims.json" in required_artifacts("agentic")
-    assert len(required_artifacts("agentic")) == 23
+    assert len(required_artifacts("agentic")) == 24
+    assert "evidence_graph.json" in required_artifacts("baseline-enhanced")
+    assert "evidence_graph.json" not in required_artifacts("baseline")
     # The agent's (enhanced) pipeline reports; Fast has none of them, Adaptive all.
     assert "extraction_batches.json" in required_artifacts("agentic")
     assert "extraction_batches.json" not in required_artifacts("baseline")

@@ -8,6 +8,7 @@ each call) and goes through the ``ModelClient`` protocol.
 from __future__ import annotations
 
 import re
+import threading
 from collections import Counter
 from dataclasses import replace
 from difflib import SequenceMatcher
@@ -68,6 +69,30 @@ def _drop_reason(value: object) -> str:
     text = str(value or "").strip().casefold()
     return next((word for word in ("unsupported", "irrelevant", "malformed") if word in text),
                 "no reason given" if not text else "other")
+
+
+def relation_name(text: str) -> str | None:
+    """A lowerCamelCase property name from an open relation's wording ("is evaluated on" ->
+    "isEvaluatedOn"), or None when the wording has no usable word."""
+    words = re.findall(r"[A-Za-z0-9]+", str(text))
+    if not words or not words[0][0].isalpha():
+        return None
+    name = words[0][:1].lower() + words[0][1:] + "".join(word[:1].upper() + word[1:] for word in words[1:])
+    name = name[:64]
+    return name if re.fullmatch(r"[a-z][A-Za-z0-9_]{0,63}", name) else None
+
+
+def _literal_value(value: str) -> bool:
+    """An object that is a value (a number or measurement, a long phrase) rather than a thing other papers
+    could share. Names with digits ("GPT-4", "Llama 3") stay things."""
+    text = str(value).strip()
+    return bool(re.match(r"[-+~≈<>]?\s*\d", text) or "%" in text) or len(text.split()) > 6
+
+
+def prompt_shape() -> dict[str, str]:
+    """Template variables that set how broad the subschema is and how linked the extracted graph is."""
+    config = settings()
+    return {"schema_scope": config.schema_scope, "graph_linking": config.graph_linking}
 
 
 def _looks_like_source(value: str) -> bool:
@@ -138,6 +163,11 @@ class ExtractionEngine:
         # The generic parent class is usable as a class (and is where "off" mode maps new classes).
         self.class_names.setdefault(local_name(TOP_CLASS), TOP_CLASS)
         self._local_schema = False
+        # Extraction batches run in parallel and may each add a relation to the schema.
+        self._schema_lock = threading.RLock()
+        # Relations added for open facts that mapped onto no subschema term (HARNESS_UNMAPPED_RELATIONS=keep):
+        # name -> the open wording it came from. The pipeline adds them to the run's subschema.
+        self.kept_relations: dict[str, str] = {}
 
     def parent_properties(self) -> dict[str, URIRef]:
         """Properties an invented property may specialise: the harness terms, the two generic parents
@@ -183,6 +213,10 @@ class ExtractionEngine:
         """Introduce one query-local OWL 2 class, a subclass of an existing class, without changing the seed."""
         if not re.fullmatch(r"[A-Z][A-Za-z0-9_]{0,63}", name):
             raise ValueError(f"invalid proposed class name: {name!r}")
+        with self._schema_lock:
+            return self._register_class(name, definition, parent)
+
+    def _register_class(self, name: str, definition: str, parent: str | None) -> URIRef:
         if name in self.class_names:
             return self.class_names[name]
         self._ensure_local_schema()
@@ -203,6 +237,11 @@ class ExtractionEngine:
         range and a parent property (the named one when it fits, else the generic one)."""
         if not re.fullmatch(r"[a-z][A-Za-z0-9_]{0,63}", name):
             raise ValueError(f"invalid proposed relation name: {name!r}")
+        with self._schema_lock:
+            return self._register_relation(name, definition, domain_name, range_name, parent)
+
+    def _register_relation(self, name: str, definition: str, domain_name: str, range_name: str,
+                           parent: str | None) -> URIRef:
         iri = URIRef(HRN[name])
         if iri in self.schema.properties:
             return iri
@@ -265,8 +304,18 @@ class ExtractionEngine:
         if notes:
             payload["research_notes"] = list(notes)
         result = SchemaInference.model_validate(complete(self.schema_model, render(
-            "extraction/schema_inference", payload, content_core=core,
+            "extraction/schema_inference", payload, content_core=core, **prompt_shape(),
         )))
+        return self.apply_schema(result, question)
+
+    def apply_schema(self, result: SchemaInference, question: str) -> SchemaInference:
+        """Validate a proposed subschema and register its invented terms in this engine's schema.
+
+        Separate from :meth:`infer_schema` so a stored proposal (e.g. a resumed evidence-document
+        build) can be applied again without a model call.
+        """
+        allowed_classes = sorted(self.class_names)
+        allowed_properties = sorted(self.property_names)
         if not result.classes or not result.properties:
             raise ValueError("schema inference returned no classes or properties")
         if settings().schema_new_classes == "off":
@@ -357,7 +406,7 @@ class ExtractionEngine:
                     }
                     for row in passages
                 ],
-            }, content_core=core,
+            }, content_core=core, **prompt_shape(),
         )))
         passage_ids = {row["passage_id"] for row in passages}
         # Models sometimes return a useful supported triple alongside a
@@ -387,7 +436,7 @@ class ExtractionEngine:
             "question": question,
             "passages": [{"source_id": row["passage_id"], "paper_id": row["paper_id"],
                           "text": row["text"][:1800]} for row in passages],
-        }))
+        }, **prompt_shape()))
         raw = payload.get("triples", []) if isinstance(payload, dict) else []
         open_triples: list[EDCOpenTriple] = []
         for item in raw if isinstance(raw, list) else []:
@@ -463,19 +512,28 @@ class ExtractionEngine:
                     confidence = float(row.get("confidence", 0))
                 except (TypeError, ValueError):
                     continue
-                if type(index) is int and 0 <= index < len(open_triples) and property_name in relations and confidence >= 0.7:
+                if (type(index) is int and 0 <= index < len(open_triples) and property_name in relations
+                        and confidence >= settings().map_model_min):
                     llm_mapping[index] = (property_name, confidence)
 
         canonical: list[ExtractedTriple] = []
         decisions: list[dict[str, Any]] = []
+        keep = settings().unmapped_relations == "keep"
+        papers = set(paper_by_source.values())
+        unmapped: list[dict[str, str]] = []
         for index, item in enumerate(open_triples):
             selected, score = selected_relations[index]
             method = "lexical"
             if selected is None and index in llm_mapping:
                 selected, score = llm_mapping[index]
                 method = "ontology_review"
+            if selected is None and keep:
+                selected = self._keep_relation(item, definition_map.get(self._norm(item.predicate), ""), papers)
+                method = "kept_new_relation" if selected else method
             decisions.append({"open": item.predicate, "selected": selected, "score": round(score, 3), "method": method})
             if selected is None:
+                unmapped.append({"subject": item.subject, "predicate": item.predicate, "object": item.object,
+                                 "source_id": item.evidence_ids[0]})
                 continue
             property_iri = self.property_names.get(selected)
             domain = self.schema.graph.value(property_iri, RDFS.domain) if property_iri else None
@@ -491,12 +549,43 @@ class ExtractionEngine:
                 source_id=item.evidence_ids[0],
                 evidence=item.evidence or f"Evidence from {item.evidence_ids[0]}.",
             ))
-        return ExtractionResult(triples=canonical), [
+        reports: list[dict[str, Any]] = [
             {"stage": "extract", "open_triples": len(open_triples)},
             {"stage": "define", "definitions": len(definitions)},
             {"stage": "ontology_review", "unresolved": len(unresolved), "mapped": len(llm_mapping)},
             {"stage": "canonicalize", "decisions": decisions},
         ]
+        if unmapped:
+            # Facts lost because their relation fits no subschema term (HARNESS_UNMAPPED_RELATIONS=drop).
+            reports.append({"stage": "unmapped_dropped", "count": len(unmapped), "triples": unmapped})
+        return ExtractionResult(triples=canonical), reports
+
+    def _keep_relation(self, item: EDCOpenTriple, definition: str, papers: set[str]) -> str | None:
+        """Register the open fact's own relation (HARNESS_UNMAPPED_RELATIONS=keep) and return its name.
+
+        The relation is an OWL 2 sub-property of the generic researchRelation (object range) or
+        researchAttribute (a value), so the graph stays valid and the scorer's entailed level can
+        relate it to other terms. Its domain is Paper when the subject is the passage's paper,
+        else ResearchEntity.
+        """
+        name = relation_name(item.predicate)
+        if name is None:
+            return None
+        if name in self.property_names:
+            return name
+        about_paper = item.subject in papers
+        try:
+            self.register_local_relation(
+                name,
+                definition or f"Relation kept from open extraction, worded '{item.predicate}'.",
+                domain_name="Paper" if about_paper else local_name(TOP_CLASS),
+                range_name="xsd:string" if _literal_value(item.object) else local_name(TOP_CLASS),
+            )
+        except ValueError:
+            return None
+        with self._schema_lock:
+            self.kept_relations.setdefault(name, item.predicate)
+        return name
 
     @staticmethod
     def _norm(value: str) -> str:
@@ -514,7 +603,7 @@ class ExtractionEngine:
         if not ranked:
             return None, 0.0
         score, relation = max(ranked)
-        return (relation, score) if score >= 0.42 else (None, score)
+        return (relation, score) if score >= settings().map_lexical_min else (None, score)
 
     def extract_batches(
         self,
@@ -598,7 +687,7 @@ class ExtractionEngine:
             reasons = decision.get("drop_reasons") if isinstance(decision, dict) else None
             reasons = reasons if isinstance(reasons, dict) else {}
             dropped = [{"triple": f"{item.subject} —{item.predicate}→ {item.object}", "source": item.source_id,
-                        "why": _drop_reason(reasons.get(str(i)))}
+                        "why": _drop_reason(reasons.get(str(i))), "index": id(item)}
                        for i, item in enumerate(batch) if i not in indices]
             return [item for i, item in enumerate(batch) if i in indices], dropped
 
@@ -606,8 +695,15 @@ class ExtractionEngine:
         results = parallel_map(review, batches, settings().extraction_concurrency)
         kept = [item for part, _ in results for item in part]
         dropped = [item for _, part in results for item in part]
+        why_dropped = {row.pop("index"): row["why"] for row in dropped}
         report: dict[str, Any] = {"candidates": len(triples), "unique": len(candidates), "kept": len(kept),
                                   "model_calls": len(batches)}
+        # Every candidate with the review's verdict: the run's evidence graph keeps what the answer drops.
+        report["labelled"] = [
+            {**item.model_dump(), "relevant": id(item) not in why_dropped,
+             **({"why": why_dropped[id(item)]} if id(item) in why_dropped else {})}
+            for item in candidates
+        ]
         if dropped:
             # Why facts are lost at this stage (the largest loss in the funnel): counts per reason and examples.
             report["dropped"] = dict(Counter(item["why"] for item in dropped).most_common())

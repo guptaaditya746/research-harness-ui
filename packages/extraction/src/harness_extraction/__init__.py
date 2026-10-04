@@ -23,7 +23,7 @@ from .call_control import (
     phase_budget,
     run_interruptible,
 )
-from .engine import ExtractionEngine, local_name
+from .engine import ExtractionEngine, local_name, prompt_shape, relation_name
 from .errors import ModelFailure, UnsupportedAnswer
 from .events import (
     current_prompt,
@@ -78,6 +78,8 @@ __all__ = [
     "model_purpose",
     "parallel_map",
     "phase_budget",
+    "prompt_shape",
+    "relation_name",
     "run_interruptible",
     "strip_reasoning",
     "using_prompt",

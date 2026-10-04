@@ -418,8 +418,25 @@ def test_question_library_merges_curated_gold_and_recent(tmp_path: Path, monkeyp
     ]
 
 
-def test_default_question_library_is_the_sixty_evaluation_questions(monkeypatch) -> None:
+def test_default_question_library_is_the_two_category_evaluation_set(monkeypatch) -> None:
     monkeypatch.delenv("HARNESS_QUESTION_SETS", raising=False)
+    monkeypatch.delenv("DATASETS_ROOT", raising=False)
+    [path] = main._question_sets()
+    assert path.name == "question_set_d.json"
+    rows = json.loads(path.read_text())
+    by_category: dict[str, list[str]] = {}
+    for row in rows:
+        by_category.setdefault(row["category"], []).append(row["id"])
+    assert set(by_category) == {"corpus_wide", "ambiguous"}
+    assert all(len(ids) >= 10 for ids in by_category.values())
+    assert len({row["id"] for row in rows}) == len({row["question"] for row in rows}) == len(rows)
+    # The corpus-wide and ambiguous rows taken from the earlier library keep their wording.
+    earlier = {row["id"]: row["question"] for row in json.loads((path.parent / "question_library_2025_b.json").read_text())}
+    assert all(row["question"] == earlier[row["id"]] for row in rows if row["id"] in earlier)
+
+
+def test_earlier_question_libraries_are_kept(monkeypatch) -> None:
+    monkeypatch.setenv("HARNESS_QUESTION_SETS", "question_library_2025.json,question_library_2025_b.json")
     monkeypatch.delenv("DATASETS_ROOT", raising=False)
     paths = main._question_sets()
     assert [path.name for path in paths] == ["question_library_2025.json", "question_library_2025_b.json"]
