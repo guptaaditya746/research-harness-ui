@@ -150,31 +150,49 @@ def _ranked(*groups: tuple[set[tuple[int, int]], str]) -> dict[tuple[int, int], 
     return ranks
 
 
-def score_levels(
-    predicted: Iterable[Triple | Mapping[str, Any]],
-    gold: Iterable[Triple | Mapping[str, Any]],
-    *,
-    key: Callable[[Mapping[str, Any]], Key],
-    relations: PredicateRelations | None = None,
-    judge: Judge | None = None,
-    rejected: Iterable[Mapping[str, Any]] = (),
-) -> dict[str, Any]:
-    """Score one reading's triples against one gold set at every level."""
-    relations = relations or PredicateRelations()
-    gold_by_key: dict[Key, dict[str, Any]] = {}
+def _merge_gold(gold: Iterable[Triple | Mapping[str, Any]], key: Callable[[Mapping[str, Any]], Key]
+                ) -> dict[Key, dict[str, Any]]:
+    """Gold triples by key. Duplicates: vital if any copy is vital; their variants are pooled."""
+    by_key: dict[Key, dict[str, Any]] = {}
     for item in map(_as_dict, gold):
         gold_key = key(item)
-        previous = gold_by_key.get(gold_key)
+        previous = by_key.get(gold_key)
         if previous is None:
-            gold_by_key[gold_key] = item
+            by_key[gold_key] = item
             continue
-        # Duplicates: vital if any copy is vital; their variants are pooled.
         merged = dict(previous)
         if item.get("weight") == "vital":
             merged["weight"] = "vital"
         merged["variants"] = [*_variant_triples(previous),
                               *(v for v in _variant_triples(item) if v not in _variant_triples(previous))]
-        gold_by_key[gold_key] = merged
+        by_key[gold_key] = merged
+    return by_key
+
+
+@dataclass
+class _Pairs:
+    """The run and gold triples of one scoring, indexed, with the rule edges between them."""
+
+    run_by_key: dict[Key, dict[str, Any]]
+    gold_by_key: dict[Key, dict[str, Any]]
+    run_keys: list[Key]
+    gold_keys: list[Key]
+    excluded: list[Key]
+    strict: set[tuple[int, int]]
+    entailed_recall: set[tuple[int, int]]
+    entailed_precision: set[tuple[int, int]]
+    variants: set[tuple[int, int]]
+    normal_run: list[Key]
+    normal_gold: list[Key]
+
+    @property
+    def ruled(self) -> set[tuple[int, int]]:
+        return self.strict | self.entailed_recall | self.entailed_precision | self.variants
+
+
+def _pairs(predicted: Iterable[Triple | Mapping[str, Any]], gold: Iterable[Triple | Mapping[str, Any]],
+           key: Callable[[Mapping[str, Any]], Key], relations: PredicateRelations) -> _Pairs:
+    gold_by_key = _merge_gold(gold, key)
     run_by_key: dict[Key, dict[str, Any]] = {}
     for item in map(_as_dict, predicted):
         run_by_key.setdefault(key(item), item)
@@ -196,50 +214,66 @@ def score_levels(
     gold_closure = [relations.consequences(gold_by_key[g], key) for g in gold_keys]
     normal_run = [relations.normalise(r) for r in run_keys]
     normal_gold = [relations.normalise(g) for g in gold_keys]
-
-    strict = {(i, j) for i, r in enumerate(run_keys) for j, g in enumerate(gold_keys) if r == g}
-    entailed_recall = {(i, j) for i in range(len(run_keys)) for j in range(len(gold_keys))
-                       if normal_gold[j] in run_closure[i]}
-    entailed_precision = {(i, j) for i in range(len(run_keys)) for j in range(len(gold_keys))
-                          if normal_run[i] in gold_closure[j]}
     variant_keys = [{key(item) for item in group} for group in variant_triples]
-    variants = {(i, j) for i, r in enumerate(run_keys) for j in range(len(gold_keys)) if r in variant_keys[j]}
+    every = [(i, j) for i in range(len(run_keys)) for j in range(len(gold_keys))]
+    return _Pairs(
+        run_by_key, gold_by_key, run_keys, gold_keys, excluded,
+        strict={(i, j) for i, j in every if run_keys[i] == gold_keys[j]},
+        entailed_recall={(i, j) for i, j in every if normal_gold[j] in run_closure[i]},
+        entailed_precision={(i, j) for i, j in every if normal_run[i] in gold_closure[j]},
+        variants={(i, j) for i, j in every if run_keys[i] in variant_keys[j]},
+        normal_run=normal_run, normal_gold=normal_gold,
+    )
 
-    ruled = strict | entailed_recall | entailed_precision | variants
+
+def _ask_judge(pairs: _Pairs, judge: Judge | None) -> tuple[set[tuple[int, int]], int, int]:
+    """Pairs with the same subject where neither triple has a rule or variant edge.
+    Returns the judged matches and how many pairs were asked and are still pending."""
+    judged: set[tuple[int, int]] = set()
+    asked = pending = 0
+    if judge is None:
+        return judged, asked, pending
+    ruled = pairs.ruled
     linked_runs = {i for i, _ in ruled}
     linked_gold = {j for _, j in ruled}
-    judged: set[tuple[int, int]] = set()
-    judge_pending = 0
-    judge_asked = 0
-    if judge is not None:
-        for i, r in enumerate(run_keys):
-            if i in linked_runs:
+    for i, r in enumerate(pairs.run_keys):
+        if i in linked_runs:
+            continue
+        for j, g in enumerate(pairs.gold_keys):
+            if j in linked_gold or pairs.normal_run[i][0] != pairs.normal_gold[j][0]:
                 continue
-            for j, g in enumerate(gold_keys):
-                if j in linked_gold or normal_run[i][0] != normal_gold[j][0]:
-                    continue
-                judge_asked += 1
-                verdict = judge(_plain(gold_by_key[g]), _plain(run_by_key[r]))
-                if verdict is None:
-                    judge_pending += 1
-                elif verdict:
-                    judged.add((i, j))
+            asked += 1
+            verdict = judge(_plain(pairs.gold_by_key[g]), _plain(pairs.run_by_key[r]))
+            if verdict is None:
+                pending += 1
+            elif verdict:
+                judged.add((i, j))
+    return judged, asked, pending
 
-    # Entailed is asymmetric (Euzenat): a run triple more specific than the gold recovers the gold
-    # fact, but the gold does not vouch for the extra detail, so it earns no precision credit.
-    # Soft is symmetric: it approximates a person asking "do these state the same fact?".
-    soft = _ranked((judged, "judge"), (variants, "variant"), (entailed_precision | entailed_recall, "entailed"),
-                   (strict, "strict"))
-    edges = {
-        "strict": (_ranked((strict, "strict")),) * 2,
-        "entailed": (_ranked((entailed_precision, "entailed"), (strict, "strict")),
-                     _ranked((entailed_recall, "entailed"), (strict, "strict"))),
+
+def _level_edges(pairs: _Pairs, judged: set[tuple[int, int]]
+                 ) -> dict[str, tuple[dict[tuple[int, int], int], dict[tuple[int, int], int]]]:
+    """Per level, the (precision, recall) edges with their strength.
+
+    Entailed is asymmetric (Euzenat): a run triple more specific than the gold recovers the gold
+    fact, but the gold does not vouch for the extra detail, so it earns no precision credit.
+    Soft is symmetric: it approximates a person asking "do these state the same fact?".
+    """
+    soft = _ranked((judged, "judge"), (pairs.variants, "variant"),
+                   (pairs.entailed_precision | pairs.entailed_recall, "entailed"), (pairs.strict, "strict"))
+    return {
+        "strict": (_ranked((pairs.strict, "strict")),) * 2,
+        "entailed": (_ranked((pairs.entailed_precision, "entailed"), (pairs.strict, "strict")),
+                     _ranked((pairs.entailed_recall, "entailed"), (pairs.strict, "strict"))),
         "soft": (soft, soft),
     }
-    rows, cols = len(run_keys), len(gold_keys)
-    vital = {j for j, g in enumerate(gold_keys) if gold_by_key[g].get("weight") == "vital"}
-    dblp_runs = {i for i, r in enumerate(run_keys) if r[1].startswith(DBLP_NS)}
-    dblp_gold = {j for j, g in enumerate(gold_keys) if g[1].startswith(DBLP_NS)}
+
+
+def _level_scores(pairs: _Pairs, edges: dict[str, tuple[dict, dict]], vital: set[int]
+                  ) -> tuple[dict[str, Any], dict[str, tuple[dict[int, int], dict[int, int]]]]:
+    rows, cols = len(pairs.run_keys), len(pairs.gold_keys)
+    dblp_runs = {i for i, r in enumerate(pairs.run_keys) if r[1].startswith(DBLP_NS)}
+    dblp_gold = {j for j, g in enumerate(pairs.gold_keys) if g[1].startswith(DBLP_NS)}
     levels: dict[str, Any] = {}
     matchings: dict[str, tuple[dict[int, int], dict[int, int]]] = {}
     for level, (precision_edges, recall_edges) in edges.items():
@@ -256,46 +290,71 @@ def score_levels(
             "invented": LevelScore(rows - len(dblp_runs), cols - len(dblp_gold),
                                    len(credited - dblp_runs), len(recalled - dblp_gold)).as_dict(),
         }
+    return levels, matchings
 
+
+def _judged_precision(pairs: _Pairs, judged: set[tuple[int, int]], rejected: Iterable[Mapping[str, Any]],
+                      key: Callable[[Mapping[str, Any]], Key]) -> tuple[dict[str, Any], set[int]]:
+    """The share of run triples known correct; returns it and the run indices known wrong."""
     # A rule link where only the run triple implies the gold (a more specific claim) is not verified
     # correctness: the gold does not vouch for the extra detail.
-    correct_runs = {i for i, _ in strict | entailed_precision | variants | judged}
+    correct = {i for i, _ in pairs.strict | pairs.entailed_precision | pairs.variants | judged}
     wrong_keys = {key(item) for item in map(_as_dict, rejected)
                   if str(item.get("verdict", "")).casefold() == "wrong"}
-    wrong_runs = {i for i, r in enumerate(run_keys) if r in wrong_keys and i not in correct_runs}
-    judged_total = len(correct_runs) + len(wrong_runs)
-    judged_precision = {
-        "value": len(correct_runs) / judged_total if judged_total else None,
-        "correct": len(correct_runs), "wrong": len(wrong_runs),
-        "coverage": judged_total / rows if rows else None,
-    }
+    wrong = {i for i, r in enumerate(pairs.run_keys) if r in wrong_keys and i not in correct}
+    total = len(correct) + len(wrong)
+    rows = len(pairs.run_keys)
+    return {
+        "value": len(correct) / total if total else None,
+        "correct": len(correct), "wrong": len(wrong),
+        "coverage": total / rows if rows else None,
+    }, wrong
 
-    def how(i: int, j: int) -> tuple[str, str]:
-        if (i, j) in strict:
-            return "strict", "canonical key"
-        if (i, j) in entailed_recall or (i, j) in entailed_precision:
-            return "entailed", "rule"
-        if (i, j) in variants:
-            return "soft", "variant"
-        return "soft", "judge"
 
-    _, recall_matching = matchings["soft"]
+def _how(pairs: _Pairs, i: int, j: int) -> tuple[str, str]:
+    if (i, j) in pairs.strict:
+        return "strict", "canonical key"
+    if (i, j) in pairs.entailed_recall or (i, j) in pairs.entailed_precision:
+        return "entailed", "rule"
+    if (i, j) in pairs.variants:
+        return "soft", "variant"
+    return "soft", "judge"
+
+
+def score_levels(
+    predicted: Iterable[Triple | Mapping[str, Any]],
+    gold: Iterable[Triple | Mapping[str, Any]],
+    *,
+    key: Callable[[Mapping[str, Any]], Key],
+    relations: PredicateRelations | None = None,
+    judge: Judge | None = None,
+    rejected: Iterable[Mapping[str, Any]] = (),
+) -> dict[str, Any]:
+    """Score one reading's triples against one gold set at every level."""
+    pairs = _pairs(predicted, gold, key, relations or PredicateRelations())
+    judged, judge_asked, judge_pending = _ask_judge(pairs, judge)
+    vital = {j for j, g in enumerate(pairs.gold_keys) if pairs.gold_by_key[g].get("weight") == "vital"}
+    levels, matchings = _level_scores(pairs, _level_edges(pairs, judged), vital)
+    judged_precision, wrong_runs = _judged_precision(pairs, judged, rejected, key)
+
+    credited_runs, recall_matching = matchings["soft"]
+    run, gold_of = pairs.run_by_key, pairs.gold_by_key
     matched = []
     for i, j in sorted(recall_matching.items()):
-        level, reason = how(i, j)
-        matched.append({"run": _plain(run_by_key[run_keys[i]]), "gold": _plain(gold_by_key[gold_keys[j]]),
-                        "level": level, "how": reason, "weight": gold_by_key[gold_keys[j]].get("weight")})
+        level, reason = _how(pairs, i, j)
+        g = pairs.gold_keys[j]
+        matched.append({"run": _plain(run[pairs.run_keys[i]]), "gold": _plain(gold_of[g]),
+                        "level": level, "how": reason, "weight": gold_of[g].get("weight")})
     recalled_gold = set(recall_matching.values())
-    missed = [{**_with_source(gold_by_key[g]), "weight": gold_by_key[g].get("weight")}
-              for j, g in enumerate(gold_keys) if j not in recalled_gold]
-    credited_runs = set(matchings["soft"][0])
-    extra = [{**_with_source(run_by_key[r]), "verdict": "wrong" if i in wrong_runs else "unjudged"}
-             for i, r in enumerate(run_keys) if i not in credited_runs]
+    missed = [{**_with_source(gold_of[g]), "weight": gold_of[g].get("weight")}
+              for j, g in enumerate(pairs.gold_keys) if j not in recalled_gold]
+    extra = [{**_with_source(run[r]), "verdict": "wrong" if i in wrong_runs else "unjudged"}
+             for i, r in enumerate(pairs.run_keys) if i not in credited_runs]
     return {
         "levels": levels,
         "judged_precision": judged_precision,
         "judge": {"asked": judge_asked, "pending": judge_pending, "matched": len(judged)},
-        "excluded_dblp": [_plain(run_by_key[r]) for r in excluded],
+        "excluded_dblp": [_plain(run[r]) for r in pairs.excluded],
         "matched": matched,
         "missed": missed,
         "extra": extra,
