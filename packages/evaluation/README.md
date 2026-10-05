@@ -33,4 +33,4 @@ are documented in the labelling repository: `docs/EVALUATION.md`. This README is
 
 harness_schema, harness_config, harness_prompts, harness_semantic; numpy, scipy, rdflib.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

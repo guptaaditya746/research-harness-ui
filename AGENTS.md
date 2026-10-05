@@ -4,6 +4,8 @@ The Research Harness answers questions about a fixed corpus of scientific papers
 
 Start with `docs/ARCHITECTURE.md` for how a run flows, `docs/decisions/` for why the code is laid out as it is, and `CONTEXT.md` for the vocabulary (claim subgraph, corpus absence, provisional relation, ...).
 
+Every package has its own `AGENTS.md` (what it owns, entry points, what it may import, how to test it): when a task is inside one package, start there.
+
 ## Map: where things are
 
 | Task | Look in |

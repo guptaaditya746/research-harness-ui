@@ -55,12 +55,6 @@ class EvaluationRequest(BaseModel):
     gold_claims: list[dict] | None = None
 
 
-class BenchmarkRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    repetitions: int = 1
-    category: str | None = None
-
-
 class BenchmarkExecuteRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     question: str

@@ -222,8 +222,8 @@ def build_relations(graph: Graph, *, predicate_key, entity_key, sources: tuple[s
 
 @lru_cache(maxsize=4)
 def _load_cached(path: str | None, mtime: float | None, schema_key: tuple[object, ...] = ()) -> PredicateRelations:
-    """``schema_key``: what the harness schema depends on (content core setting, subset file and its
-    modification time), so a changed setting is not served from the cache."""
+    """``schema_key``: what the harness schema depends on (the CS-KG subset file and its modification
+    time), so a changed subset is not served from the cache."""
     from . import _entity_key, _predicate_key
 
     graph = _schema_graph()

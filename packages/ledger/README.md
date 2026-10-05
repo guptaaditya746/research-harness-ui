@@ -10,4 +10,4 @@ Research obligations and their coverage. Tracks what a run must evidence and whe
 
 nothing.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

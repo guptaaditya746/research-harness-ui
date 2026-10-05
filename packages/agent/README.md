@@ -19,4 +19,4 @@ Agentic research path. Before research, passages are retrieved and the agent pro
 
 harness_baseline, harness_extraction, harness_prompts, harness_config, MCP server over HTTP.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

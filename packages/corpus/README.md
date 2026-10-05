@@ -16,4 +16,4 @@ The corpus store and one-time PDF ingest. Papers, passages, DBLP facts and refer
 
 harness_config.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

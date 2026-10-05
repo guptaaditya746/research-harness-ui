@@ -10,4 +10,4 @@ The run's RDF dataset with provenance, and SPARQL checks. Named graphs per sourc
 
 harness_ledger, harness_semantic.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

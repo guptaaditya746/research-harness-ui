@@ -10,4 +10,4 @@ Langfuse tracing and structured run events. Optional export of runs, stages and 
 
 harness_config.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

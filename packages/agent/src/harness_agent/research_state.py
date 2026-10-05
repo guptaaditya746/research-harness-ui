@@ -15,9 +15,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from langchain_core.messages import HumanMessage
-from langchain_core.messages.utils import count_tokens_approximately
-
 ID_KEYS = ("passage_id", "fact_id", "reference_id", "paper_id", "claim_id", "source_id")
 # Tools that answer for one paper at a time; a long run of these on different
 # papers is what aggregate_facts / metadata_table replace.
@@ -76,7 +73,6 @@ class ResearchLedger:
     unresolved: list[str] = field(default_factory=list)
     evidence_ids: set[str] = field(default_factory=set)
     tool_calls: int = 0
-    checkpoints: int = 0
     # Loop guards.
     seen_calls: dict[str, str] = field(default_factory=dict)
     cached_results: dict[str, Any] = field(default_factory=dict)
@@ -145,26 +141,6 @@ class ResearchLedger:
             "(it returns every match and cites its fact ids); for the metadata of many papers call "
             "metadata_table once. Continue only if you need one specific paper."
         )
-
-    def checkpoint(self, messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-        approximate = count_tokens_approximately(
-            [HumanMessage(content=json.dumps(message, ensure_ascii=False, default=str)) for message in messages]
-        )
-        if approximate < 40_000:
-            return None
-        self.checkpoints += 1
-        return {
-            "checkpoint": self.checkpoints,
-            "before_tokens": approximate,
-            "preserved": {
-                "question": self.question,
-                "interpretation": self.interpretation,
-                "findings": self.findings[-20:],
-                "unresolved": self.unresolved,
-                "evidence_ids": sorted(self.evidence_ids),
-            },
-            "archived_tool_outputs": max(0, self.tool_calls - 4),
-        }
 
     def summary(self) -> str:
         """What replaces archived exchanges: the digest of what each tool call found."""

@@ -15,4 +15,4 @@ Fast and Adaptive research paths. A fixed LangGraph workflow (retrieve → infer
 
 harness_extraction, harness_corpus, harness_graphstore, harness_semantic, harness_prompts.
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

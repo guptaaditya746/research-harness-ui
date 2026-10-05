@@ -11,4 +11,4 @@ Typed settings for every environment variable the harness reads. `settings()` re
 
 nothing (lowest layer).
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.

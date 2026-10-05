@@ -11,4 +11,4 @@ The run contract shared by API, UI and evaluation. Pydantic models (`Run`, `Read
 
 nothing (lowest layer).
 
-See `AGENTS.md` for the repository map and conventions.
+See `AGENTS.md` in this folder (entry points, imports, test, rules) and the root `AGENTS.md`.
