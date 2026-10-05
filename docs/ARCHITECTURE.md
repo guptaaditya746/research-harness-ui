@@ -133,7 +133,7 @@ flowchart TD
 
 What the agent sees each turn: the system prompt with loaded skills, the question, the grounded context
 (the chosen concept and its evidence passages), a curated set of about 14 non-overlapping tools
-(`CURATED_TOOLS` in `mcp.py`), the local `record_finding` tool, and the exchanges so far.
+(`CURATED_TOOLS` in `decisions.py`), the local `record_finding` tool, and the exchanges so far.
 
 - Tool results older than the last `HARNESS_AGENT_KEEP_RESULTS` (3) exchanges are shown as short digests
   (observation masking).

@@ -25,7 +25,7 @@ from typing import Any
 from harness_extraction import complete, model_purpose
 from harness_prompts import render
 
-from .mcp import validate_findings
+from .decisions import validate_findings
 
 PASSAGE_CHARS = 1200
 LOGGER = logging.getLogger(__name__)

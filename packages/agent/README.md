@@ -6,7 +6,9 @@ Agentic research path. Before research, passages are retrieved and the agent pro
 
 - `research.py` — `AgenticResearch.run`: the named steps of one run
 - `proposal.py`, `concepts.py` — concept readings (retrieve first, hide ungrounded ones)
-- `mcp.py` — `MCPToolClient`, the agent tool loop (curated tools, tool budget, `record_finding`, summary compaction), decision and finding validation
+- `mcp.py` — `MCPToolClient`: MCP sessions, single and batched tool calls, the agent phase deadline
+- `tool_loop.py` — `ToolLoop`: one agent conversation (tool budget, forced first call, summary compaction, decision sent back once)
+- `decisions.py` — the curated tools, `record_finding`, and the checks of findings and of the final decision
 - `readers.py` — parallel paper readers (`HARNESS_SUBAGENT_READERS`)
 - `context.py`, `research_state.py` — context-window fitting (observation masking, token calibration), research ledger and findings
 - `verification.py` — independent verifier

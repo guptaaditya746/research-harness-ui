@@ -12,7 +12,7 @@ Start with `docs/ARCHITECTURE.md` for how a run flows, `docs/decisions/` for why
 | Fast and Adaptive research pipeline | `packages/baseline/src/harness_baseline/` (`pipeline.py` wires `retrieval.py`, `research_steps.py`, `facts.py`, `outcomes.py`) |
 | Question understanding (typed plan) | `packages/baseline/src/harness_baseline/planner.py` |
 | Agentic run steps | `packages/agent/src/harness_agent/research.py` |
-| Agent tool loop, context window | `packages/agent/src/harness_agent/mcp.py`, `context.py`, `research_state.py` |
+| Agent tool loop, context window | `packages/agent/src/harness_agent/tool_loop.py`, `decisions.py`, `mcp.py`, `context.py`, `research_state.py` |
 | Concept readings before agentic research | `packages/agent/src/harness_agent/concepts.py`, `proposal.py` |
 | Model calls (client, retries, cancellation, events) | `packages/extraction/src/harness_extraction/model_client.py`, `call_control.py`, `events.py` |
 | Schema inference, extraction, review, answer | `packages/extraction/src/harness_extraction/engine.py` |

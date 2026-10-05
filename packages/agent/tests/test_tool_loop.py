@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from typing import ClassVar
 
 import harness_agent.mcp as mcp_module
+import harness_agent.tool_loop as tool_loop_module
 from harness_agent.mcp import MCPToolClient
 
 SEARCH = {"total": 1, "items": [{"passage_id": "p4-intro", "paper_id": "p4", "text": "We introduce VPP."}]}
@@ -85,7 +86,7 @@ def run_loop(monkeypatch, script: list[dict]) -> tuple[str, FakeSession, list[di
 
     monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
     monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
-    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", ScriptedModelClient)
+    monkeypatch.setattr(tool_loop_module.httpx, "AsyncClient", ScriptedModelClient)
     monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", "32000")
     ScriptedModelClient.script = list(script)
     ScriptedModelClient.sent = []
@@ -244,7 +245,7 @@ def test_near_the_limit_older_exchanges_become_a_summary(monkeypatch) -> None:
 
     monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
     monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
-    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", ScriptedModelClient)
+    monkeypatch.setattr(tool_loop_module.httpx, "AsyncClient", ScriptedModelClient)
     ScriptedModelClient.script = [tool_call("search_evidence", {"query": f"q{i}"}, f"call-{i}") for i in range(3)] + [
         final({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "done"})]
     ScriptedModelClient.sent = []
@@ -299,7 +300,7 @@ def _summary_run(monkeypatch, keep: str, calls: int) -> tuple[SummaryModel, list
 
     monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
     monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
-    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", ScriptedModelClient)
+    monkeypatch.setattr(tool_loop_module.httpx, "AsyncClient", ScriptedModelClient)
     ScriptedModelClient.script = [tool_call("search_evidence", {"query": f"q{i}"}, f"call-{i}")
                                   for i in range(calls)] + [
         final({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "done"})]
@@ -348,7 +349,7 @@ def test_a_slow_summary_does_not_outlive_the_agent_phase(monkeypatch) -> None:
 
     monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
     monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
-    monkeypatch.setattr(mcp_module.httpx, "AsyncClient", ScriptedModelClient)
+    monkeypatch.setattr(tool_loop_module.httpx, "AsyncClient", ScriptedModelClient)
     ScriptedModelClient.script = [tool_call("search_evidence", {"query": f"q{i}"}, f"call-{i}") for i in range(4)] + [
         final({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "done"})]
     model = SlowSummaryModel(model="granite", base_url="http://model", api_key="k", timeout_s=30)

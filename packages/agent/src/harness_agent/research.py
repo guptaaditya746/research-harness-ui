@@ -33,9 +33,10 @@ from harness_config import settings
 from harness_observability import record_tool_call
 from harness_schema.models import Check, ConceptChoice, Run, TraceRow, required_artifacts
 
+from .decisions import id_list, validate_findings
 from .evidence import evidence_ids
 from .load import heavy_queue_depth
-from .mcp import MCPToolClient, MCPUnavailable, id_list, validate_findings
+from .mcp import MCPToolClient, MCPUnavailable
 from .proposal import ConceptProposalStep
 from .readers import choose_papers, run_readers
 from .verification import independent_verification
