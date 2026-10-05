@@ -1147,6 +1147,7 @@ dependencies = [
     { name = "harness-schema" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "tqdm" },
 ]
 
 [package.metadata]
@@ -1159,6 +1160,7 @@ requires-dist = [
     { name = "harness-schema", editable = "packages/schema" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=1.0,<2.0" },
+    { name = "tqdm", specifier = ">=4.66" },
 ]
 
 [[package]]

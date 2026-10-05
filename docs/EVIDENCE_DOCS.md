@@ -44,6 +44,22 @@ For each interpretation:
    extraction, definition and mapping, as in a research run, with the graph settings below.
 4. **Claims and files.** The answer key is left for review.
 
+**Watching a build.** In a terminal each stage shows a bar: papers screened (with the number found
+relevant) and then passages extracted (with the triples found), the rate, the time left, and the model
+calls finished, failed and in flight. Without a terminal (or with `--no-bar`) a line is printed about
+every 5%. While a single long call runs (interpretations, schema inference) a line every 20 s says
+what it is waiting on. `progress.json` in the question's folder holds the same numbers, so from
+another shell:
+
+```sh
+make evidence-docs ARGS="--status"                        # one line per question
+watch -n 10 cat datasets/evidence_docs/nlp33/progress.json
+```
+
+For a quick trial before the full build, `ARGS="--only nlp33 --max-papers 20"` screens only the
+first 20 papers (the cache keeps them, so the full build continues from there). The main lever on
+time is `HARNESS_DOC_CONCURRENCY` (papers at once), as far as the model server keeps up.
+
 Progress is appended to `cache.jsonl` in the question's folder after every paper, so a stopped build
 resumes where it stopped and a finished one is rebuilt without model calls. Delete the folder to
 start a question again. Building has no run deadline; `HARNESS_DOC_CALL_TIMEOUT_S` bounds each call

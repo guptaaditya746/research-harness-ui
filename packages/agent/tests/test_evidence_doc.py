@@ -139,3 +139,48 @@ def test_screening_falls_back_to_reading_order(tmp_path) -> None:
     corpus = _store(tmp_path / "corpus")
     rows, selection = screening_rows(corpus, "claim verification", "p99", 4)
     assert selection == "first_passages" and [row["passage_id"] for row in rows] == ["p99-0"]
+
+
+def test_progress_is_logged_written_and_reported_by_status(tmp_path, capsys) -> None:
+    from harness_agent.evidence_doc import main, print_status
+
+    corpus = _store(tmp_path / "corpus")
+    lines: list[str] = []
+    folder = DocumentBuilder(corpus, _models(Model()), tmp_path / "docs", log=lines.append, bar=False).build(
+        {"id": "x4", "category": "corpus_wide", "question": "Which methods use which datasets for claim verification?"})
+    text = "\n".join(lines)
+    assert "i1: screening: 3 papers, 3 to go" in text
+    assert "i1: screening 3/3 · relevant 1" in text                  # a line at the end of the stage
+    assert "i1: extraction (1 papers): 2 passages, 2 to go" in text
+    assert "i1: extraction (1 papers) done in" in text and "triples 2" in text
+    state = json.loads((folder / "progress.json").read_text())
+    # Stub models emit no model events (the real client does); the counters are there either way.
+    assert state["stage"] == "done" and set(state["model_calls"]) == {"finished", "failed", "in_flight"}
+    assert state["counts"] == {"triples": 2} and state["done"] == state["total"] == 2
+    print_status(tmp_path / "docs")
+    assert capsys.readouterr().out.startswith("x4         done")
+    # A resumed build says what it skipped.
+    lines.clear()
+    DocumentBuilder(corpus, _models(NoCalls()), tmp_path / "docs", log=lines.append, bar=False).build(
+        {"id": "x4", "category": "corpus_wide", "question": "Which methods use which datasets for claim verification?"})
+    assert any("3 already done (resumed)" in line for line in lines)
+    assert main(["--status", "--out", str(tmp_path / "docs")]) == 0
+
+
+def test_model_events_count_calls_and_a_pending_call_gets_a_heartbeat(tmp_path) -> None:
+    import time
+
+    from harness_agent.evidence_doc import Progress
+
+    lines: list[str] = []
+    progress = Progress(tmp_path, "x5", bar=False, log=lines.append, heartbeat_s=0.05)
+    progress.phase("i1", "schema inference")
+    progress.on_model_event("Model call started", "heavy-model · schema inference")
+    time.sleep(0.2)
+    progress.on_model_event("Model call finished", "heavy-model · schema inference · 3.1s")
+    progress.on_model_event("Model call failed", "heavy-model · timed out")
+    progress.close()
+    assert any("waiting on 1 model call(s): heavy-model · schema inference" in line for line in lines)
+    assert any("model call failed: heavy-model · timed out" in line for line in lines)
+    assert json.loads((tmp_path / "progress.json").read_text())["model_calls"] == {
+        "finished": 1, "failed": 1, "in_flight": 0}

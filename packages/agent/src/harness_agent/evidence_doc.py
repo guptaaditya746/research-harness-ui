@@ -22,6 +22,12 @@ build resumes where it stopped. Settings: ``HARNESS_DOC_*`` (.env.example) and t
 evidence-docs`` uses the ``exhaustive`` profile unless another is named.
 
     make evidence-docs ARGS="--only nlp33,nlp48"
+    make evidence-docs ARGS="--only nlp33 --max-papers 20"     # a quick trial on 20 papers
+    make evidence-docs ARGS="--status"                          # progress of every question, from another shell
+
+Progress: a bar per stage (papers done, rate, time left, relevant papers or triples so far, model calls)
+when the output is a terminal, a line every 10 papers otherwise, a line while a long model call is
+pending, and ``progress.json`` in the question's folder (read by ``--status``).
 """
 
 from __future__ import annotations
@@ -36,6 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from harness_baseline.backbone import schema_terms, subschema_slice
@@ -47,11 +54,13 @@ from harness_extraction import (
     OpenAICompatibleModel,
     SchemaInference,
     local_name,
+    model_events,
 )
 from harness_extraction.claims import build_claims
 from harness_schema.models import Triple
 from harness_semantic import hand_written_subschema
 from rdflib import RDFS, URIRef
+from tqdm import tqdm
 
 from .concepts import ConceptProposalError, propose_grounded
 from .readers import read_paper
@@ -172,21 +181,204 @@ def _relation_spec(engine: ExtractionEngine, name: str) -> dict[str, str] | None
     }
 
 
+def _clock(seconds: float) -> str:
+    seconds = int(max(0, seconds))
+    return f"{seconds // 3600:d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
+
+
+class Progress:
+    """What a build is doing, for a person watching: bars, lines, and ``progress.json``.
+
+    Counts every model call through the harness's model events (started, finished, failed), so a stage
+    that waits on one slow call still shows life: while no bar is open, a line is printed every
+    ``heartbeat_s`` seconds a call is pending.
+    """
+
+    def __init__(self, folder: Path, question_id: str, *, bar: bool | None = None,
+                 log: Callable[[str], None] = print, heartbeat_s: float = 20.0) -> None:
+        self.file = folder / "progress.json"
+        self.question_id = question_id
+        self.bar_on = sys.stderr.isatty() if bar is None else bar
+        self.log_line = log
+        self.started = monotonic()
+        self.started_at = datetime.now(UTC).isoformat(timespec="seconds")
+        self.lock = threading.RLock()
+        self.calls = {"finished": 0, "failed": 0, "in_flight": 0}
+        self.waiting_on = ""
+        self.state: dict[str, Any] = {"question": question_id, "interpretation": None, "stage": "starting",
+                                      "done": 0, "total": 0, "cached_at_start": 0, "counts": {}}
+        self.bar: tqdm | None = None
+        self.stage_started = monotonic()
+        self.last_write = 0.0
+        self.stop = threading.Event()
+        self.heartbeat_s = heartbeat_s
+        self.thread = threading.Thread(target=self._heartbeat, name="evidence-doc-progress", daemon=True)
+        self.thread.start()
+
+    # Model calls -------------------------------------------------------------------------------
+    def on_model_event(self, action: str, detail: str) -> None:
+        with self.lock:
+            if action == "Model call started":
+                self.calls["in_flight"] += 1
+                self.waiting_on = detail
+            elif action in {"Model call finished", "Model call failed"}:
+                self.calls["in_flight"] = max(0, self.calls["in_flight"] - 1)
+                self.calls["finished" if action == "Model call finished" else "failed"] += 1
+                if action == "Model call failed":
+                    self.log(f"model call failed: {detail[:200]}")
+            self._refresh()
+
+    # Stages --------------------------------------------------------------------------------------
+    def log(self, text: str) -> None:
+        line = f"[{_clock(monotonic() - self.started)}] {self.question_id}: {text}"
+        if self.bar is not None:
+            self.bar.write(line)
+        else:
+            self.log_line(line)
+
+    def phase(self, interpretation: str | None, name: str) -> None:
+        """A step without a count (choosing interpretations, schema inference)."""
+        with self.lock:
+            self.state.update({"interpretation": interpretation, "stage": name, "done": 0, "total": 0,
+                               "cached_at_start": 0})
+            self.stage_started = monotonic()
+            self.log(f"{interpretation + ': ' if interpretation else ''}{name}")
+            self._write(force=True)
+
+    def start(self, interpretation: str, name: str, total: int, cached: int, unit: str = "paper") -> None:
+        with self.lock:
+            self.state.update({"interpretation": interpretation, "stage": name, "done": cached, "total": total,
+                               "cached_at_start": cached, "counts": {}})
+            self.stage_started = monotonic()
+            todo = total - cached
+            self.log(f"{interpretation}: {name}: {total} {unit}s"
+                     + (f", {cached} already done (resumed)" if cached else "")
+                     + (f", {todo} to go, {settings().doc_concurrency} at a time" if todo else ""))
+            if self.bar_on and todo:
+                self.bar = tqdm(total=total, initial=cached, desc=f"{self.question_id}/{interpretation} {name}",
+                                unit=unit, dynamic_ncols=True, smoothing=0.1, file=sys.stderr)
+            self._write(force=True)
+
+    def advance(self, amount: int = 1, **counts: int) -> None:
+        """``amount`` items done; ``counts`` are added to the stage's running totals (relevant=1, triples=7).
+        Without a bar, a line is printed about every 5% (at least every 10 items) and at the end."""
+        with self.lock:
+            before = self.state["done"]
+            self.state["done"] += amount
+            for key, value in counts.items():
+                self.state["counts"][key] = self.state["counts"].get(key, 0) + value
+            step = max(10, self.state["total"] // 20)
+            if self.bar is not None:
+                self.bar.update(amount)
+                self._refresh()
+            elif before // step != self.state["done"] // step or self.state["done"] >= self.state["total"]:
+                eta = self._eta()
+                totals = ", ".join(f"{key} {value}" for key, value in self.state["counts"].items())
+                self.log(f"{self.state['interpretation']}: {self.state['stage']} {self.state['done']}/"
+                         f"{self.state['total']}" + (f" · {totals}" if totals else "")
+                         + (f" · about {_clock(eta)} left" if eta is not None else ""))
+            self._write()
+
+    def finish(self) -> None:
+        with self.lock:
+            if self.bar is not None:
+                self.bar.close()
+                self.bar = None
+            totals = ", ".join(f"{key} {value}" for key, value in self.state["counts"].items())
+            self.log(f"{self.state['interpretation']}: {self.state['stage']} done in "
+                     f"{_clock(monotonic() - self.stage_started)}" + (f" · {totals}" if totals else ""))
+            self._write(force=True)
+
+    def close(self, status: str = "done") -> None:
+        self.stop.set()
+        with self.lock:
+            if self.bar is not None:
+                self.bar.close()
+                self.bar = None
+            self.state["stage"] = status
+            self._write(force=True)
+
+    # Internals -------------------------------------------------------------------------------------
+    def _eta(self) -> float | None:
+        new = self.state["done"] - self.state["cached_at_start"]
+        left = self.state["total"] - self.state["done"]
+        elapsed = monotonic() - self.stage_started
+        return elapsed / new * left if new > 0 and left > 0 else None
+
+    def _refresh(self) -> None:
+        if self.bar is None:
+            return
+        postfix = dict(self.state["counts"])
+        postfix["calls"] = self.calls["finished"]
+        if self.calls["failed"]:
+            postfix["failed"] = self.calls["failed"]
+        postfix["waiting"] = self.calls["in_flight"]
+        self.bar.set_postfix(postfix, refresh=False)
+
+    def _write(self, force: bool = False) -> None:
+        now = monotonic()
+        if not force and now - self.last_write < 2.0:
+            return
+        self.last_write = now
+        eta = self._eta()
+        data = {**self.state, "model_calls": dict(self.calls), "started_at": self.started_at,
+                "elapsed_s": round(now - self.started), "stage_elapsed_s": round(now - self.stage_started),
+                "eta_s": round(eta) if eta is not None else None,
+                "updated_at": datetime.now(UTC).isoformat(timespec="seconds")}
+        try:
+            self.file.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.file.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, indent=2) + "\n")
+            tmp.replace(self.file)
+        except OSError:
+            pass                                       # progress is advisory
+
+    def _heartbeat(self) -> None:
+        while not self.stop.wait(self.heartbeat_s):
+            with self.lock:
+                if self.bar is None and self.calls["in_flight"]:
+                    self.log(f"waiting on {self.calls['in_flight']} model call(s): {self.waiting_on} "
+                             f"({_clock(monotonic() - self.stage_started)} in this step)")
+                self._write(force=True)
+
+
 class DocumentBuilder:
     """Builds and writes the evidence document of one question (see the module docstring)."""
 
     def __init__(self, corpus: CorpusStore, models: DocModels, out_root: Path,
-                 log: Callable[[str], None] = print) -> None:
+                 log: Callable[[str], None] = print, bar: bool | None = False) -> None:
         self.corpus = corpus
         self.models = models
         self.out_root = out_root
         self.log = log
+        self.bar = bar
+        self.progress: Progress | None = None
+
+    def _note(self, text: str) -> None:
+        if self.progress is not None:
+            self.progress.log(text)
+        else:
+            self.log(text)
 
     def build(self, row: dict[str, Any]) -> Path:
         folder = self.out_root / str(row["id"])
+        self.progress = Progress(folder, str(row["id"]), bar=self.bar, log=self.log)
+        try:
+            with model_events(self.progress.on_model_event):
+                path = self._build(row, folder)
+        except BaseException:
+            self.progress.close("failed")
+            raise
+        self.progress.close("done")
+        return path
+
+    def _build(self, row: dict[str, Any], folder: Path) -> Path:
         cache = Cache(folder / "cache.jsonl")
+        assert self.progress is not None
+        if cache.get("interpretations") is None and row.get("category") == "ambiguous":
+            self.progress.phase(None, "the agent proposes interpretations")
         readings = interpretations(row, self.models, self.corpus, cache)
-        self.log(f"{row['id']}: {len(readings)} interpretation(s)")
+        self._note(f"{len(readings)} interpretation(s): " + "; ".join(item["label"] for item in readings))
         built = [self._interpretation(row, reading, cache, folder) for reading in readings]
         document = {
             "version": DOC_VERSION,
@@ -203,8 +395,8 @@ class DocumentBuilder:
         folder.mkdir(parents=True, exist_ok=True)
         (folder / "doc.json").write_text(json.dumps(document, ensure_ascii=False, indent=2) + "\n")
         (folder / "doc.md").write_text(render_markdown(document))
-        self.log(f"{row['id']}: {document['counts']['triples']} triples, {document['counts']['claims']} claims "
-                 f"-> {folder / 'doc.json'}")
+        self._note(f"{document['counts']['triples']} triples, {document['counts']['claims']} claims "
+                   f"-> {folder / 'doc.json'}")
         return folder
 
     def _papers(self) -> list[str]:
@@ -222,20 +414,22 @@ class DocumentBuilder:
         seed_properties = set(engine.property_names)
 
         # Schema: proposed once, then replayed from the cache.
+        assert self.progress is not None
         stored = cache.get(f"schema:{iid}")
         if stored:
             inferred = engine.apply_schema(SchemaInference.model_validate(stored), question)
         else:
+            self.progress.phase(iid, "schema inference")
             sample = self.corpus.hybrid_rank(question, limit=config.doc_schema_passages)["items"]
             inferred = engine.infer_schema(question, sample)
             cache.put(f"schema:{iid}", inferred.model_dump())
-        self.log(f"{row['id']}/{iid}: schema {len(inferred.classes)} classes, {len(inferred.properties)} properties")
+        self._note(f"{iid}: schema with {len(inferred.classes)} classes, {len(inferred.properties)} properties")
 
         papers = self._papers()
         concept = None if reading.get("source") == "question" else reading
         coverage = self._screen(row, iid, question, concept, papers, cache)
         relevant = [paper for paper in papers if coverage[paper]["status"] == "relevant"]
-        self.log(f"{row['id']}/{iid}: {len(relevant)} of {len(papers)} papers relevant")
+        self._note(f"{iid}: {len(relevant)} of {len(papers)} papers relevant")
         extracted = self._extract(row, iid, question, inferred, engine, relevant, coverage, cache)
 
         kept = [name for name in engine.kept_relations if name not in inferred.properties]
@@ -282,11 +476,15 @@ class DocumentBuilder:
                 cache: Cache) -> dict[str, dict[str, Any]]:
         limit = settings().doc_screen_passages
         coverage: dict[str, dict[str, Any]] = {}
-        done = [0]
+        progress = self.progress
+        assert progress is not None
+        cached = sum(1 for paper in papers if cache.get(f"screen:{iid}:{paper}") is not None)
+        progress.start(iid, "screening", len(papers), cached)
 
         def screen(paper: str) -> None:
             key = f"screen:{iid}:{paper}"
             stored = cache.get(key)
+            was_cached = stored is not None
             if stored is None:
                 rows, selection = screening_rows(self.corpus, question, paper, limit)
                 title = self.corpus.paper_title(paper)
@@ -303,14 +501,15 @@ class DocumentBuilder:
                     if status == "error":
                         # A failed reader is retried on the next build, not recorded as an answer.
                         coverage[paper] = stored
+                        progress.advance(errors=1)
                         return
                 cache.put(key, stored)
             coverage[paper] = stored
-            done[0] += 1
-            if done[0] % 25 == 0:
-                self.log(f"{row['id']}/{iid}: screened {done[0]}/{len(papers)}")
+            if not was_cached:
+                progress.advance(relevant=int(stored["status"] == "relevant"))
 
         self._parallel(screen, papers)
+        progress.finish()
         return coverage
 
     def _extract(self, row: dict[str, Any], iid: str, question: str, inferred: SchemaInference,
@@ -331,25 +530,41 @@ class DocumentBuilder:
                                                range_name=spec["range"], parent=spec.get("parent") or None)
                 engine.kept_relations.setdefault(spec["name"], spec["name"])
 
+        def selected(paper: str) -> list[dict[str, Any]]:
+            passages = paper_passages(self.corpus, paper)
+            if not config.doc_extract_passages:
+                return passages
+            wanted = {pid for finding in coverage[paper].get("findings", []) for pid in finding["evidence_ids"]}
+            ranked = screening_rows(self.corpus, question, paper, config.doc_extract_passages)[0]
+            wanted |= {str(item["passage_id"]) for item in ranked}
+            return [item for item in passages if str(item["passage_id"]) in wanted]
+
+        progress = self.progress
+        assert progress is not None
+        # Progress counts passages, the unit of work: a paper can have a hundred.
+        todo = {paper: selected(paper) for paper in papers if cache.get(f"extract:{iid}:{paper}") is None}
+        done_before = sum(int((cache.get(f"extract:{iid}:{paper}") or {}).get("passages", 0))
+                          for paper in papers if paper not in todo)
+        progress.start(iid, f"extraction ({len(papers)} papers)", done_before + sum(map(len, todo.values())),
+                       done_before, unit="passage")
+
         def extract(paper: str) -> None:
             key = f"extract:{iid}:{paper}"
             stored = cache.get(key)
             if stored is None:
-                passages = paper_passages(self.corpus, paper)
-                if config.doc_extract_passages:
-                    wanted = {pid for finding in coverage[paper].get("findings", []) for pid in finding["evidence_ids"]}
-                    ranked = screening_rows(self.corpus, question, paper, config.doc_extract_passages)[0]
-                    wanted |= {str(item["passage_id"]) for item in ranked}
-                    passages = [item for item in passages if str(item["passage_id"]) in wanted]
+                passages = todo[paper]
                 size = config.edc_batch_passages
                 triples: list[ExtractedTriple] = []
                 errors: list[str] = []
                 for start in range(0, len(passages), size):
+                    batch = passages[start:start + size]
                     try:
-                        result, _ = engine.extract_edc(question, inferred, passages[start:start + size])
+                        result, _ = engine.extract_edc(question, inferred, batch)
                         triples.extend(result.triples)
+                        progress.advance(len(batch), triples=len(result.triples))
                     except Exception as exc:  # noqa: BLE001 - one failed batch is recorded, not fatal
                         errors.append(f"{type(exc).__name__}: {exc}"[:300])
+                        progress.advance(len(batch), errors=1)
                 if errors and not triples:
                     coverage[paper]["extraction_errors"] = errors
                     return                                     # retried on the next build
@@ -363,6 +578,7 @@ class DocumentBuilder:
                 coverage[paper]["extraction_errors"] = stored["errors"]
 
         self._parallel(extract, papers)
+        progress.finish()
         return {paper: found[paper] for paper in papers if paper in found}
 
     def _merge(self, extracted: dict[str, list[ExtractedTriple]]) -> list[dict[str, Any]]:
@@ -450,6 +666,36 @@ def render_markdown(document: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip() + "\n"
 
 
+def print_status(out_root: Path) -> None:
+    """One line per question folder: its stage, how far, and how long is left."""
+    folders = sorted(path for path in out_root.glob("*") if path.is_dir()) if out_root.exists() else []
+    if not folders:
+        print(f"no evidence documents under {out_root}")
+        return
+    for folder in folders:
+        state: dict[str, Any] = {}
+        try:
+            state = json.loads((folder / "progress.json").read_text())
+        except (OSError, ValueError):
+            pass
+        done = (folder / "doc.json").exists()
+        stage = state.get("stage") or ("done" if done else "not started")
+        line = f"{folder.name:10} {stage}"
+        if state.get("total"):
+            line += f" {state['interpretation']} {state['done']}/{state['total']}"
+        counts = state.get("counts") or {}
+        if counts:
+            line += " · " + ", ".join(f"{key} {value}" for key, value in counts.items())
+        calls = state.get("model_calls") or {}
+        if calls:
+            line += f" · calls {calls.get('finished', 0)}" + (f", failed {calls['failed']}" if calls.get("failed") else "")
+        if state.get("eta_s") is not None and stage not in {"done", "failed"}:
+            line += f" · about {_clock(state['eta_s'])} left"
+        if state.get("updated_at"):
+            line += f" · updated {state['updated_at']}"
+        print(line)
+
+
 def load_questions(path: Path) -> list[dict[str, Any]]:
     rows = json.loads(path.read_text())
     return rows if isinstance(rows, list) else rows.get("questions", [])
@@ -462,14 +708,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--questions", type=Path, default=datasets / config.doc_question_set)
     parser.add_argument("--only", default="", help="comma-separated question ids")
     parser.add_argument("--out", type=Path, default=config.doc_root or datasets / "evidence_docs")
+    parser.add_argument("--max-papers", type=int, default=None,
+                        help="screen only the first N papers (a trial; overrides HARNESS_DOC_MAX_PAPERS)")
+    parser.add_argument("--status", action="store_true", help="print each question's progress and exit")
+    parser.add_argument("--no-bar", action="store_true", help="progress as lines instead of bars")
     args = parser.parse_args(argv)
+    if args.status:
+        print_status(args.out)
+        return 0
+    if args.max_papers is not None:
+        import os
+
+        os.environ["HARNESS_DOC_MAX_PAPERS"] = str(args.max_papers)
     questions = load_questions(args.questions)
     if args.only:
         wanted = {item.strip() for item in args.only.split(",") if item.strip()}
         questions = [row for row in questions if row.get("id") in wanted]
     corpus = CorpusStore(config.corpus_root or ROOT / "corpus_data")
     builder = DocumentBuilder(corpus, DocModels.from_settings(), args.out,
-                              log=lambda text: print(text, flush=True))
+                              log=lambda text: print(text, flush=True), bar=False if args.no_bar else None)
+    print(f"{len(questions)} question(s), {len(corpus.papers)} papers in the corpus, "
+          f"{settings().doc_concurrency} at a time; documents in {args.out}", flush=True)
     failed = []
     for row in questions:
         try:
@@ -485,4 +744,5 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
-__all__ = ["Cache", "DocModels", "DocumentBuilder", "interpretations", "render_markdown", "screening_rows"]
+__all__ = ["Cache", "DocModels", "DocumentBuilder", "Progress", "interpretations", "print_status", "render_markdown",
+           "screening_rows"]
