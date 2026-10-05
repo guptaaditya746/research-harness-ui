@@ -450,38 +450,69 @@ class AgenticResearch(ConceptProposalStep):
         session.base_run = session.result["run"]
 
     def _review_decision(self, session: _Session) -> None:
+        """Check the agent's decision (claim ids, evidence ids), ask the independent verifier, and set
+        ``session.mcp_error`` when the decision cannot shape the answer."""
         base_run = session.base_run
         assert base_run is not None and session.result is not None
-        decision = session.agent_decision
-        if not decision or session.mcp_error:
+        if not session.agent_decision or session.mcp_error:
             return
-        verified = decision.get("verified_claim_ids")
-        supplied = decision.get("additional_evidence_ids")
-        if isinstance(supplied, list):
-            supplied = id_list(supplied)   # the same normalisation as the seeds (strings, stripped)
-        if isinstance(supplied, list) and session.findings:
-            # Findings cite evidence too; the verifier checks those ids as well.
-            supplied = list(dict.fromkeys([*supplied, *(value for finding in session.findings
-                                                        for value in finding["evidence_ids"])]))
-            notes = "; ".join(f"{finding['statement']} [{', '.join(finding['evidence_ids'])}]"
-                              for finding in session.findings)
-            decision = {**decision, "reasoning_summary": f"{decision.get('reasoning_summary') or ''} "
-                                                         f"Findings: {notes}".strip()}
+        decision, verified, supplied = self._decision_with_findings(session)
         if not isinstance(verified, list) or not isinstance(supplied, list):
             session.mcp_error = "invalid_agent_decision_shape"
             session.agent_checks.append(Check(
                 name="agent decision", status="fail",
                 detail="decision JSON lacks verified_claim_ids / additional_evidence_ids lists"))
             return
-        unknown_claims = [str(item) for item in verified if item not in session.shown_claim_ids]
-        verified = [item for item in verified if item in session.shown_claim_ids]
+        verified, unknown_claims = self._check_claim_ids(session, verified)
+        cited, unobserved = self._check_evidence_ids(session, supplied)
+        if base_run.status == "incomplete":
+            session.agent_checks.append(Check(
+                name="independent verification", status="skipped",
+                detail="shared research stopped before an answer could be verified",
+            ))
+        elif verified or cited:
+            # A second opinion from a fresh context: does the cited evidence
+            # actually support what the agent decided? Advisory, never a gate.
+            session.independent, check = self._independent_verification(
+                session.question, decision, verified, cited, session.corpus_calls, base_run,
+            )
+            session.agent_checks.append(check)
+        self._apply_decision(session, verified, unknown_claims, cited, unobserved)
+
+    @staticmethod
+    def _decision_with_findings(session: _Session) -> tuple[dict, Any, Any]:
+        """The decision with the findings' evidence added to its ids and their statements to its
+        summary (the verifier checks those too); returns it, its claim ids and its evidence ids."""
+        decision = session.agent_decision
+        verified = decision.get("verified_claim_ids")
+        supplied = decision.get("additional_evidence_ids")
+        if isinstance(supplied, list):
+            supplied = id_list(supplied)   # the same normalisation as the seeds (strings, stripped)
+        if isinstance(supplied, list) and session.findings:
+            supplied = list(dict.fromkeys([*supplied, *(value for finding in session.findings
+                                                        for value in finding["evidence_ids"])]))
+            notes = "; ".join(f"{finding['statement']} [{', '.join(finding['evidence_ids'])}]"
+                              for finding in session.findings)
+            decision = {**decision, "reasoning_summary": f"{decision.get('reasoning_summary') or ''} "
+                                                         f"Findings: {notes}".strip()}
+        return decision, verified, supplied
+
+    @staticmethod
+    def _check_claim_ids(session: _Session, verified: list) -> tuple[list, list[str]]:
+        unknown = [str(item) for item in verified if item not in session.shown_claim_ids]
+        known = [item for item in verified if item in session.shown_claim_ids]
         session.agent_checks.append(Check(
             name="agent claim IDs",
-            status="pass" if not unknown_claims else ("fail" if not verified else "warn"),
-            detail=(f"{len(verified)} preliminary claims confirmed" if not unknown_claims else
-                    f"{len(unknown_claims)} claim IDs are not in the preliminary graph and were ignored: "
-                    + ", ".join(unknown_claims[:5])),
+            status="pass" if not unknown else ("fail" if not known else "warn"),
+            detail=(f"{len(known)} preliminary claims confirmed" if not unknown else
+                    f"{len(unknown)} claim IDs are not in the preliminary graph and were ignored: "
+                    + ", ".join(unknown[:5])),
         ))
+        return known, unknown
+
+    @staticmethod
+    def _check_evidence_ids(session: _Session, supplied: list) -> tuple[list, list[str]]:
+        """Only ids observed in this session count, at most ``evidence_limit`` of them."""
         unobserved = [str(item) for item in supplied if str(item) not in session.observed]
         cited = [item for item in supplied if str(item) in session.observed]
         if len(cited) > session.evidence_limit:
@@ -500,18 +531,10 @@ class AgenticResearch(ConceptProposalStep):
                     f"{len(unobserved)} IDs were never returned by a tool and were rejected: "
                     + ", ".join(unobserved[:5])),
         ))
-        if base_run.status == "incomplete":
-            session.agent_checks.append(Check(
-                name="independent verification", status="skipped",
-                detail="shared research stopped before an answer could be verified",
-            ))
-        elif verified or cited:
-            # A second opinion from a fresh context: does the cited evidence
-            # actually support what the agent decided? Advisory, never a gate.
-            session.independent, check = self._independent_verification(
-                session.question, decision, verified, cited, session.corpus_calls, base_run,
-            )
-            session.agent_checks.append(check)
+        return cited, unobserved
+
+    def _apply_decision(self, session: _Session, verified: list, unknown_claims: list[str],
+                        cited: list, unobserved: list[str]) -> None:
         if unknown_claims and not verified and not cited:
             session.mcp_error = "agent_claim_id_not_in_preliminary_graph"
         elif unobserved and not cited and not verified:
@@ -526,7 +549,7 @@ class AgenticResearch(ConceptProposalStep):
             # The observed passage IDs were already supplied to the
             # shared pipeline before its first retrieval pass.
             pass
-        elif verified and base_run.chosen_reading is not None:
+        elif verified and session.base_run.chosen_reading is not None:
             self._narrow_to_verified_claims(session, verified)
         else:
             session.mcp_error = "agent_verified_no_claims"
@@ -617,24 +640,14 @@ class AgenticResearch(ConceptProposalStep):
         return checks
 
     def _assemble(self, session: _Session) -> dict[str, Any]:
+        """The agentic Run (the shared pipeline's run with the agent's checks, plans and trace) and its
+        artifacts."""
         base_run, result, mcp_error = session.base_run, session.result, session.mcp_error
         assert base_run is not None and result is not None
-        tool_calls = session.tool_calls
         decision = session.agent_decision if isinstance(session.agent_decision, dict) else {}
         plans = [str(decision.get("reasoning_summary"))] if decision.get("reasoning_summary") else []
-        plans.extend(f"MCP: {record['tool']}" for record in tool_calls if record.get("tool") != "mcp_session")
-        baseline_trace = [
-            row.model_copy(update={"at_s": round(row.at_s + session.baseline_started_s, 3)})
-            for row in base_run.trace
-        ]
-        trace = sorted(baseline_trace + session.trace, key=lambda row: row.at_s)
-        at_s = (trace[-1].at_s if trace else 0.0) + 0.01
-        for plan in plans:
-            row = TraceRow(atS=at_s, action="Agent planner lens", returned=plan)
-            self.trace_sink(row)
-            trace.append(row)
-            at_s += 0.01
-        ambiguous = base_run.status == "awaiting_reading"
+        plans.extend(f"MCP: {record['tool']}" for record in session.tool_calls if record.get("tool") != "mcp_session")
+        trace = self._merged_trace(session, plans)
         run = base_run.model_copy(
             update={
                 "checks": list(base_run.checks) + self._stage_checks(session),
@@ -658,6 +671,27 @@ class AgenticResearch(ConceptProposalStep):
                 ),
             }
         )
+        return {"run": run, "artifacts": self._agentic_artifacts(session, run, plans, trace, decision)}
+
+    def _merged_trace(self, session: _Session, plans: list[str]) -> list[TraceRow]:
+        """The pipeline's trace shifted to run time, merged with the agent's, then one row per plan."""
+        baseline_trace = [
+            row.model_copy(update={"at_s": round(row.at_s + session.baseline_started_s, 3)})
+            for row in session.base_run.trace
+        ]
+        trace = sorted(baseline_trace + session.trace, key=lambda row: row.at_s)
+        at_s = (trace[-1].at_s if trace else 0.0) + 0.01
+        for plan in plans:
+            row = TraceRow(atS=at_s, action="Agent planner lens", returned=plan)
+            self.trace_sink(row)
+            trace.append(row)
+            at_s += 0.01
+        return trace
+
+    def _agentic_artifacts(self, session: _Session, run: Run, plans: list[str], trace: list[TraceRow],
+                           decision: dict) -> dict[str, bytes]:
+        result, tool_calls = session.result, session.tool_calls
+        ambiguous = session.base_run.status == "awaiting_reading"
         artifacts = {
             name: result["artifacts"].get(name, b"")
             for name in required_artifacts("agentic")
@@ -692,13 +726,27 @@ class AgenticResearch(ConceptProposalStep):
         artifacts["ledger.json"] = json.dumps(shared_ledger, indent=2).encode()
         artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": 0.42 if ambiguous else None, "awaiting_reading": ambiguous}, indent=2).encode()
         artifacts["readings.json"] = json.dumps([r.model_dump(by_alias=True) for r in run.readings], indent=2).encode()
+        artifacts["verification.json"] = json.dumps(self._verification_record(session, run, decision),
+                                                    indent=2).encode()
+        artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in trace], indent=2).encode()
+        baseline_calls = result["artifacts"].get("tool_calls.jsonl", b"")
+        agent_calls = b"\n".join(
+            json.dumps(item, ensure_ascii=False, default=str).encode() for item in tool_calls
+        ) + (b"\n" if tool_calls else b"")
+        artifacts["tool_calls.jsonl"] = baseline_calls + agent_calls
+        artifacts["agent_draft.md"] = session.agent_final.encode()
+        return artifacts
+
+    @staticmethod
+    def _verification_record(session: _Session, run: Run, decision: dict) -> dict[str, Any]:
+        mcp_error = session.mcp_error
         supported = bool(run.readings) and all(
             triple.source and triple.evidence
             for reading in run.readings for triple in reading.triples
         ) and any(reading.triples for reading in run.readings)
         supplied_raw = decision.get("additional_evidence_ids")
         supplied = id_list(supplied_raw) if isinstance(supplied_raw, list) else []
-        artifacts["verification.json"] = json.dumps({
+        return {
             # Separate checks: provenance of the answer's triples is not the same
             # as a successful agentic execution.
             "triple_provenance": {
@@ -721,15 +769,7 @@ class AgenticResearch(ConceptProposalStep):
             "checks": [check.model_dump() for check in run.checks],
             "heavy_model_used": not session.heavy_busy and not bool(mcp_error),
             "agentic_degraded": bool(mcp_error),
-        }, indent=2).encode()
-        artifacts["trace.json"] = json.dumps([row.model_dump(by_alias=True) for row in trace], indent=2).encode()
-        baseline_calls = result["artifacts"].get("tool_calls.jsonl", b"")
-        agent_calls = b"\n".join(
-            json.dumps(item, ensure_ascii=False, default=str).encode() for item in tool_calls
-        ) + (b"\n" if tool_calls else b"")
-        artifacts["tool_calls.jsonl"] = baseline_calls + agent_calls
-        artifacts["agent_draft.md"] = session.agent_final.encode()
-        return {"run": run, "artifacts": artifacts}
+        }
 
     def _grounded_context(self, base_run: Run | None, concept: dict | None) -> dict:
         """What the agent knows before research, with optional preliminary claims.
