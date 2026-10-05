@@ -8,6 +8,7 @@ Fast and Adaptive research paths. A fixed LangGraph workflow (retrieve → infer
 - `retrieval.py`, `research_steps.py`, `facts.py`, `outcomes.py` — the steps (mixins)
 - `planner.py` — `QueryPlanner`, `PaperResolver`, operations and measures
 - `answer_graph.py` — the connected answer graph for the UI
+- `run_graph.py` — the RDF provenance graph of a run (seed facts, extracted triples)
 - `state.py` — pipeline state and early outcomes
 
 ## Depends on

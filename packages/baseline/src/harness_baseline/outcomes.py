@@ -9,7 +9,6 @@ import json
 import time
 from datetime import datetime
 from typing import Any
-from urllib.parse import quote
 
 from harness_config import settings
 from harness_extraction import (
@@ -20,7 +19,6 @@ from harness_extraction.claims import (
     classify_claim_relations,
     derive_query_claim,
     enrich_result_claims,
-    valid_edge,
 )
 from harness_graphstore import ProvenanceDataset
 from harness_observability import record_tool_call
@@ -32,11 +30,12 @@ from harness_schema.models import (
     Triple,
     required_artifacts,
 )
-from harness_semantic import DBLP, HRN, validate_subschema
-from rdflib import RDFS, XSD, Graph, Literal, URIRef
+from harness_semantic import validate_subschema
+from rdflib import Graph
 
 from . import answer_graph
 from .backbone import answer_paper_keys, backbone_triples, origin_of, schema_terms, subschema_slice
+from .run_graph import add_extracted, seed_rdf
 from .state import (
     BaselineState,
     CorpusAbsent,
@@ -161,174 +160,17 @@ class RunOutcomes:
         budget: str,
         state: BaselineState,
     ) -> tuple[Run, dict[str, bytes]]:
-        inferred = state["inferred"]
-        extracted = state["extracted"]
-        answer = state["answer"]
-        schema = self.extraction.schema
-        path = self.path_name
-        source_ids = {row["passage_id"] for row in state["passages"]}
-        source_ids |= {
-            str(row.get("source_id")) for row in self.corpus.fact_rows if row.get("source_id")
-        }
-        source_ids |= {str(row["reference_id"]) for row in self.corpus.references}
-        dataset = ProvenanceDataset(schema, source_ids)
-        ui_triples: list[Triple] = []
+        """The answered Run and its artifacts: graph, claims, answer text, checks, files."""
+        inferred, extracted, schema = state["inferred"], state["extracted"], self.extraction.schema
         backbone_on = settings().dblp_backbone
         # The papers this answer is about: the export and the backbone are limited to them.
         answer_keys = answer_paper_keys(self.corpus, [item.subject for item in extracted],
                                         [item.object for item in extracted],
                                         [item.source_id for item in extracted]) if backbone_on else []
-        seed_rows = self.corpus.seed_facts()
-        if backbone_on:
-            wanted = set(answer_keys)
-            seed_rows = [row for row in seed_rows if str(row.get("subject")) in wanted
-                         and (row.get("predicate") != "cites" or str(row.get("object")) in wanted)]
-        seed_rdf: list[tuple[Any, URIRef, Any]] = []
-        for row in seed_rows:
-            raw_predicate = str(row["predicate"])
-            predicate_name = {"author": "authoredBy"}.get(raw_predicate, raw_predicate)
-            if raw_predicate == "cites" and not self.corpus.canonical_paper_iri(str(row.get("object", ""))):
-                title = self.corpus.reference_title(str(row.get("source_id", "")))
-                if not title:
-                    continue
-                predicate_name = "citesTitle"
-            if not hasattr(HRN, predicate_name):
-                continue
-            local_predicate = URIRef(HRN[predicate_name])
-            predicate = URIRef(
-                {
-                    "title": DBLP.title,
-                    "authoredBy": DBLP.authoredBy,
-                    "year": DBLP.yearOfPublication,
-                    "venue": DBLP.publishedIn,
-                }.get(predicate_name, local_predicate)
-            )
-            subject_value = self.corpus.canonical_paper_iri(str(row["subject"])) or str(row["subject"])
-            subject = URIRef(
-                subject_value
-                if subject_value.startswith("https://dblp.org/rec/")
-                else f"https://harness.local/resource/{quote(subject_value, safe='')}"
-            )
-            expected = schema.graph.value(predicate, RDFS.range) or schema.graph.value(local_predicate, RDFS.range)
-            raw = title if predicate_name == "citesTitle" else row.get("object")
-            target_iri = self.corpus.canonical_paper_iri(str(raw))
-            object_ = Literal(raw) if predicate_name == "citesTitle" or (expected and str(expected).startswith(str(XSD))) else URIRef(
-                target_iri
-                or f"https://harness.local/resource/{quote(str(raw), safe='')}"
-            )
-            seed_rdf.append((subject, predicate, object_))
-        if seed_rdf:
-            dataset.add_event("corpus-seed", seed_rdf, sorted({str(row["source_id"]) for row in seed_rows}))
-        dropped = {"invalid edge": 0, "paper not indexed": 0}
-        for index, item in enumerate(extracted, start=1):
-            candidate = Triple(
-                s=item.subject, p=item.predicate, o=item.object,
-                support="1 passage", evidence=item.evidence, source=item.source_id,
-            )
-            if not valid_edge(candidate):
-                dropped["invalid edge"] += 1
-                continue
-            local_predicate = URIRef(HRN[item.predicate])
-            predicate = URIRef(
-                {
-                    "title": DBLP.title,
-                    "authoredBy": DBLP.authoredBy,
-                    "year": DBLP.yearOfPublication,
-                    "venue": DBLP.publishedIn,
-                }.get(item.predicate, local_predicate)
-            )
-            expected = schema.graph.value(predicate, RDFS.range) or schema.graph.value(local_predicate, RDFS.range)
-            subject_iri = self.corpus.canonical_paper_iri(item.subject)
-            object_iri = self.corpus.canonical_paper_iri(item.object)
-            if (
-                expected and str(expected) == str(HRN.Paper)
-                and not object_iri and item.object not in self.corpus.by_paper
-            ):
-                # A paper-valued relation must resolve to an indexed paper.
-                dropped["paper not indexed"] += 1
-                continue
-            object_ = (
-                Literal(item.object)
-                if expected and str(expected).startswith(str(XSD))
-                else URIRef(object_iri or f"https://harness.local/resource/{quote(item.object, safe='')}")
-            )
-            subject = URIRef(
-                subject_iri
-                or f"https://harness.local/resource/{quote(item.subject, safe='')}"
-            )
-            dataset.add_event(f"extract-{index}", [(subject, predicate, object_)], [item.source_id])
-            ui_triples.append(
-                Triple(
-                    s=subject_iri or item.subject,
-                    p=item.predicate,
-                    o=object_iri or item.object,
-                    support="1 passage",
-                    evidence=item.evidence,
-                    source=item.source_id,
-                    tripleId=f"t-{index:03d}",
-                )
-            )
-        lost = ", ".join(f"{count} {why}" for why, count in dropped.items() if count)
-        if not ui_triples:
-            # Nothing the answer could cite reached the graph: an honest "no results", not an answer
-            # without facts.
-            raise NoResults(f"none of the {len(extracted)} extracted triples could enter the answer graph ({lost}); "
-                            "a paper-valued relation must name an indexed paper")
-        if lost:
-            self._emit("Graph building dropped triples", f"{lost} of {len(extracted)}")
-
-        def paper_for_source(source_id: str, subject: str) -> str:
-            row = self.corpus.by_passage.get(source_id)
-            paper_id = str(row["paper_id"]) if row else subject
-            return self.corpus.canonical_paper_iri(paper_id) or paper_id
-
-        claims, claim_relations = build_claims(ui_triples, paper_for_source)
-        if state["passages"] and any(claim.kind == "ResultClaim" for claim in claims):
-            try:
-                claims = enrich_result_claims(
-                    claims, state["passages"], self.refinement_model or self.extraction.model,
-                )
-                self._emit("Enriching claim context", f"{len(claims)} provenance-bearing claims")
-            except (ModelFailure, ValueError, TypeError) as exc:
-                self._emit("Claim context remains partial", type(exc).__name__)
-        claim_relations = classify_claim_relations(claims)
-        query_claim = derive_query_claim(question, claims)
-        if query_claim is not None:
-            claims.append(query_claim)
-        if answer.sentences:
-            # Sentences whose triples did not make it into the answer graph lose their support.
-            kept_sources = {triple.source for triple in ui_triples}
-            sentences = [item if item["verdict"] == "removed" or set(item["sourceIds"]) & kept_sources
-                         else {**item, "verdict": "removed", "reason": "its triples did not pass graph building"}
-                         for item in answer.sentences]
-            stated = [item for item in sentences if item["verdict"] != "removed"]
-            if stated:
-                answer = answer.model_copy(update={
-                    "sentences": sentences, "answer": " ".join(item["text"] for item in stated),
-                    "cited_source_ids": list(dict.fromkeys(s for item in stated for s in item["sourceIds"]))})
-            else:
-                answer = answer.model_copy(update={"sentences": []})     # falls back to the claim list below
-        # A verified answer (sentences with verdicts) is shown as written; an unverified one (Fast)
-        # is replaced by the list of source-backed claims.
-        if state.get("retrieval", {}).get("stop_reason") not in {"verified_facts", "external"} and claims \
-                and not answer.sentences:
-            grouped: dict[str, list[str]] = {}
-            for claim in claims:
-                if "object" not in claim.fields:
-                    continue
-                title = self.corpus.paper_title(claim.paper_id) or claim.paper_id
-                statement = claim.fields["object"].value
-                grouped.setdefault(title, []).append(
-                    f"{statement} [{', '.join(claim.source_ids)}]"
-                )
-            answer = answer.model_copy(update={
-                "answer": "The indexed papers report: " + " ".join(
-                    f"{title}: {'; '.join(statements)}."
-                    for title, statements in grouped.items()
-                ),
-                "cited_source_ids": sorted({source for claim in claims for source in claim.source_ids}),
-            })
-        plan = state.get("plan")
+        dataset, seed_rows = self._provenance(state, answer_keys if backbone_on else None)
+        ui_triples = self._answer_triples(dataset, extracted)
+        claims, claim_relations = self._claims(question, ui_triples, state["passages"])
+        answer = self._answer_text(state, state["answer"], ui_triples, claims)
         from_facts = state.get("retrieval", {}).get("stop_reason") == "verified_facts"
         backbone: list[Triple] = []
         if backbone_on and not from_facts:
@@ -346,18 +188,8 @@ class RunOutcomes:
         )
         terms = schema_terms(schema.graph, inferred.classes, inferred.properties,
                              sorted({triple.p for triple in [*ui_triples, *backbone]}))
-        supported = bool(ui_triples) and all(t.source.strip() and t.evidence.strip() for t in ui_triples)
-        self._check("triple provenance", "pass" if supported else "fail",
-                    f"{len(ui_triples)} triples, each with a source and evidence" if supported
-                    else "some triples lack a source or evidence")
-        if self.refine:
-            if state.get("retrieval", {}).get("stop_reason") == "verified_facts":
-                self._check("answer verification", "skipped", "answer composed directly from verified facts")
-            elif any(item.get("verdict") == "from_facts" for item in answer.sentences):
-                self._check("answer verification", "warn", "no composed sentence passed; the answer states the "
-                            "extracted facts, which evidence review kept")
-            else:
-                self._check("answer verification", "pass", "every sentence in the answer was checked against its triples")
+        self._answer_checks(ui_triples, answer, from_facts)
+        plan = state.get("plan")
         reading = Reading(
             measure=plan.stated_measure() if plan is not None else None,
             graph=graph,
@@ -378,6 +210,7 @@ class RunOutcomes:
             metrics=Metrics(),
             status="answered",
         )
+        path = self.path_name
         run = Run(
             id=run_id,
             startedAt=started_at,
@@ -398,6 +231,127 @@ class RunOutcomes:
         )
         report = validate_subschema(schema.graph)
         self._schema_check(report.conforms, terms, dataset.export_turtle())
+        artifacts = self._artifacts(run_id, state, answer, claims, claim_relations, terms, dataset, report)
+        if self.enhanced:
+            artifacts["seed_manifest.json"] = json.dumps(
+                {
+                    "facts": len(seed_rows),
+                    "seed_graph": "corpus-seed",
+                    "ontology": "dblp_schema_2024-06-14.ttl",
+                    "ontology_version": schema.seed_schema_version,
+                    "ontology_sha256": schema.seed_schema_sha256,
+                    "content_core": schema.content_core,
+                    "content_core_sha256": schema.content_core_sha256,
+                },
+                indent=2,
+            ).encode()
+        return run, artifacts
+
+    # ─── Graph ───────────────────────────────────────────────────────────────
+
+    def _provenance(self, state: BaselineState, answer_keys: list[str] | None
+                    ) -> tuple[ProvenanceDataset, list[dict[str, Any]]]:
+        """The run's provenance dataset with the seed facts (only the answer's papers when
+        ``answer_keys`` is given) as one event; returns it and the seed rows used."""
+        source_ids = {row["passage_id"] for row in state["passages"]}
+        source_ids |= {str(row.get("source_id")) for row in self.corpus.fact_rows if row.get("source_id")}
+        source_ids |= {str(row["reference_id"]) for row in self.corpus.references}
+        dataset = ProvenanceDataset(self.extraction.schema, source_ids)
+        seed_rows = self.corpus.seed_facts()
+        if answer_keys is not None:
+            wanted = set(answer_keys)
+            seed_rows = [row for row in seed_rows if str(row.get("subject")) in wanted
+                         and (row.get("predicate") != "cites" or str(row.get("object")) in wanted)]
+        rdf = seed_rdf(self.corpus, self.extraction.schema, seed_rows)
+        if rdf:
+            dataset.add_event("corpus-seed", rdf, sorted({str(row["source_id"]) for row in seed_rows}))
+        return dataset, seed_rows
+
+    def _answer_triples(self, dataset: ProvenanceDataset, extracted: list[Any]) -> list[Triple]:
+        ui_triples, dropped = add_extracted(dataset, self.corpus, self.extraction.schema, extracted)
+        lost = ", ".join(f"{count} {why}" for why, count in dropped.items() if count)
+        if not ui_triples:
+            # Nothing the answer could cite reached the graph: an honest "no results", not an answer
+            # without facts.
+            raise NoResults(f"none of the {len(extracted)} extracted triples could enter the answer graph ({lost}); "
+                            "a paper-valued relation must name an indexed paper")
+        if lost:
+            self._emit("Graph building dropped triples", f"{lost} of {len(extracted)}")
+        return ui_triples
+
+    # ─── Claims and answer text ──────────────────────────────────────────────
+
+    def _claims(self, question: str, ui_triples: list[Triple], passages: list[dict[str, Any]]
+                ) -> tuple[list[Any], list[Any]]:
+        def paper_for_source(source_id: str, subject: str) -> str:
+            row = self.corpus.by_passage.get(source_id)
+            paper_id = str(row["paper_id"]) if row else subject
+            return self.corpus.canonical_paper_iri(paper_id) or paper_id
+
+        claims, _ = build_claims(ui_triples, paper_for_source)
+        if passages and any(claim.kind == "ResultClaim" for claim in claims):
+            try:
+                claims = enrich_result_claims(claims, passages, self.refinement_model or self.extraction.model)
+                self._emit("Enriching claim context", f"{len(claims)} provenance-bearing claims")
+            except (ModelFailure, ValueError, TypeError) as exc:
+                self._emit("Claim context remains partial", type(exc).__name__)
+        claim_relations = classify_claim_relations(claims)
+        query_claim = derive_query_claim(question, claims)
+        if query_claim is not None:
+            claims.append(query_claim)
+        return claims, claim_relations
+
+    def _answer_text(self, state: BaselineState, answer: Any, ui_triples: list[Triple], claims: list[Any]) -> Any:
+        """Drop sentences whose triples missed the graph; an unverified (Fast) answer becomes the
+        list of source-backed claims. A verified answer (sentences with verdicts) is shown as written."""
+        if answer.sentences:
+            kept_sources = {triple.source for triple in ui_triples}
+            sentences = [item if item["verdict"] == "removed" or set(item["sourceIds"]) & kept_sources
+                         else {**item, "verdict": "removed", "reason": "its triples did not pass graph building"}
+                         for item in answer.sentences]
+            stated = [item for item in sentences if item["verdict"] != "removed"]
+            if stated:
+                answer = answer.model_copy(update={
+                    "sentences": sentences, "answer": " ".join(item["text"] for item in stated),
+                    "cited_source_ids": list(dict.fromkeys(s for item in stated for s in item["sourceIds"]))})
+            else:
+                answer = answer.model_copy(update={"sentences": []})     # falls back to the claim list below
+        if state.get("retrieval", {}).get("stop_reason") in {"verified_facts", "external"} or not claims \
+                or answer.sentences:
+            return answer
+        grouped: dict[str, list[str]] = {}
+        for claim in claims:
+            if "object" not in claim.fields:
+                continue
+            title = self.corpus.paper_title(claim.paper_id) or claim.paper_id
+            grouped.setdefault(title, []).append(f"{claim.fields['object'].value} [{', '.join(claim.source_ids)}]")
+        return answer.model_copy(update={
+            "answer": "The indexed papers report: " + " ".join(
+                f"{title}: {'; '.join(statements)}." for title, statements in grouped.items()),
+            "cited_source_ids": sorted({source for claim in claims for source in claim.source_ids}),
+        })
+
+    # ─── Checks and files ────────────────────────────────────────────────────
+
+    def _answer_checks(self, ui_triples: list[Triple], answer: Any, from_facts: bool) -> None:
+        supported = bool(ui_triples) and all(t.source.strip() and t.evidence.strip() for t in ui_triples)
+        self._check("triple provenance", "pass" if supported else "fail",
+                    f"{len(ui_triples)} triples, each with a source and evidence" if supported
+                    else "some triples lack a source or evidence")
+        if not self.refine:
+            return
+        if from_facts:
+            self._check("answer verification", "skipped", "answer composed directly from verified facts")
+        elif any(item.get("verdict") == "from_facts" for item in answer.sentences):
+            self._check("answer verification", "warn", "no composed sentence passed; the answer states the "
+                        "extracted facts, which evidence review kept")
+        else:
+            self._check("answer verification", "pass", "every sentence in the answer was checked against its triples")
+
+    def _artifacts(self, run_id: str, state: BaselineState, answer: Any, claims: list[Any],
+                   claim_relations: list[Any], terms: list[Any], dataset: ProvenanceDataset,
+                   report: Any) -> dict[str, bytes]:
+        schema = self.extraction.schema
         artifacts = {
             # The question's own terms with their parents, not the whole seed ontology.
             "subschema.ttl": subschema_slice(schema.graph, terms).serialize(format="turtle").encode(),
@@ -440,21 +394,9 @@ class RunOutcomes:
         if self.enhanced:
             artifacts["retrieval.json"] = json.dumps(state.get("retrieval", {}), indent=2).encode()
             artifacts["extraction_batches.json"] = json.dumps(state.get("extraction_batches", []), indent=2).encode()
-            artifacts["evidence_graph.json"] = json.dumps(evidence_graph(state, inferred), ensure_ascii=False,
-                                                          indent=2).encode()
-            artifacts["seed_manifest.json"] = json.dumps(
-                {
-                    "facts": len(seed_rows),
-                    "seed_graph": "corpus-seed",
-                    "ontology": "dblp_schema_2024-06-14.ttl",
-                    "ontology_version": schema.seed_schema_version,
-                    "ontology_sha256": schema.seed_schema_sha256,
-                    "content_core": schema.content_core,
-                    "content_core_sha256": schema.content_core_sha256,
-                },
-                indent=2,
-            ).encode()
-        return run, artifacts
+            artifacts["evidence_graph.json"] = json.dumps(evidence_graph(state, state["inferred"]),
+                                                          ensure_ascii=False, indent=2).encode()
+        return artifacts
 
     def _workflow_tool_calls(self, state: BaselineState, run_id: str) -> list[dict[str, Any]]:
         """Record only corpus operations that the local workflow actually ran."""
