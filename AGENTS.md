@@ -26,7 +26,7 @@ Start with `docs/ARCHITECTURE.md` for how a run flows, `docs/decisions/` for why
 | Evaluation against gold | `packages/evaluation/`, `api/routes_benchmark.py`, `make evaluate`; metric definitions in labelling `docs/EVALUATION.md` |
 | Web UI | `web/src/App.tsx`, `web/src/AnswerGraph.tsx` |
 | Why a run behaved as it did | `docs/RUN_ANALYSIS.md`, `make runs` |
-| Evidence documents (D), graph size settings, profiles | `packages/agent/src/harness_agent/evidence_doc.py`, `profiles/`, `docs/EVIDENCE_DOCS.md`, `make evidence-docs` |
+| Graph size settings, profiles (evidence documents are built in labelling) | `profiles/`, `docs/GRAPH_SETTINGS.md` |
 | Known problems and their causes | `docs/KNOWN_ISSUES.md` |
 
 Every package has a short `README.md` saying what it owns and its entry points.
@@ -54,7 +54,6 @@ harness_schema | harness_config
 - `make fewshot ARGS="--dev <ids>"` — few-shot example candidates from gold errors on development questions (`docs/PROMPTS.md`).
 - `make embed` — dense passage index for hybrid retrieval, after every ingest (needs `qwen-embed`).
 - `make graph-shape` — answer-graph shape of recent runs (read-only; Phase 4 diagnostics).
-- `make evidence-docs` — one exhaustive evidence document per evaluation question (`ARGS="--only nlp33"`), resumable; uses the `exhaustive` profile.
 - `make run-questions` — evaluation questions through the running API (`--questions` for nlp32–61); Agentic runs every proposed reading.
 - `make fixtures` — regenerate `web/src/generated/run.ts`, JSON Schema and fixture runs after changing `harness_schema`.
 - `make dev` / `make demo` — MCP server, API and UI (needs the models from thesis-llm-setup).

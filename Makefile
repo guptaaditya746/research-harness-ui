@@ -1,4 +1,4 @@
-.PHONY: evidence-docs public ontology cskg-subset benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: public ontology cskg-subset benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -78,12 +78,6 @@ benchmark-runs:
 # make run-questions ARGS="--ids nlp07,nlp27" (see scripts/run_questions.py)
 run-questions:
 	uv run --python 3.12 python scripts/run_questions.py $(ARGS)
-
-# One exhaustive evidence document (D) per question of HARNESS_DOC_QUESTION_SET, built once and resumable
-# (docs/EVIDENCE_DOCS.md). Uses the "exhaustive" profile unless HARNESS_PROFILE names another.
-# Examples: make evidence-docs ARGS="--only nlp33"   ·   make evidence-docs HARNESS_PROFILE=
-evidence-docs:
-	HARNESS_PROFILE=$${HARNESS_PROFILE-exhaustive} uv run --python 3.12 python -m harness_agent.evidence_doc $(ARGS)
 
 # Shape of recent answer graphs: DBLP/invented mix, connectivity, dead ends (read-only, Phase 4).
 # make graph-shape ARGS="-n 100 --path agentic"

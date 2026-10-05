@@ -208,24 +208,6 @@ class Settings(BaseSettings):
     predicate_relations_file: str = Field("", validation_alias=_env("HARNESS_PREDICATE_RELATIONS_FILE"))
     judge_cache_file: str = Field("", validation_alias=_env("HARNESS_JUDGE_CACHE_FILE"))
 
-    # ─── Evidence documents (D): one exhaustive, reviewed document per question ─
-    # Built once per question set by `make evidence-docs`; see docs/EVIDENCE_DOCS.md.
-    doc_question_set: str = Field("question_set_d.json", validation_alias=_env("HARNESS_DOC_QUESTION_SET"))
-    doc_root: Path | None = Field(None, validation_alias=_env("HARNESS_DOC_ROOT"))
-    # Papers screened per question: 0 = every indexed paper.
-    doc_max_papers: int = Field(0, ge=0, validation_alias=_env("HARNESS_DOC_MAX_PAPERS"))
-    # Passages of one paper the screening reader sees (highest-ranked for the question first; a paper
-    # without a ranked passage is read from its first passages, so every paper is actually read).
-    doc_screen_passages: int = Field(8, ge=1, validation_alias=_env("HARNESS_DOC_SCREEN_PASSAGES"))
-    # Passages of a relevant paper that go to extraction: 0 = all of the paper's passages.
-    doc_extract_passages: int = Field(0, ge=0, validation_alias=_env("HARNESS_DOC_EXTRACT_PASSAGES"))
-    # Passages schema inference sees for one interpretation.
-    doc_schema_passages: int = Field(24, ge=1, validation_alias=_env("HARNESS_DOC_SCHEMA_PASSAGES"))
-    # Papers screened or extracted at the same time.
-    doc_concurrency: int = Field(4, ge=1, le=32, validation_alias=_env("HARNESS_DOC_CONCURRENCY"))
-    # Model call timeout for document building (no run deadline applies; building is offline).
-    doc_call_timeout_s: float = Field(300, gt=0, validation_alias=_env("HARNESS_DOC_CALL_TIMEOUT_S"))
-
     # ─── Evaluation snapshot (must match labelling's gold rows) ──────────────
     corpus_fingerprint: str = Field("unknown", validation_alias=_env("CORPUS_FINGERPRINT"))
     corpus_snapshot_id: str | None = Field(None, validation_alias=_env("CORPUS_SNAPSHOT_ID"))
@@ -245,7 +227,7 @@ class Settings(BaseSettings):
     @field_validator(
         "model_edc", "model_agent_url", "agent_context_tokens", "corpus_root", "artifact_root",
         "datasets_root", "fixtures_dir", "database_url", "corpus_snapshot_id",
-        "labelling_normalization_file", "labelling_vocabulary_file", "doc_root", mode="before",
+        "labelling_normalization_file", "labelling_vocabulary_file", mode="before",
     )
     @classmethod
     def _blank_is_unset(cls, value: Any) -> Any:

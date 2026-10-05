@@ -50,7 +50,7 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 `HARNESS_GRAPH_LINKING`. With the defaults they render the same text as before; `broad` replaces
 "keep the subschema small" with covering the question's topic, `dense` asks for one name per
 entity, relations between research entities, and compound statements split into linked facts.
-Their examples use made-up entities only (MethodX, ModelZ, BenchY). See `docs/EVIDENCE_DOCS.md`.
+Their examples use made-up entities only (MethodX, ModelZ, BenchY). See `docs/GRAPH_SETTINGS.md`.
 
 ## Changing a prompt
 
