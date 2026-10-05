@@ -281,11 +281,10 @@ class AgenticResearch(ConceptProposalStep):
         # in the corpus is not enough.
         session.observed = session.shown_ids.union(
             *(self._evidence_ids(item.get("result")) for item in session.corpus_calls))
-        if settings().agent_handoff == "findings":
-            raw = [*session.notes, *(session.agent_decision.get("findings") or []
-                                     if isinstance(session.agent_decision.get("findings"), list) else [])]
-            findings, _ = validate_findings(raw, session.observed)
-            session.findings = self._unique_findings(findings)
+        raw = [*session.notes, *(session.agent_decision.get("findings") or []
+                                 if isinstance(session.agent_decision.get("findings"), list) else [])]
+        findings, _ = validate_findings(raw, session.observed)
+        session.findings = self._unique_findings(findings)
 
     @staticmethod
     def _unique_findings(findings: list[dict]) -> list[dict]:
@@ -298,7 +297,7 @@ class AgenticResearch(ConceptProposalStep):
         """Parallel paper readers on the agent model (see ``readers``)."""
         config = settings()
         corpus = getattr(self.baseline, "corpus", None)
-        if (config.subagent_readers <= 0 or config.agent_handoff != "findings" or corpus is None
+        if (config.subagent_readers <= 0 or corpus is None
                 or not callable(getattr(self.agent_model, "complete_json", None))):
             return
         weighted = [(value, 3) for finding in session.findings for value in finding["evidence_ids"]]

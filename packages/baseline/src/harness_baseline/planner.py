@@ -281,7 +281,7 @@ class QueryPlanner:
 
     def plan_question(self, question: str) -> QueryPlan:
         """``plan(question)`` without a reading, cached per model, prompt set, corpus and question."""
-        key = (str(getattr(self.model, "model", type(self.model).__name__)), settings().prompt_set or "v2",
+        key = (str(getattr(self.model, "model", type(self.model).__name__)), settings().prompt_set,
                json.dumps(self.profile, sort_keys=True), " ".join(question.split()))
         with self._lock:
             cached = self._question_plans.get(key)
@@ -297,7 +297,7 @@ class QueryPlanner:
 
     def plan(self, question: str, concept: dict[str, Any] | None = None) -> QueryPlan:
         request: dict[str, Any] = {"question": question}
-        if self.profile and (settings().prompt_set or "v2") != "v1":
+        if self.profile:
             request["corpus"] = self.profile
         if concept:
             request["research_interpretation"] = {

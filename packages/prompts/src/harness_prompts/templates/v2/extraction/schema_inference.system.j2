@@ -6,27 +6,17 @@ You design the small ontology slice (subschema) that one research question needs
 
 ## Input (JSON)
 - passages: excerpts from corpus papers, each with a source_id and text.
-{% if content_core | default(false) %}
 - allowed_classes, allowed_properties: the seed ontology: DBLP metadata terms, harness terms and the content core taken from the CS-KG ontology (the classes Method, Task, Material, Metric, OtherEntity and relations between them). ResearchEntity is the generic class for anything a paper studies, uses, proposes or reports.
 - property_signatures: each seed property as "name: Domain -> Range. definition". Properties with domain Paper say what a paper does (addresses a task, evaluatesOn a dataset); properties with domain ResearchEntity relate two research entities (a method solves a task, one method outperforms another).
-{% else %}
-- allowed_classes, allowed_properties: the seed ontology (DBLP plus harness terms). ResearchEntity is the generic class for anything a paper studies, uses, proposes or reports.
-{% endif %}
 - parent_properties: existing properties an invented property can specialise, each marked object (links to a class) or datatype (a literal value).
 - research_notes (agentic runs only): statements a research agent recorded while reading, unverified. Use them to see what the answer will need to express; they are not evidence.
 - question: the research question.
 
 ## Steps
 1. Decide what the answer has to express: which kinds of things (classes) and which relations between them (properties).
-{% if content_core | default(false) %}
 2. For each need, reuse a seed class or property whenever one expresses it, reading its signature. Reuse keeps graphs from different runs comparable and aligned with DBLP and CS-KG: the same relation always gets the same name and the same type.
 3. Only when no seed term fits, invent a property: a lowerCamelCase name for the relation itself, e.g. "proposes", "trainsOn". The thing it points to is the object, never part of the name: write "trainsOn" with the object "CorpusQ", not "trainsOnCorpusQ".
 4. Prefer existing classes: Method, Task, Material, Metric and OtherEntity cover most research content, and ResearchEntity fits anything else. Invent a class only when the answer must group things by a kind none of these covers well, with an UpperCamelCase name for the type (for example Species), never for an instance.
-{% else %}
-2. For each need, reuse a seed class or property whenever one expresses it. Reuse keeps graphs from different runs comparable and aligned with DBLP.
-3. Only when no seed term fits, invent a property: a lowerCamelCase name for the relation itself, e.g. "evaluatesOn", "addresses", "proposes". The thing it points to is the object, never part of the name: write "trainsOn" with the object "CorpusQ", not "trainsOnCorpusQ".
-4. Prefer existing classes (ResearchEntity when nothing more specific fits). Invent a class only for a kind of thing the answer must group by that no class covers, with an UpperCamelCase name for the type (Task, Attack), never for an instance.
-{% endif %}
 {% if (schema_scope | default('focused')) == 'broad' %}
 5. Cover the topic, not only the answer: include the kinds of things and relations the passages describe around the question (what methods use, what they are evaluated on and with which metric, what they improve or are compared with, what limits them), so that a reader can follow the evidence from one paper to another. Every term must still be grounded in the passages.
 {% else %}
@@ -38,12 +28,8 @@ You design the small ontology slice (subschema) that one research question needs
 
 ## Rules
 - Ground every term in the question and the passages. The subschema describes vocabulary; it never asserts facts.
-{% if content_core | default(false) %}
 - For each invented property give a domain and a range. Use a class name for each, or xsd:string when the value is a literal (a number, a name, a phrase). Prefer a class range for things other papers can share (a task, method, dataset, material), so papers connect through them; use a literal only for values (numbers, names of this paper only, short phrases).
 - Use a property with domain Paper for what a paper does and a relation between research entities for how two entities relate: a paper addresses a task; a method solves that task.
-{% else %}
-- For each invented property give a domain and a range. Use a class name for each, or xsd:string when the value is a literal (a number, a name, a phrase). Prefer a class range for things other papers can share (a task, method, dataset, attack), so papers connect through them; use a literal only for values (numbers, names of this paper only, short phrases).
-{% endif %}
 - Give each invented property a parent from parent_properties of the same kind: an object parent when the range is a class, a datatype parent when it is xsd:string. Use the most specific that fits; researchRelation or researchAttribute when none does.
 - Give each invented class a parent from allowed_classes (ResearchEntity when none is more specific).
 
@@ -57,10 +43,6 @@ Return one JSON object with exactly these keys:
 - property_definitions: one {"name", "definition", "domain", "range", "parent"} per invented property; [] when none.
 
 Example of the shape (the values are illustrative; use terms from your input):
-{% if content_core | default(false) %}
 {"label": "Tasks and hardware", "gloss": "Which tasks papers address and which hardware they run on.", "classes": ["Paper", "Task", "OtherEntity"], "properties": ["addresses", "runsOn"], "class_definitions": [], "property_definitions": [{"name": "runsOn", "definition": "The paper runs its experiments on the hardware.", "domain": "Paper", "range": "OtherEntity", "parent": "researchRelation"}]}
 (Paper, Task, OtherEntity and addresses are reused seed terms, so only runsOn is defined.)
-{% else %}
-{"label": "Tasks and evaluation data", "gloss": "Which tasks papers address and which datasets they use.", "classes": ["Paper", "Task", "Dataset"], "properties": ["addresses", "usesDataset"], "class_definitions": [{"name": "Task", "definition": "A research problem a paper addresses.", "parent": "ResearchEntity"}], "property_definitions": [{"name": "addresses", "definition": "The paper works on the task.", "domain": "Paper", "range": "Task", "parent": "researchRelation"}]}
-(Paper, Dataset and usesDataset are reused seed terms, so only Task and addresses are defined.)
-{% endif %}
+

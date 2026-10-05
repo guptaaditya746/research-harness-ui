@@ -5,7 +5,7 @@ reading it reports:
 
 - **Vocabulary**: fact edges whose predicate is DBLP (a ``dblp:`` property, or one of the harness
   terms declared equivalent to one: title, authoredBy, year, venue), a harness seed term (cites,
-  usesDataset, reportsMetric, ...; with HARNESS_CONTENT_CORE=cskg also the content core: addresses,
+  usesDataset, reportsMetric, ...; the content core: addresses,
   evaluatesOn and the CS-KG relations uses, solves, ...), or invented in the run.
 - **Connectivity** of the knowledge part of the graph (fact, claim and derived edges; evidence
   edges and passage nodes are provenance, not knowledge; literal value nodes do not link): connected
@@ -42,7 +42,6 @@ from harness_semantic import (
     DBLP,
     DBLP_EQUIVALENTS,
     HRN,
-    content_core_on,
     core_terms,
     hand_written_subschema,
 )
@@ -65,14 +64,9 @@ def _local(iri: object) -> str:
     return re.split(r"[#/]", str(iri))[-1]
 
 
-def vocabulary() -> Vocabulary:
-    """The vocabulary for the current HARNESS_CONTENT_CORE setting (evaluate runs with the setting
-    they were made with; ONTOLOGY_VERSION in the snapshot records it)."""
-    return _vocabulary(content_core_on())
-
-
 @cache
-def _vocabulary(core_on: bool) -> Vocabulary:
+def vocabulary() -> Vocabulary:
+    """The seed vocabulary (DBLP, harness terms and the content core)."""
     schema = hand_written_subschema()
     graph = schema.graph
     dblp_props = {_local(p) for p in graph.subjects(RDF.type, RDF.Property) if str(p).startswith(str(DBLP))}

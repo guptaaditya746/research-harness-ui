@@ -66,7 +66,7 @@ maps new classes to `hrn:ResearchEntity`. The DBLP seed gets OWL 2 declarations 
 (the seed file only says `rdf:Property`). Each reading lists its terms with their origin (DBLP / core
 / invented) in `schemaTerms`, and `subschema.ttl` holds only those terms and their parents.
 
-**Content core (CS-KG).** With `HARNESS_CONTENT_CORE=cskg` (default) the seed also holds a subset of
+**Content core (CS-KG).** The seed also holds a subset of
 the CS-KG 2.0 ontology (`seed/cskg_ontology_2.0_subset.ttl`, CC BY 4.0, namespace
 `https://w3id.org/cskg/ontology#`): the classes Method, Task, Material, Metric, OtherEntity and the base
 relations uses, solves, improves, outperforms, includes, produces, supports, analyzes with their
@@ -76,7 +76,7 @@ domain or range (its per-target variants such as `usesMaterial` do): the harness
 and one range each (research entity → research entity; `solves` → Task) and a definition. Two fixed
 paper-level properties complete it: `addresses` (Paper → Task) and `evaluatesOn` (Paper → Dataset, a
 sub-property of `usesDataset`); `hrn:Dataset` is a subclass of Material. So a paper addresses a task and
-a method solves that task, with the same names and types in every run. v2 prompts get each property's
+a method solves that task, with the same names and types in every run. The prompts get each property's
 signature (`property_signatures`: "name: Domain -> Range. definition") for schema inference and
 extraction (and definitions in the EDC mapping catalog). The Subschema panel lists these terms by their
 harness names with origin "core" and "same as cskg-ont:…" in the definition; triples use the harness
@@ -85,10 +85,8 @@ CS-KG inverses (a run's "X uses Y" states a gold "Y usedBy X") and `evaluatesOn`
 SHA-256; `make ontology` exports it for the External path (whose `onto` names each equivalence);
 `make cskg-subset` rebuilds the subset from the full CS-KG file kept unchanged in
 `seed/cskg_ontology_2.0.ttl` (downloaded 27 Sep 2026; `ARGS="--check"` compares, `--source` takes another copy).
-`HARNESS_CONTENT_CORE=none` gives the seed and the v2 schema/extraction prompts from before CS-KG, for
-comparisons. Scoring and `make graph-shape` follow the setting of the process that runs them, so
-evaluate runs with the setting they were made with, and change `ONTOLOGY_VERSION` with it (the
-snapshot then keeps the two apart).
+The switch to turn the content core off was deleted (`docs/decisions/0007-delete-comparison-only-modes.md`);
+change `ONTOLOGY_VERSION` whenever the seed or the subset changes.
 
 For research answers (not verified-fact answers), `backbone.py` adds the DBLP backbone of the
 answer's papers to the answer graph: authors, venue as one shared node per venue, and citations among
@@ -110,7 +108,7 @@ BM25 alone (`lexical`, the default) and BM25 + dense, which keeps the gold compa
 Without the index, or when the embedding call fails (then for 60 s), the ranking is BM25 alone. The MCP tool roles are separate: `search_evidence` is the ranked search,
 `search` is the exact boolean DSL (implicit AND), `grep` is a regular expression over passages.
 
-Concept proposal (`concepts.py`, `HARNESS_CONCEPT_GROUNDING=retrieve_first`) retrieves the top passages and
+Concept proposal (`concepts.py`) retrieves the top passages and
 keyphrases first and proposes readings from them; each reading cites the passages it rests on. A reading
 whose terms match none of its 50 top-ranked passages is hidden (`HARNESS_HIDE_UNGROUNDED_READINGS`), unless
 no reading has support, so fewer than three readings can be shown; hidden readings are recorded in the
@@ -135,7 +133,7 @@ flowchart TD
 
 What the agent sees each turn: the system prompt with loaded skills, the question, the grounded context
 (the chosen concept and its evidence passages), a curated set of about 14 non-overlapping tools
-(`HARNESS_AGENT_TOOLSET`), the local `record_finding` tool, and the exchanges so far.
+(`CURATED_TOOLS` in `mcp.py`), the local `record_finding` tool, and the exchanges so far.
 
 - Tool results older than the last `HARNESS_AGENT_KEEP_RESULTS` (3) exchanges are shown as short digests
   (observation masking).
@@ -146,7 +144,7 @@ What the agent sees each turn: the system prompt with loaded skills, the questio
 - After `HARNESS_AGENT_MAX_TOOL_CALLS` (12) corpus calls, only `record_finding` is offered and the agent
   must decide.
 
-The findings (`HARNESS_AGENT_HANDOFF=findings`) carry a statement and the evidence ids that support it;
+The findings carry a statement and the evidence ids that support it;
 ids the session never observed are rejected. Paper readers (`readers.py`, `HARNESS_SUBAGENT_READERS`)
 then read the papers with the most evidence in parallel threads, one structured call each, and add up to
 four findings per paper. Seeds take one passage per supervisor finding first, then the supervisor's

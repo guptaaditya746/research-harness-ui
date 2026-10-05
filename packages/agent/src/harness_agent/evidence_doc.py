@@ -626,7 +626,7 @@ class DocumentBuilder:
                        for name, model in vars(self.models).items()},
             "settings": {key: getattr(config, key) for key in (
                 "schema_scope", "graph_linking", "unmapped_relations", "map_lexical_min", "map_model_min",
-                "edc_batch_passages", "content_core", "schema_new_classes", "retrieval_mode", "prompt_set",
+                "edc_batch_passages", "schema_new_classes", "retrieval_mode",
                 "doc_max_papers", "doc_screen_passages", "doc_extract_passages", "doc_schema_passages")},
         }
 

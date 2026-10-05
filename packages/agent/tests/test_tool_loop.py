@@ -187,15 +187,6 @@ def test_findings_citing_unseen_ids_are_sent_back(monkeypatch) -> None:
     assert problems == ["finding 1 cites no id returned by a tool in this session"]
 
 
-def test_ids_only_handoff_offers_no_scratchpad(monkeypatch) -> None:
-    monkeypatch.setenv("HARNESS_AGENT_HANDOFF", "ids")
-    ScriptedModelClient.bodies = []
-    run_loop(monkeypatch, [tool_call("search_evidence", {"query": "VPP"}),
-                           final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"],
-                                  "reasoning_summary": "ok"})])
-    assert "record_finding" not in [tool["function"]["name"] for tool in ScriptedModelClient.bodies[0]["tools"]]
-
-
 def _session_with(monkeypatch, names: list[str], text: str = "") -> None:
     async def list_tools(self):
         return SimpleNamespace(tools=[SimpleNamespace(name=name, description=name, inputSchema={"type": "object"})
@@ -222,12 +213,6 @@ def test_curated_toolset_hides_duplicate_tools(monkeypatch) -> None:
     assert ScriptedModelClient.bodies[0]["tool_choice"] == "required"
     assert first == ["search_evidence", "read_evidence"]
     assert second == ["search_evidence", "read_evidence", "record_finding"]
-    monkeypatch.setenv("HARNESS_AGENT_TOOLSET", "all")
-    ScriptedModelClient.bodies = []
-    run_loop(monkeypatch, [tool_call("search_evidence", {"query": "VPP"}),
-                           final({"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"],
-                                  "reasoning_summary": "ok"})])
-    assert len(ScriptedModelClient.bodies[1]["tools"]) == 6
 
 
 def test_tool_budget_leaves_only_the_scratchpad_and_asks_for_the_decision(monkeypatch) -> None:

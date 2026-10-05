@@ -155,15 +155,6 @@ def test_backbone_and_new_classes_can_be_switched_off(tmp_path: Path, monkeypatc
     assert "Someone%20Else" in result["artifacts"]["triples.ttl"].decode()   # the old corpus-wide export
 
 
-def test_without_the_content_core_addresses_and_task_are_invented(tmp_path: Path,
-                                                                  monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("HARNESS_CONTENT_CORE", "none")
-    result, schema_model = run(tmp_path)
-    assert "addresses" not in schema_model.payload["allowed_properties"]
-    terms = {term.name: term for term in result["run"].readings[0].schema_terms}
-    assert terms["hrn:Task"].origin == "invented" and "same as" not in (terms["hrn:Task"].definition or "")
-
-
 def test_graph_edge_ids_are_unique_with_the_backbone(tmp_path: Path) -> None:
     result, _ = run(tmp_path)
     ids = [edge.id for edge in result["run"].readings[0].graph.edges]

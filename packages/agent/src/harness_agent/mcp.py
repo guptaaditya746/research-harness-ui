@@ -75,7 +75,7 @@ def _tool_payload(result: Any) -> Any:
 
 
 DECISION_KEYS = ("verified_claim_ids", "additional_evidence_ids", "reasoning_summary")
-# The tools offered to the agent with HARNESS_AGENT_TOOLSET=curated: one tool per job. Left out are
+# The tools offered to the agent: one tool per job. Left out are
 # duplicates (rank, rank_evidence, candidates_for, query2doc = search_evidence; facts =
 # structured_facts; read_passage, expand = read_evidence) and rarely useful specialists.
 CURATED_TOOLS = (
@@ -265,12 +265,10 @@ class MCPToolClient:
                 for item in listed.tools
             ]
             config = settings()
-            if config.agent_toolset == "curated":
-                tools = [tool for tool in tools if tool["function"]["name"] in CURATED_TOOLS]
+            tools = [tool for tool in tools if tool["function"]["name"] in CURATED_TOOLS]
             ledger = ResearchLedger(question=question)
             ledger.notes = self.notes
-            if config.agent_handoff == "findings":
-                tools.append(FINDING_TOOL_SPEC)
+            tools.append(FINDING_TOOL_SPEC)
             loaded_skills = relevant(question)
             for skill in loaded_skills:
                 self._counter += 1
@@ -288,7 +286,6 @@ class MCPToolClient:
                 loaded_skills="; ".join(
                     f"{skill.name}@{skill.version}: {skill.instructions}" for skill in loaded_skills),
                 skills=loaded_skills,
-                findings_tool=settings().agent_handoff == "findings",
             )
             self.prompt_ref = supervisor.ref
             fixed: list[dict[str, Any]] = [

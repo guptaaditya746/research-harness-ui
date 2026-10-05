@@ -36,7 +36,7 @@ Runs live in `ARTIFACT_ROOT` (default `./artifacts`), one folder per run id.
 | `agent_final_not_structured` | Final agent message was not one JSON object | `agent_draft.md`; the reflection turn in the trace |
 | Many `Model call failed · timed out` | Call exceeded its budget (Heavy queue or long output) | `BUDGET_*_SECONDS`, thesis-llm-setup preemptions |
 | `extraction: 0 supported triples` | Passages did not support the subschema's properties | `retrieval.json`, `subschema.ttl` |
-| Concept readings with 0 passages | `HARNESS_CONCEPT_GROUNDING=legacy`, `HARNESS_HIDE_UNGROUNDED_READINGS=false`, or no reading had support (then none is hidden) | the proposal run's `disagreement.json` (`hidden_ungrounded`, `evidence_shown`) |
+| Concept readings with 0 passages | `HARNESS_HIDE_UNGROUNDED_READINGS=false`, a corpus without ranked retrieval, or no reading had support (then none is hidden) | the proposal run's `disagreement.json` (`hidden_ungrounded`, `evidence_shown`) |
 | Fewer readings than usual | Ungrounded readings were hidden (Phase 3a) | the "Readings hidden" trace row |
 | Agent stops researching early and decides | Tool budget reached (`HARNESS_AGENT_MAX_TOOL_CALLS`) | count of corpus calls in `tool_calls.jsonl` |
 | `agent research (MCP)` fails with HTTP 400 "auto tool choice requires ..." | The Lite backend was started without a tool-call parser | thesis-llm-setup `tool_call_parser`, `llm-setup smoke` |

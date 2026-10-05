@@ -23,7 +23,6 @@ from harness_semantic import (
     TOP_CLASS,
     TOP_RELATION,
     Subschema,
-    content_core_on,
     is_datatype_range,
     property_kind,
 )
@@ -298,13 +297,11 @@ class ExtractionEngine:
                 for row in passages
             ],
         }
-        core = content_core_on()
-        if core and settings().prompt_set != "v1":
-            payload["property_signatures"] = self.signatures(allowed_properties)
+        payload["property_signatures"] = self.signatures(allowed_properties)
         if notes:
             payload["research_notes"] = list(notes)
         result = SchemaInference.model_validate(complete(self.schema_model, render(
-            "extraction/schema_inference", payload, content_core=core, **prompt_shape(),
+            "extraction/schema_inference", payload, **prompt_shape(),
         )))
         return self.apply_schema(result, question)
 
@@ -388,16 +385,13 @@ class ExtractionEngine:
     def extract(
         self, question: str, inferred: SchemaInference, passages: list[dict[str, Any]]
     ) -> ExtractionResult:
-        core = content_core_on()
-        signatures = ({"property_signatures": self.signatures(list(inferred.properties))}
-                      if core and settings().prompt_set != "v1" else {})
         result = ExtractionResult.model_validate(complete(self.model, render(
             "extraction/triple_extraction",
             {
                 "question": question,
                 "classes": inferred.classes,
                 "properties": inferred.properties,
-                **signatures,
+                "property_signatures": self.signatures(list(inferred.properties)),
                 "passages": [
                     {
                         "passage_id": row["passage_id"],
@@ -406,7 +400,7 @@ class ExtractionEngine:
                     }
                     for row in passages
                 ],
-            }, content_core=core, **prompt_shape(),
+            }, **prompt_shape(),
         )))
         passage_ids = {row["passage_id"] for row in passages}
         # Models sometimes return a useful supported triple alongside a
@@ -492,9 +486,9 @@ class ExtractionEngine:
                     "domain": local_name(domain) if isinstance(domain, URIRef) else None,
                     "range": local_name(range_) if isinstance(range_, URIRef) else None,
                 }
-                if content_core_on() and settings().prompt_set != "v1" and iri is not None:
-                    # With the content core, the model tells paper-level from entity-level relations
-                    # (addresses vs solves) by their definitions too.
+                if iri is not None:
+                    # The model tells paper-level from entity-level relations (addresses vs solves)
+                    # by their definitions too.
                     entry["definition"] = " ".join(str(self.schema.graph.value(iri, RDFS.comment) or "").split())
                 property_catalog.append(entry)
             mapped = complete(self.edc_model, render(
@@ -733,8 +727,7 @@ class ExtractionEngine:
         try:
             return self._compose(question, inferred, triples, verify, verifier, notes, report=report)
         except UnsupportedAnswer as first:
-            # The v1 templates have no repair section, so a second call would repeat the first.
-            if first.stage not in {"verification", "citation"} or settings().prompt_set == "v1":
+            if first.stage not in {"verification", "citation"}:
                 raise
             if first.stage == "citation" and not first.unknown_sources:
                 raise                                      # nothing to tell the composer: same prompt again

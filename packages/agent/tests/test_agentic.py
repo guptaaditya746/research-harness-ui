@@ -442,21 +442,6 @@ def test_grounding_tolerates_plurals_of_short_words() -> None:
     assert not _supports(_content_tokens("tool planning"), words)
 
 
-def test_legacy_grounding_keeps_every_reading(monkeypatch) -> None:
-    monkeypatch.setenv("HARNESS_CONCEPT_GROUNDING", "legacy")
-
-    class BothCorpus(RankedCorpus, SearchCorpus):
-        """Ranked retrieval is available, but legacy mode must not use it or hide readings."""
-
-    baseline = StubBaseline()
-    baseline.corpus = BothCorpus()
-    model = ConceptModel([{"concepts": [concept("Quantum angle", "quantum"), concept("Introducing paper"),
-                                        concept("Benchmark results")]}])
-    run = AgenticResearch(baseline, agent_model=model).run("Q?", "slow", "r-legacy")["run"]
-    assert "Quantum angle" in [r.label for r in run.readings]
-    assert baseline.corpus.queries == []
-
-
 def test_reader_findings_do_not_push_out_the_supervisor_evidence(monkeypatch) -> None:
     from time import monotonic
 

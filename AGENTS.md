@@ -79,7 +79,7 @@ harness_schema | harness_config
   evaluation question (`datasets/question_library_2025*.json`). Prompt examples use made-up entities
   (p99, MethodX, BenchY); a new capability must be general and tested on wording outside the evaluation set.
 - Edit `web/src/generated/` or fixture runs by hand (use `make fixtures`).
-- Change v1 prompt templates or `packages/prompts/tests/golden/`.
+- Add a setting that only restores old behaviour for comparison (`docs/decisions/0007`): compare against a tag instead.
 - Rename `harness_extraction.claims.build_claims` or `harness_schema.models` — `labelling` imports them.
 - Call raw vLLM ports for model requests, or add fallbacks between model roles.
 - Edit thesis-llm-setup or labelling from this repository.

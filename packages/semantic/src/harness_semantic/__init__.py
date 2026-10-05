@@ -29,7 +29,7 @@ DBLP_EQUIVALENTS = {
     HRN.year: DBLP.yearOfPublication,
     HRN.venue: DBLP.publishedIn,
 }
-# The content core (Phase 4, HARNESS_CONTENT_CORE=cskg): CS-KG 2.0 research-entity classes and relations,
+# The content core (Phase 4): CS-KG 2.0 research-entity classes and relations,
 # named by harness terms declared equivalent to them. Relations between research entities; what a
 # paper does is expressed with the paper-level properties (addresses, evaluatesOn, usesDataset, ...).
 CSKG_CLASSES = {                      # harness class -> CS-KG class (hrn:Metric already existed)
@@ -79,7 +79,7 @@ class Subschema:
     dblp_graph: Graph | None = None
     seed_schema_version: str = "hand-written"
     seed_schema_sha256: str | None = None
-    content_core: str | None = None          # "cskg-2.0-subset" when the CS-KG content core is loaded
+    content_core: str | None = None          # "cskg-2.0-subset": the CS-KG content core that was loaded
     content_core_sha256: str | None = None
 
 
@@ -169,16 +169,12 @@ def cskg_subset_path() -> Path:
     return Path("seed") / CSKG_SUBSET_FILE
 
 
-def content_core_on() -> bool:
-    return settings().content_core == "cskg"
-
-
 def _add_content_core(graph: Graph) -> tuple[frozenset[URIRef], frozenset[URIRef], str]:
     """The CS-KG subset plus the harness terms declared equivalent to it and the paper-level core.
     Returns the harness classes and properties it adds and the subset file's SHA-256."""
     path = cskg_subset_path()
     if not path.exists():
-        raise FileNotFoundError(f"CS-KG subset not found: {path} (set CSKG_SUBSET_PATH or HARNESS_CONTENT_CORE=none)")
+        raise FileNotFoundError(f"CS-KG subset not found: {path} (set CSKG_SUBSET_PATH)")
     graph.parse(path, format="turtle")
     graph.bind("cskg-ont", CSKG)
     graph.add((CSKG.ResearchEntity, RDFS.subClassOf, TOP_CLASS))
@@ -208,8 +204,7 @@ def _add_content_core(graph: Graph) -> tuple[frozenset[URIRef], frozenset[URIRef
 
 
 def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
-    """Return the compatibility schema enriched with the immutable DBLP seed and, unless
-    HARNESS_CONTENT_CORE=none, the CS-KG content core."""
+    """Return the compatibility schema enriched with the immutable DBLP seed and the CS-KG content core."""
     graph = Graph()
     graph.bind("hrn", HRN)
     graph.bind("dblp", DBLP)
@@ -262,10 +257,8 @@ def hand_written_subschema(schema_path: Path | None = None) -> Subschema:
         {HRN.title, HRN.authoredBy, HRN.year, HRN.venue, HRN.cites, HRN.citesTitle, HRN.sectionOf, HRN.hasTable}
     )
     properties = frozenset(specs)
-    core, core_hash = None, None
-    if content_core_on():
-        core_classes, core_properties, core_hash = _add_content_core(graph)
-        classes, properties, core = classes | core_classes, properties | core_properties, f"cskg-{CSKG_VERSION}"
+    core_classes, core_properties, core_hash = _add_content_core(graph)
+    classes, properties, core = classes | core_classes, properties | core_properties, f"cskg-{CSKG_VERSION}"
     return Subschema(graph, classes | {TOP_CLASS}, properties, structural, dblp_graph, seed_version, seed_hash,
                      core, core_hash)
 
@@ -275,13 +268,13 @@ CORE_TERMS = frozenset({
     HRN.title, HRN.authoredBy, HRN.year, HRN.venue, HRN.cites, HRN.citesTitle, HRN.sectionOf, HRN.hasTable,
     HRN.usesDataset, HRN.reportsMetric, HRN.claims, HRN.comparesTo, TOP_RELATION, TOP_ATTRIBUTE,
 })
-# Added by the CS-KG content core (HARNESS_CONTENT_CORE=cskg).
+# Added by the CS-KG content core.
 CONTENT_CORE_TERMS = frozenset({*CSKG_CLASSES, *CSKG_RELATIONS, *PAPER_CORE})
 
 
 def core_terms() -> frozenset[URIRef]:
-    """The harness seed terms in effect: CORE_TERMS plus the content core when it is on."""
-    return CORE_TERMS | CONTENT_CORE_TERMS if content_core_on() else CORE_TERMS
+    """The harness seed terms: CORE_TERMS plus the content core."""
+    return CORE_TERMS | CONTENT_CORE_TERMS
 
 
 def term_origin(iri: object) -> str:
@@ -290,7 +283,7 @@ def term_origin(iri: object) -> str:
     text = str(iri)
     if text.startswith(str(DBLP)) or URIRef(text) in DBLP_EQUIVALENTS:
         return "dblp"
-    if URIRef(text) in core_terms() or (text.startswith(str(CSKG)) and content_core_on()):
+    if URIRef(text) in core_terms() or text.startswith(str(CSKG)):
         return "core"
     return "invented"
 
@@ -356,7 +349,6 @@ __all__ = [
     "TOP_RELATION",
     "Subschema",
     "ValidationReport",
-    "content_core_on",
     "core_terms",
     "cskg_subset_path",
     "hand_written_subschema",

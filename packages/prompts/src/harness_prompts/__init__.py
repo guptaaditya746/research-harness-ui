@@ -1,29 +1,27 @@
 """Versioned prompt templates for every model call in the harness.
 
 Each model call has one named prompt, e.g. ``extraction/schema_inference``.
-Its text lives in ``templates/<set>/<name>.system.j2`` (and, for calls whose
-user message is prose rather than data, ``<name>.user.j2``). Two sets exist:
+Its text lives in ``templates/v2/<name>.system.j2`` (and, for calls whose
+user message is prose rather than data, ``<name>.user.j2``). The set ``v2``
+follows current prompt-writing practice for non-thinking instruct models
+(role and task first, rules with reasons, explicit output schema, what to do
+when evidence is missing, documents before the question). The earlier set
+``v1`` is in the tag ``pre-refactor-2026-10-05`` (docs/decisions/0007).
 
-- ``v1``: the prompts exactly as the harness sent them before templating
-  (golden-tested byte for byte), kept so runs can be compared.
-- ``v2``: rewritten to current prompt-writing practice for non-thinking
-  instruct models (role and task first, rules with reasons, explicit output
-  schema, what to do when evidence is missing, documents before the question).
-
-``HARNESS_PROMPT_SET`` selects the set (default ``v2``). Every rendered prompt
-carries ``ref`` = ``<name>@<set>:<hash>``; model events and traces record it,
-so a result can always be traced to the exact prompt text that produced it.
+Every rendered prompt carries ``ref`` = ``<name>@<set>:<hash>``; model events
+and traces record it, so a result can always be traced to the exact prompt
+text that produced it.
 
 Few-shot examples (Phase 3f): ``examples/<set>/<name>.json`` (a list of
 ``{"input": ..., "output": ..., "why": ...}``) is passed to the template as
-``examples``; v2 templates of the extraction, answer and reader prompts show
-them when present. The examples are part of the prompt's hash. Choose them from
+``examples``; the extraction, answer and reader prompts show them when
+present. The examples are part of the prompt's hash. Choose them from
 failures on a development part of the gold set, never from the questions you
 report on (see docs/PROMPTS.md).
 
 Data payloads stay JSON (they are machine-readable and the IDs must be
-copied exactly). In v2 the long parts of a payload (passages, candidates,
-triples, claims) come first and the question comes last, which is the order
+copied exactly). The long parts of a payload (passages, candidates, triples,
+claims) come first and the question comes last, which is the order
 long-context guidance recommends.
 """
 
@@ -39,7 +37,9 @@ from typing import Any
 from harness_config import settings
 from jinja2 import Environment, StrictUndefined
 
-SETS = ("v1", "v2")
+# One set: v1 (the prompts before templating) was deleted with the other comparison-only modes
+# (docs/decisions/0007). A new set for an experiment = a copy of v2/ under a new name, added here.
+SETS = ("v2",)
 
 # Payload keys moved to the front (long material) and to the end (the ask) in v2.
 _DOCUMENT_KEYS = (
@@ -129,8 +129,7 @@ def render(
     """Render the system message (and user message) for one model call.
 
     ``payload`` is the call's data. Without a ``user`` template it is sent as
-    JSON: in the original key order in v1, documents first and question last
-    in v2. ``variables`` fill placeholders in the templates.
+    JSON, documents first and the question last. ``variables`` fill placeholders in the templates.
     """
     chosen = _resolve_set(prompt_set)
     system_source = _source(chosen, name, "system")
@@ -143,8 +142,7 @@ def render(
     if user_source is not None:
         user = _render_text(user_source, {"payload": payload or {}, **variables})
     elif payload is not None:
-        data = payload if chosen == "v1" else _ordered(payload)
-        user = json.dumps(data, ensure_ascii=ensure_ascii)
+        user = json.dumps(_ordered(payload), ensure_ascii=ensure_ascii)
     else:
         user = ""
     digest = hashlib.sha256(
@@ -158,7 +156,7 @@ def text(name: str, *, prompt_set: str | None = None, **variables: Any) -> str:
     return render(name, prompt_set=prompt_set, **variables).system
 
 
-def names(prompt_set: str = "v1") -> list[str]:
+def names(prompt_set: str = "v2") -> list[str]:
     """Every prompt name defined in a set."""
     root = resources.files("harness_prompts").joinpath("templates", prompt_set)
     found: list[str] = []

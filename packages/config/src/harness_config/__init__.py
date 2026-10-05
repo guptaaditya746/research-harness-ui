@@ -94,7 +94,8 @@ class Settings(BaseSettings):
     model_call_threads: int = Field(16, validation_alias=_env("HARNESS_MODEL_CALL_THREADS"))
     model_stream: bool = Field(False, validation_alias=_env("HARNESS_MODEL_STREAM"))
     provider_max_retries: int = Field(3, validation_alias=_env("PROVIDER_MAX_RETRIES"))
-    prompt_set: str = Field("v2", validation_alias=_env("HARNESS_PROMPT_SET"))
+    # The prompt template set. Only "v2" exists; "v1" was deleted (docs/decisions/0007), and naming it fails here.
+    prompt_set: Literal["v2"] = Field("v2", validation_alias=_env("HARNESS_PROMPT_SET"))
 
     # ─── Endpoints ───────────────────────────────────────────────────────────
     litellm_base_url: str = Field("http://127.0.0.1:4000/v1", validation_alias=_env("LITELLM_BASE_URL"))
@@ -137,8 +138,6 @@ class Settings(BaseSettings):
     agentic_max_mcp_seeds: int = Field(12, validation_alias=_env("HARNESS_AGENTIC_MAX_MCP_SEEDS"))
     # Extraction and evidence-review batches sent to the model at the same time (1 = one after another).
     extraction_concurrency: int = Field(3, ge=1, le=16, validation_alias=_env("HARNESS_EXTRACTION_CONCURRENCY"))
-    # What the agent hands to the pipeline: its findings (statements + evidence ids) or only ids.
-    agent_handoff: Literal["findings", "ids"] = Field("findings", validation_alias=_env("HARNESS_AGENT_HANDOFF"))
 
     # ─── Agent loop ──────────────────────────────────────────────────────────
     agent_context_tokens: int | None = Field(
@@ -146,7 +145,6 @@ class Settings(BaseSettings):
     agent_reply_tokens: int = Field(2048, validation_alias=_env("HARNESS_AGENT_REPLY_TOKENS"))
     agent_reflections: int = Field(1, validation_alias=_env("HARNESS_AGENT_REFLECTIONS"))
     # Context and tools of the agent's tool loop (Phase 3c).
-    agent_toolset: Literal["curated", "all"] = Field("curated", validation_alias=_env("HARNESS_AGENT_TOOLSET"))
     agent_max_tool_calls: int = Field(12, validation_alias=_env("HARNESS_AGENT_MAX_TOOL_CALLS"))
     agent_keep_results: int = Field(3, validation_alias=_env("HARNESS_AGENT_KEEP_RESULTS"))
     agent_summary_compaction: bool = Field(True, validation_alias=_env("HARNESS_AGENT_SUMMARY_COMPACTION"))
@@ -158,17 +156,14 @@ class Settings(BaseSettings):
     mcp_agent_timeout_s: float = Field(90, validation_alias=_env("HARNESS_MCP_AGENT_TIMEOUT_S"))
     readings_min: int = Field(3, validation_alias=_env("READINGS_MIN"))
     readings_max: int = Field(4, validation_alias=_env("READINGS_MAX"))
-    concept_grounding: Literal["retrieve_first", "legacy"] = Field(
-        "retrieve_first", validation_alias=_env("HARNESS_CONCEPT_GROUNDING"))
     hide_ungrounded_readings: bool = Field(True, validation_alias=_env("HARNESS_HIDE_UNGROUNDED_READINGS"))
     # Phase 4: invented classes are subclasses of an existing class ("subclass"), or not allowed at
     # all ("off": they become hrn:ResearchEntity). Invented properties always get a parent property.
     schema_new_classes: Literal["subclass", "off"] = Field(
         "subclass", validation_alias=_env("HARNESS_SCHEMA_NEW_CLASSES"))
-    # Phase 4: the content core. "cskg": the CS-KG 2.0 subset (seed/cskg_ontology_2.0_subset.ttl) and
-    # the harness terms declared equivalent to it (Method, Task, Material, OtherEntity, uses, solves, ...)
-    # plus the paper-level addresses and evaluatesOn. "none": the seed before CS-KG (for comparisons).
-    content_core: Literal["cskg", "none"] = Field("cskg", validation_alias=_env("HARNESS_CONTENT_CORE"))
+    # The content core: the CS-KG 2.0 subset (seed/cskg_ontology_2.0_subset.ttl, or this path) and the
+    # harness terms declared equivalent to it (Method, Task, Material, OtherEntity, uses, solves, ...)
+    # plus the paper-level addresses and evaluatesOn.
     cskg_subset_path: str = Field("", validation_alias=_env("CSKG_SUBSET_PATH"))
     # Phase 4: add the DBLP backbone (authors, venue, citations among them) of the answer's papers
     # to the answer graph and export only the answer's subgraph in triples.ttl.

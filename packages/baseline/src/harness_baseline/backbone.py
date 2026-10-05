@@ -26,7 +26,6 @@ from harness_semantic import (
     DBLP,
     DBLP_EQUIVALENTS,
     HRN,
-    content_core_on,
     property_kind,
     term_origin,
 )
@@ -42,8 +41,8 @@ KNOWN = (str(HRN), str(DBLP), str(CSKG))
 
 
 def cskg_equivalent(iri: URIRef) -> URIRef | None:
-    """The CS-KG term a harness term is declared equivalent to (content core on), else None."""
-    return CSKG_EQUIVALENTS.get(iri) if content_core_on() else None
+    """The CS-KG term a harness term is declared equivalent to, else None."""
+    return CSKG_EQUIVALENTS.get(iri)
 
 
 def prefixed(iri: object) -> str:

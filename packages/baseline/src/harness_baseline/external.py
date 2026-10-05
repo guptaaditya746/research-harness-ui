@@ -31,7 +31,7 @@ from typing import Any
 
 from harness_extraction import AnswerResult, ExtractedTriple, ModelFailure, SchemaInference
 from harness_extraction.call_control import call_interrupted
-from harness_semantic import CSKG_INVERSES, content_core_on
+from harness_semantic import CSKG_INVERSES
 
 from .pipeline import Baseline20
 from .state import BaselineResult, BaselineState, NoResults
@@ -50,7 +50,7 @@ _INVERSE = {"authorOf": "authoredBy", "creatorOf": "authoredBy"}
 
 
 def _inverse(raw: str) -> str | None:
-    return _INVERSE.get(raw) or (CSKG_INVERSES.get(raw) if content_core_on() else None)
+    return _INVERSE.get(raw) or CSKG_INVERSES.get(raw)
 # Not relations between research entities: dropped (and counted).
 _META = {"type", "a", "label", "comment", "subClassOf", "subPropertyOf", "sameAs", "bibtexType", "numberOfCreators"}
 _NAME = re.compile(r"[a-z][A-Za-z0-9_]{0,63}")

@@ -11,8 +11,8 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 ```
 
 - Templates: `packages/prompts/src/harness_prompts/templates/<set>/<area>/<name>.system.j2` (plus an optional `.user.j2` for prose user messages).
-- Payloads are sent as JSON. In v2 long parts (passages, candidates, triples, claims) come first and the question last.
-- `HARNESS_PROMPT_SET` selects the set: `v2` (default) or `v1`.
+- Payloads are sent as JSON. Long parts (passages, candidates, triples, claims) come first and the question last.
+- There is one set, `v2` (`HARNESS_PROMPT_SET`). The pre-template set v1 was deleted (`docs/decisions/0007-delete-comparison-only-modes.md`); a run's `prompt_hashes` still names the set.
 - `Run.prompt_hashes` records the versions a run used.
 
 ## The 19 prompts
@@ -25,8 +25,8 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | `agent/decision_rejected` | Message sending an invalid agent decision back with its problems |
 | `agent/grounded_context` | Research context message (JSON appended) |
 | `agent/independent_verifier` | Fresh-context check of the agent's cited evidence |
-| `agent/compaction_summary` | Summary of the oldest tool exchanges when the agent's context is 80% full (Phase 3c; v1 = v2) |
-| `agent/paper_reader` | Parallel reader: up to four findings from one paper's top passages (Phase 3d; v1 = v2) |
+| `agent/compaction_summary` | Summary of the oldest tool exchanges when the agent's context is 80% full (Phase 3c) |
+| `agent/paper_reader` | Parallel reader: up to four findings from one paper's top passages (Phase 3d) |
 | `extraction/schema_inference` | Subschema for the question |
 | `extraction/triple_extraction` | Triple extraction in non-EDC mode (unused by live runs, see KNOWN_ISSUES 7) |
 | `extraction/edc_extract` | Open propositions from passages |
@@ -37,16 +37,15 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | `extraction/answer_verification` | Remove unsupported claims from the draft answer |
 | `extraction/claim_enrichment` | Missing context fields of result claims, with exact quotes |
 | `mcp_corpus/probe` | M1 corpus-only probe (development tool) |
-| `evaluation/triple_match` | Soft-match judge: does a run triple state the same fact as a gold triple? (added after templating; v1 = v2) |
+| `evaluation/triple_match` | Soft-match judge: does a run triple state the same fact as a gold triple? |
 
-## Sets
+## The set
 
-- **v1** is the text the harness sent before templating, reproduced byte for byte and checked against `packages/prompts/tests/golden/`. Never edit it; it exists so runs can be compared.
-- **v2** follows current guidance for non-thinking instruct models (Anthropic prompt-engineering docs, OpenAI GPT-4.1/GPT-5 prompting guides, Qwen3-2507 and Granite 4.x documentation): role and task first; inputs described; numbered steps where order matters; rules with the reason behind them, stated positively; explicit output schema with an example using real ontology terms; what to return when evidence is missing; evidence quoted before the claim; documents before the question.
+**v2** follows current guidance for non-thinking instruct models (Anthropic prompt-engineering docs, OpenAI GPT-4.1/GPT-5 prompting guides, Qwen3-2507 and Granite 4.x documentation): role and task first; inputs described; numbered steps where order matters; rules with the reason behind them, stated positively; explicit output schema with an example using real ontology terms; what to return when evidence is missing; evidence quoted before the claim; documents before the question.
 
 ## Graph shape variables
 
-`schema_inference`, `edc_extract` and `triple_extraction` (v2) take `schema_scope`
+`schema_inference`, `edc_extract` and `triple_extraction` take `schema_scope`
 (`focused`/`broad`) and `graph_linking` (`standard`/`dense`) from `HARNESS_SCHEMA_SCOPE` and
 `HARNESS_GRAPH_LINKING`. With the defaults they render the same text as before; `broad` replaces
 "keep the subschema small" with covering the question's topic, `dense` asks for one name per
@@ -55,7 +54,7 @@ Their examples use made-up entities only (MethodX, ModelZ, BenchY). See `docs/EV
 
 ## Changing a prompt
 
-1. Edit the v2 template (or add a v3 set for a larger experiment: copy `v2/`, add the set name to `SETS`).
+1. Edit the v2 template. The template text is part of the version hash, so runs record which text they used.
 2. Keep the output keys the parser reads (see the call site in `engine.py`, `planner.py`, `concepts.py`, `mcp.py`, `verification.py`). Schemas with `extra="forbid"` (`SchemaInference`, `ExtractedTriple`, `AnswerResult`) reject any additional key.
 3. `make check` renders every template (missing variables fail).
 4. Compare on the gold set before relying on a change; runs record which version they used.

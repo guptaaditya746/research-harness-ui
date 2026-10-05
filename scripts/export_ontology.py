@@ -1,5 +1,5 @@
 """Write the harness's seed ontology (DBLP schema + harness core terms and generic parents + the CS-KG
-content core unless HARNESS_CONTENT_CORE=none) as Turtle.
+content core) as Turtle.
 
     make ontology                                    # artifacts/ontology/harness_seed.ttl (or $ARTIFACT_ROOT/...)
     make ontology ARGS="--out /srv/ontology.ttl"
@@ -27,7 +27,7 @@ def main(out: Annotated[Path | None, typer.Option(help="Target .ttl file.")] = N
     target.write_text(schema.graph.serialize(format="turtle"), encoding="utf-8")
     typer.echo(f"{target}: {len(schema.graph)} triples, {len(schema.classes)} classes, "
                f"{len(schema.properties)} properties (seed {schema.seed_schema_version}, "
-               f"content core {schema.content_core or 'none'})")
+               f"content core {schema.content_core})")
 
 
 if __name__ == "__main__":

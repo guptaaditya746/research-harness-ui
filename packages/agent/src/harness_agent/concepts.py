@@ -1,16 +1,12 @@
 """Agent-proposed concept readings shown before every agentic research run.
 
-``HARNESS_CONCEPT_GROUNDING``:
+The question's top passages and keyphrases are retrieved first (``CorpusStore.hybrid_rank``),
+shown to the model with the question, and each reading cites the passages that support it. Each
+reading is then grounded by ranked retrieval: a passage supports it when it contains every content
+word of one of its search terms or its label (plural and suffix tolerant), or when the reading
+cited it. A corpus without ranked retrieval (a plain test double) gets exact-phrase grounding.
 
-- ``retrieve_first`` (default): retrieve the question's top passages and keyphrases first
-  (``CorpusStore.hybrid_rank``), show them to the model with the question, and let each reading
-  cite the passages that support it. Each reading is then grounded by ranked retrieval: a passage
-  supports it when it contains every content word of one of its search terms or its label
-  (plural and suffix tolerant), or when the reading cited it.
-- ``legacy``: propose from the question alone and count exact-phrase matches (which often
-  found 0 passages for multi-word terms: the "0 related paragraphs" bug).
-
-``HARNESS_HIDE_UNGROUNDED_READINGS`` (default true, ``retrieve_first`` only) drops readings without
+``HARNESS_HIDE_UNGROUNDED_READINGS`` (default true, ranked grounding only) drops readings without
 any supporting passage, unless none has support. Hiding runs after the minimum-count check, so
 fewer than three readings can be shown: better than readings the corpus cannot answer.
 ``evidence_hits`` counts supporting passages among the top ``GROUNDING_DEPTH`` ranked ones plus the
@@ -214,7 +210,7 @@ def propose_grounded(
     config = settings()
     minimum = max(MIN_CONCEPTS, config.readings_min)
     maximum = min(MAX_CONCEPTS, max(config.readings_max, MIN_CONCEPTS))
-    retrieve_first = config.concept_grounding == "retrieve_first" and hasattr(corpus, "hybrid_rank")
+    retrieve_first = hasattr(corpus, "hybrid_rank")
     evidence, phrases = gather_evidence(corpus, question) if retrieve_first else ([], [])
     shown = {row["passage_id"] for row in evidence}
     last_error = "no concepts returned"
@@ -244,7 +240,7 @@ def propose_grounded(
                 _ground(concept, corpus)
         concepts.sort(key=lambda item: item.evidence_hits == 0)
         hidden: list[str] = []
-        # Hiding needs ranked grounding; legacy mode keeps every reading, as before.
+        # Hiding needs ranked grounding.
         if retrieve_first and config.hide_ungrounded_readings and any(item.evidence_hits for item in concepts):
             hidden = [item.label for item in concepts if not item.evidence_hits]
             concepts = [item for item in concepts if item.evidence_hits]

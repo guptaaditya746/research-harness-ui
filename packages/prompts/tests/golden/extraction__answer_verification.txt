@@ -1,1 +1,0 @@
-Verify every factual claim in the draft answer against the supplied atomic triples and their evidence. Revise the answer to remove unsupported claims. Return strict JSON with supported (boolean), answer (string), and cited_source_ids (list). Set supported=false if no factual answer remains. Never add a source or fact.

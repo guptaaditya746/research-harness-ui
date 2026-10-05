@@ -90,19 +90,9 @@ def test_the_cskg_content_core_is_named_by_harness_terms_equivalent_to_cskg() ->
     owlrl_closure(graph)
 
 
-def test_the_content_core_can_be_switched_off(monkeypatch) -> None:
-    from harness_semantic import term_origin
-
-    monkeypatch.setenv("HARNESS_CONTENT_CORE", "none")
-    schema = hand_written_subschema()
-    assert schema.content_core is None and HRN.Task not in schema.classes and HRN.addresses not in schema.properties
-    assert not any(str(s).startswith("https://w3id.org/cskg/") for s in schema.graph.subjects())
-    assert term_origin(HRN.addresses) == "invented"
-
-
 def test_a_missing_cskg_subset_is_an_error(monkeypatch, tmp_path) -> None:
     import pytest
 
     monkeypatch.setenv("CSKG_SUBSET_PATH", str(tmp_path / "nowhere.ttl"))
-    with pytest.raises(FileNotFoundError, match="HARNESS_CONTENT_CORE=none"):
+    with pytest.raises(FileNotFoundError, match="CSKG_SUBSET_PATH"):
         hand_written_subschema()

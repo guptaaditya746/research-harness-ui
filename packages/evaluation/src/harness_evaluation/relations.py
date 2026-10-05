@@ -249,10 +249,8 @@ def load_relations(path: Path | None = None) -> PredicateRelations:
 
 
 def _schema_key() -> tuple[object, ...]:
-    from harness_semantic import content_core_on, cskg_subset_path
+    from harness_semantic import cskg_subset_path
 
-    if not content_core_on():
-        return ("none",)
     subset = cskg_subset_path()
     return ("cskg", str(subset), subset.stat().st_mtime if subset.exists() else None)
 

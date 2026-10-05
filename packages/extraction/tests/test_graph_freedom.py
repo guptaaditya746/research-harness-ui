@@ -91,8 +91,8 @@ def test_relation_names_are_lower_camel_case() -> None:
 
 
 def test_broad_scope_and_dense_linking_change_only_the_prompts_that_use_them() -> None:
-    focused = render("extraction/schema_inference", {"question": "q"}, prompt_set="v2", content_core=True)
-    broad = render("extraction/schema_inference", {"question": "q"}, prompt_set="v2", content_core=True,
+    focused = render("extraction/schema_inference", {"question": "q"})
+    broad = render("extraction/schema_inference", {"question": "q"},
                    schema_scope="broad", graph_linking="dense")
     assert "Keep the subschema small" in focused.system and "Keep the subschema small" not in broad.system
     assert "connected graph" in broad.system and "connected graph" not in focused.system

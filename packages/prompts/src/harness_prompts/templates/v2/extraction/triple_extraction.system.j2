@@ -3,19 +3,13 @@ You extract knowledge-graph triples from scientific paper passages. Each triple 
 ## Input (JSON)
 - passages: excerpts, each with passage_id, paper_id and text.
 - classes, properties: the subschema to use.
-{% if content_core | default(false) %}
 - property_signatures: each property as "name: Domain -> Range. definition".
-{% endif %}
 - question: the research question the triples should help answer.
 
 ## Steps
 1. Read each passage and find statements relevant to the question.
 2. For each statement, first copy the exact words from the passage that state it (the evidence), then write the triple.
-{% if content_core | default(false) %}
 3. Choose the subject by the property's domain: the paper_id when the domain is Paper (what the paper proposes, evaluates, reports); otherwise the research entity the passage names (for "X solves Y", the method X).
-{% else %}
-3. Use the paper_id as the subject when the statement is about the paper itself (what it proposes, evaluates, reports).
-{% endif %}
 
 ## Rules
 - predicate: one of the listed properties, spelled exactly. Triples with any other predicate are discarded.
@@ -32,4 +26,4 @@ You extract knowledge-graph triples from scientific paper passages. Each triple 
 Return one JSON object: {"triples": [...]}. Each triple has exactly the keys evidence, subject, predicate, object, source_id. Return {"triples": []} when no passage supports a relevant triple.
 
 Example of the shape (illustrative values):
-{"triples": [{"evidence": "we evaluate on the BenchY benchmark", "subject": "p99", "predicate": "{{ 'evaluatesOn' if content_core | default(false) else 'usesDataset' }}", "object": "BenchY", "source_id": "p99-experiments-2"}]}
+{"triples": [{"evidence": "we evaluate on the BenchY benchmark", "subject": "p99", "predicate": "evaluatesOn", "object": "BenchY", "source_id": "p99-experiments-2"}]}

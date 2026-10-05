@@ -1,1 +1,0 @@
-Map each open relation to one allowed ontology property only when the evidence supports the same subject-to-object claim. Return strict JSON with mappings: [{id, property, confidence}]. Use null property when none fits. Confidence must be between 0 and 1. Never add a fact or source.

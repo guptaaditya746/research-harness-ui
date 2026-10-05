@@ -219,7 +219,7 @@ def test_a_cut_off_reply_says_how_it_ended() -> None:
     assert _cut_off_ending('{"answer": "a b c d').endswith('{"answer": "a b c d')
 
 
-def test_v2_prompts_see_property_signatures_and_v1_prompts_do_not(monkeypatch) -> None:
+def test_prompts_see_property_signatures(monkeypatch) -> None:
     schema_reply = {"label": "x", "gloss": "y", "classes": ["Paper", "Task"], "properties": ["addresses"]}
     passages = [{"passage_id": "p99-s1", "paper_id": "p99", "text": "We study BenchY."}]
     sent: list[dict] = []
@@ -237,9 +237,3 @@ def test_v2_prompts_see_property_signatures_and_v1_prompts_do_not(monkeypatch) -
     assert any(row.startswith("addresses: Paper -> Task. ") for row in signatures)
     assert any(row.startswith("solves: ResearchEntity -> Task. ") for row in signatures)
     assert sent[1]["property_signatures"] == [row for row in signatures if row.startswith("addresses:")]
-
-    monkeypatch.setenv("HARNESS_PROMPT_SET", "v1")
-    sent.clear()
-    engine = ExtractionEngine(Recording([]), hand_written_subschema(), schema_model=Recording([schema_reply]))
-    engine.infer_schema("Which problems does p99 study?", passages)
-    assert "property_signatures" not in sent[0]

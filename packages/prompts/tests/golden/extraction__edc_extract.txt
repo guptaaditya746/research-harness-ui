@@ -1,1 +1,0 @@
-Extract evidence-backed atomic propositions relevant to the question. Use the supplied paper_id as subject for paper-level claims. Keep predicates open natural-language relations. Return strict JSON with triples; each triple must include source_id (a supplied passage_id), subject, predicate, object, and evidence.

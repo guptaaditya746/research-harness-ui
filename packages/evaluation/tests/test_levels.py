@@ -316,9 +316,3 @@ def test_the_content_core_credits_cskg_inverses_and_evaluates_on() -> None:
                           relations=relations)["levels"]
     assert (levels["entailed"]["matched_gold"], levels["entailed"]["matched_predicted"]) == (1, 0)
 
-
-def test_without_the_content_core_those_rules_are_absent(monkeypatch) -> None:
-    monkeypatch.setenv("HARNESS_CONTENT_CORE", "none")
-    levels = score_levels([t("MethodZ", "uses", "ToolQ")], [t("ToolQ", "usedBy", "MethodZ")], key=key,
-                          relations=load_relations())["levels"]
-    assert levels["entailed"]["matched_gold"] == 0
