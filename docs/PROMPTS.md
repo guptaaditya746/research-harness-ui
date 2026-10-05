@@ -55,7 +55,7 @@ Their examples use made-up entities only (MethodX, ModelZ, BenchY). See `docs/EV
 ## Changing a prompt
 
 1. Edit the v2 template. The template text is part of the version hash, so runs record which text they used.
-2. Keep the output keys the parser reads (see the call site in `engine.py`, `planner.py`, `concepts.py`, `mcp.py`, `verification.py`). Schemas with `extra="forbid"` (`SchemaInference`, `ExtractedTriple`, `AnswerResult`) reject any additional key.
+2. Keep the output keys the parser reads (see the call site in `harness_extraction/stage_*.py`, `planner.py`, `concepts.py`, `tool_loop.py`, `verification.py`). Schemas with `extra="forbid"` (`SchemaInference`, `ExtractedTriple`, `AnswerResult`) reject any additional key.
 3. `make check` renders every template (missing variables fail).
 4. Compare on the gold set before relying on a change; runs record which version they used.
 

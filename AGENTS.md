@@ -15,7 +15,7 @@ Start with `docs/ARCHITECTURE.md` for how a run flows, `docs/decisions/` for why
 | Agent tool loop, context window | `packages/agent/src/harness_agent/tool_loop.py`, `decisions.py`, `mcp.py`, `context.py`, `research_state.py` |
 | Concept readings before agentic research | `packages/agent/src/harness_agent/concepts.py`, `proposal.py` |
 | Model calls (client, retries, cancellation, events) | `packages/extraction/src/harness_extraction/model_client.py`, `call_control.py`, `events.py` |
-| Schema inference, extraction, review, answer | `packages/extraction/src/harness_extraction/engine.py` |
+| Schema inference, extraction, review, answer | `packages/extraction/src/harness_extraction/engine.py` and `stage_*.py` |
 | Claim subgraphs (also imported by `labelling`) | `packages/extraction/src/harness_extraction/claims.py` |
 | Prompts (every model call) and few-shot examples | `packages/prompts/src/harness_prompts/templates/{v1,v2}/`, `examples/` — see `docs/PROMPTS.md` |
 | Settings / environment variables | `packages/config/src/harness_config/__init__.py`, `.env.example` |
