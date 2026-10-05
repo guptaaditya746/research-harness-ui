@@ -45,7 +45,7 @@ harness_corpus | harness_semantic | harness_observability | harness_ledger | har
 harness_schema | harness_config
 ```
 
-`harness_public_gateway` is internet-facing and must not import harness internals; it talks to the API over HTTP.
+The anonymous public gateway is its own repository (public-gateway, decision 0002); it talks to this API over HTTP (`/internal/public/*`).
 
 ## Commands
 

@@ -8,8 +8,6 @@ from pathlib import Path
 from harness_config import DYNAMIC_VARIABLES, Settings, settings
 
 ROOT = Path(__file__).resolve().parents[3]
-# Read by packages/public_gateway, which keeps its own configuration.
-PUBLIC_GATEWAY = re.compile(r"^(PUBLIC_|TURNSTILE_)")
 
 
 def _aliases() -> set[str]:
@@ -24,8 +22,7 @@ def test_every_env_example_variable_is_a_setting() -> None:
     variables = re.findall(r"^#?\s*([A-Z][A-Z0-9_]+)=", (ROOT / ".env.example").read_text(), re.MULTILINE)
     unknown = [
         name for name in variables
-        if name not in _aliases() and not PUBLIC_GATEWAY.match(name)
-        and not name.startswith(DYNAMIC_VARIABLES)
+        if name not in _aliases() and not name.startswith(DYNAMIC_VARIABLES)
     ]
     assert unknown == []
 

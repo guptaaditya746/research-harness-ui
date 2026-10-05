@@ -11,7 +11,7 @@
   ("name:password,name2:password2") or ``SITE_PASSWORD`` (any user name). Passwords need at least 12
   characters. After 10 failed logins a client waits 10 minutes.
 - The API and the models stay on loopback; only this port goes behind the tunnel. Unlike the public
-  gateway (``packages/public_gateway``), nothing is restricted once logged in: every page and path.
+  gateway (its own repository, public-gateway), nothing is restricted once logged in: every page and path.
 """
 
 from __future__ import annotations

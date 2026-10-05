@@ -7,9 +7,7 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
-    "test:e2e": "playwright test",
-    "build:public": "tsc --noEmit && VITE_PUBLIC_INTERACTIVE=true vite build",
-    "check:public-build": "node scripts/check-public-build.mjs"
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "cytoscape": "^3.34.3",

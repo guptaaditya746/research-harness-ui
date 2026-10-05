@@ -29,7 +29,6 @@ members = [
     "harness-mcp-corpus",
     "harness-observability",
     "harness-prompts",
-    "harness-public-gateway",
     "harness-runs",
     "harness-schema",
     "harness-semantic",
@@ -1372,25 +1371,6 @@ dependencies = [
 requires-dist = [
     { name = "harness-config", editable = "packages/config" },
     { name = "jinja2", specifier = ">=3.1" },
-]
-
-[[package]]
-name = "harness-public-gateway"
-version = "0.1.0"
-source = { editable = "packages/public_gateway" }
-dependencies = [
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "pydantic" },
-    { name = "uvicorn" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "pydantic", specifier = ">=2" },
-    { name = "uvicorn", specifier = ">=0.30" },
 ]
 
 [[package]]
@@ -3887,7 +3867,6 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "harness-public-gateway" },
     { name = "httpx" },
     { name = "hypothesis" },
     { name = "import-linter" },
@@ -3923,7 +3902,6 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "harness-public-gateway", editable = "packages/public_gateway" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "hypothesis", specifier = ">=6" },
     { name = "import-linter", specifier = ">=2.1" },

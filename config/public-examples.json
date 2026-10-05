@@ -1,4 +1,0 @@
-{
-  "description": "Add only explicitly reviewed, completed private run IDs. Empty by default.",
-  "run_ids": []
-}
