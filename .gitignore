@@ -16,3 +16,4 @@ slurm/logs/*.err
 slurm/logs/grobid-service-*.log
 *.egg-info/
 results/
+.coverage

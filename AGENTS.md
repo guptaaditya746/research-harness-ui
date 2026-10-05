@@ -2,7 +2,7 @@
 
 The Research Harness answers questions about a fixed corpus of scientific papers with three research paths (Fast, Adaptive, Agentic), plus an External baseline (the separate external-harness repo), and shows each answer with its knowledge graph and evidence. Models are served separately by [thesis-llm-setup](https://github.com/guptaaditya746/thesis-llm-setup); gold sets are built in [labelling](https://github.com/guptaaditya746/labelling).
 
-Start with `docs/ARCHITECTURE.md` for how a run flows, and `CONTEXT.md` for the vocabulary (claim subgraph, corpus absence, provisional relation, ...).
+Start with `docs/ARCHITECTURE.md` for how a run flows, `docs/decisions/` for why the code is laid out as it is, and `CONTEXT.md` for the vocabulary (claim subgraph, corpus absence, provisional relation, ...).
 
 ## Map: where things are
 
