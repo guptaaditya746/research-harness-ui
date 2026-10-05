@@ -46,4 +46,4 @@ See `docs/KNOWN_ISSUES.md` for problems with a known root cause.
 
 ## Evaluation runs
 
-Pooling runs (`make run-questions`, every reading) build the gold candidates; scoring runs (`make benchmark-runs`, evaluation mode, 3 repetitions per path, the gold row's question text and snapshot) are what `make evaluate` scores. The whole pilot, with every command in both repos: [labelling/docs/PILOT.md](https://github.com/guptaaditya746/labelling/blob/main/docs/PILOT.md).
+The gold is the reviewed evidence document of each question, built in labelling (`labelling evidence-docs`, not from runs); scoring runs (`make benchmark-runs`, evaluation mode, 3 repetitions per path, the gold row's question text and snapshot) are what `make evaluate` scores. The workflow, with every command: [labelling/README.md](https://github.com/guptaaditya746/labelling/blob/main/README.md).

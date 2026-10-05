@@ -30,8 +30,7 @@ def venue_matches(venue_fact: object, paper_year: object, mention: str) -> bool:
 
     The venue name must appear as whole words in the fact ("ACL" matches "ACL 2025", "ACL (1)" and
     "Findings of ACL", not "NAACL"); a year in the mention must appear in the fact or be the paper's
-    publication year (DBLP often keeps the year out of the venue string). labelling computes gold
-    with the same rule (``structural.venue_matches``).
+    publication year (DBLP often keeps the year out of the venue string).
     """
     # "ACL2025" reads as "ACL 2025"; words like "main conference" or "long papers" are not part of the name.
     words = normal_text(re.sub(r"(?<=[A-Za-z])(?=(?:19|20)\d{2}\b)", " ", str(mention))).split()

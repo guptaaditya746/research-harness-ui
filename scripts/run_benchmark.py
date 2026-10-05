@@ -10,7 +10,7 @@ stamped with the evaluation snapshot (which `make evaluate` matches against the 
 Agentic run researches its top-ranked reading automatically. The question text is taken from the
 gold row, so runs and gold always match. Repetitions start one after the other and at most as many
 groups run at once as the API has run slots, so no run waits in the queue while its deadline runs.
-Afterwards: make evaluate (see labelling/docs/PILOT.md).
+Afterwards: make evaluate (gold from labelling: evidence documents, reviewed; see its README).
 """
 
 from __future__ import annotations
