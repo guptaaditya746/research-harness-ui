@@ -217,16 +217,9 @@ def funnel(folder: Path) -> dict[str, Any] | None:
             "dropped": dict(dropped.most_common()), "dropped_examples": examples[:8]}
 
 
-def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
-    """Graph-shape numbers for one run's chosen reading (None when it has no reading)."""
-    reading = chosen_reading(run)
-    if reading is None:
-        return None
-    vocab = vocabulary()
-    graph = _graph_of(reading)
+def _connectivity(graph: AnswerGraph, edges: list[GraphEdge]) -> dict[str, Any]:
+    """Pieces of the knowledge graph and how many paper pairs they connect (literal values do not link)."""
     kinds = {node.id: node.kind for node in graph.nodes}
-    labels = {node.id: node.label for node in graph.nodes}
-    edges = [edge for edge in graph.edges if edge.kind in KNOWLEDGE_EDGES]
     knowledge_nodes = {node.id for node in graph.nodes if node.kind != "passage"}
     degree: Counter[str] = Counter()
     for edge in edges:
@@ -242,34 +235,69 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
     structural = touched - literals
     pieces = _components(structural, ((edge.source, edge.target) for edge in linking))
     papers = [node for node in touched if kinds.get(node) == "paper"]
-    paper_pairs = len(papers) * (len(papers) - 1) // 2
-    connected_pairs = sum(len([n for n in piece if kinds.get(n) == "paper"]) *
-                          (len([n for n in piece if kinds.get(n) == "paper"]) - 1) // 2 for piece in pieces)
 
+    def pairs(count: int) -> int:
+        return count * (count - 1) // 2
+
+    connected = sum(pairs(len([n for n in piece if kinds.get(n) == "paper"])) for piece in pieces)
+    return {"degree": degree, "touched": touched, "pieces": pieces, "structural": structural,
+            "papers": papers, "paper_pairs": pairs(len(papers)), "connected_pairs": connected}
+
+
+def _edge_origin(edge: GraphEdge, vocab: Vocabulary) -> str:
+    # Runs since Phase 4 carry the origin on the edge; older ones are classified by label.
+    if edge.origin is not None:
+        return "seed" if edge.origin == "core" else edge.origin
+    return predicate_origin(edge.label, vocab)
+
+
+def _fact_numbers(edges: list[GraphEdge], kinds: dict[str, str], labels: dict[str, str],
+                  degree: Counter[str], vocab: Vocabulary) -> dict[str, Any]:
+    """Vocabulary mix, backbone and the quality of objects of the fact edges."""
     facts = [edge for edge in edges if edge.kind == "fact"]
-
-    def origin_of(edge: GraphEdge) -> str:
-        # Runs since Phase 4 carry the origin on the edge; older ones are classified by label.
-        if edge.origin is not None:
-            return "seed" if edge.origin == "core" else edge.origin
-        return predicate_origin(edge.label, vocab)
-
-    origin = Counter(origin_of(edge) for edge in facts)
-    invented = [edge for edge in facts if origin_of(edge) == "invented"]
+    origins = {id(edge): _edge_origin(edge, vocab) for edge in facts}
+    origin = Counter(origins[id(edge)] for edge in facts)
+    invented = [edge for edge in facts if origins[id(edge)] == "invented"]
     backbone = [edge for edge in facts if edge.id.startswith(BACKBONE_PREFIX)]
     # Shares of what the run extracted itself: the backbone would dilute them.
     extracted = [edge for edge in facts if not edge.id.startswith(BACKBONE_PREFIX)]
     dead_ends = [edge for edge in invented if degree[edge.target] <= 1]
     # DBLP values (a paper title) are long by nature; only extracted objects count as statements.
-    statements = [edge for edge in extracted if origin_of(edge) != "dblp"
+    statements = [edge for edge in extracted if origins[id(edge)] != "dblp"
                   and len(labels.get(edge.target, "").split()) > STATEMENT_WORDS]
     literal_objects = [edge for edge in extracted if kinds.get(edge.target) == "value"]
 
-    keys = Counter(_key(labels[node]) for node in touched if kinds.get(node) in {"entity", "value"} and _key(labels[node]))
-    near_duplicates = sum(count for count in keys.values() if count > 1)
+    def shown(items: list[GraphEdge], count: int) -> list[str]:
+        return [f"{labels.get(e.source, e.source)} —{e.label}→ {labels.get(e.target, e.target)}" for e in items[:count]]
 
-    inferred_props = [name for name in reading.properties if predicate_origin(name, vocab) == "invented"]
-    inferred_classes = [name for name in reading.classes if name.casefold() not in vocab.seed_classes]
+    return {
+        "fact_edges": len(facts), "backbone_edges": len(backbone), "extracted_edges": len(extracted),
+        "extracted_invented_share": _share(sum(origins[id(e)] == "invented" for e in extracted), len(extracted)),
+        "dblp": origin["dblp"], "seed": origin["seed"], "invented": origin["invented"],
+        "dblp_share": _share(origin["dblp"], len(facts)),
+        "invented_share": _share(origin["invented"], len(facts)),
+        "invented_dead_end_share": _share(len(dead_ends), len(invented)),
+        "literal_object_share": _share(len(literal_objects), len(extracted)),
+        "statement_object_share": _share(len(statements), len(extracted)),
+        "examples": {"dead_ends": shown(dead_ends, 3), "statements": shown(statements, 2)},
+    }
+
+
+def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
+    """Graph-shape numbers for one run's chosen reading (None when it has no reading)."""
+    reading = chosen_reading(run)
+    if reading is None:
+        return None
+    vocab = vocabulary()
+    graph = _graph_of(reading)
+    kinds = {node.id: node.kind for node in graph.nodes}
+    labels = {node.id: node.label for node in graph.nodes}
+    edges = [edge for edge in graph.edges if edge.kind in KNOWLEDGE_EDGES]
+    links = _connectivity(graph, edges)
+    degree, touched, pieces = links["degree"], links["touched"], links["pieces"]
+
+    facts = _fact_numbers(edges, kinds, labels, degree, vocab)
+    keys = Counter(_key(labels[node]) for node in touched if kinds.get(node) in {"entity", "value"} and _key(labels[node]))
     root = folder / run.id if folder is not None else None
     # Metadata questions are answered from verified DBLP facts; research questions from passages.
     answered_from_facts = any(check.name == "verified facts" and check.status == "pass" for check in run.checks)
@@ -277,29 +305,22 @@ def shape(run: Run, folder: Path | None = None) -> dict[str, Any] | None:
         "id": run.id, "path": run.path, "status": run.status, "question": run.question,
         "kind": "facts" if answered_from_facts else "research",
         "reading": reading.label,
-        "nodes": len(touched), "edges": len(edges), "fact_edges": len(facts),
-        "backbone_edges": len(backbone), "extracted_edges": len(extracted),
-        "extracted_invented_share": _share(sum(origin_of(e) == "invented" for e in extracted), len(extracted)),
+        "nodes": len(touched), "edges": len(edges), "fact_edges": facts.pop("fact_edges"),
+        "backbone_edges": facts.pop("backbone_edges"), "extracted_edges": facts.pop("extracted_edges"),
+        "extracted_invented_share": facts.pop("extracted_invented_share"),
         "claim_edges": sum(edge.kind == "claim" for edge in edges),
-        "dblp": origin["dblp"], "seed": origin["seed"], "invented": origin["invented"],
-        "dblp_share": _share(origin["dblp"], len(facts)),
-        "invented_share": _share(origin["invented"], len(facts)),
+        **{key: facts.pop(key) for key in ("dblp", "seed", "invented", "dblp_share", "invented_share")},
         "pieces": len(pieces),
-        "largest_piece_share": _share(max((len(piece) for piece in pieces), default=0), len(structural)),
-        "papers": len(papers),
-        "paper_pairs_connected": _share(connected_pairs, paper_pairs),
-        "invented_dead_end_share": _share(len(dead_ends), len(invented)),
-        "literal_object_share": _share(len(literal_objects), len(extracted)),
-        "statement_object_share": _share(len(statements), len(extracted)),
-        "near_duplicate_nodes": near_duplicates,
-        "invented_properties": sorted(set(inferred_props)),
-        "invented_classes": sorted(set(inferred_classes)),
-        "examples": {
-            "dead_ends": [f"{labels.get(e.source, e.source)} —{e.label}→ {labels.get(e.target, e.target)}"
-                          for e in dead_ends[:3]],
-            "statements": [f"{labels.get(e.source, e.source)} —{e.label}→ {labels.get(e.target, e.target)}"
-                           for e in statements[:2]],
-        },
+        "largest_piece_share": _share(max((len(piece) for piece in pieces), default=0), len(links["structural"])),
+        "papers": len(links["papers"]),
+        "paper_pairs_connected": _share(links["connected_pairs"], links["paper_pairs"]),
+        **{key: facts.pop(key) for key in ("invented_dead_end_share", "literal_object_share",
+                                            "statement_object_share")},
+        "near_duplicate_nodes": sum(count for count in keys.values() if count > 1),
+        "invented_properties": sorted({name for name in reading.properties
+                                       if predicate_origin(name, vocab) == "invented"}),
+        "invented_classes": sorted({name for name in reading.classes if name.casefold() not in vocab.seed_classes}),
+        "examples": facts.pop("examples"),
         "schema": _schema_hygiene(root / "subschema.ttl", vocab) if root else None,
         "export": _export(root / "triples.ttl") if root else None,
         "funnel": funnel(root) if root else None,
