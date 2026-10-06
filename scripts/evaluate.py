@@ -122,7 +122,7 @@ def main(
     if pending:
         console.print(f"[yellow]{pending} judge pairs are not in the cache; soft scores are lower bounds "
                       f"until `make evaluate ARGS=--judge` runs.[/yellow]")
-    per_question = Table(title="Soft F1 per question (mean over repetitions)")
+    per_question = Table(title="Soft F1 per question, with precision / recall (mean over repetitions)")
     per_question.add_column("Question")
     per_question.add_column("Complexity")
     for label in PATH_LABELS.values():
@@ -131,8 +131,12 @@ def main(
         cells = []
         for path in PATH_LABELS:
             entry = next((item for item in row["paths"] if item["path"] == path), None)
-            value = entry["levels"]["soft"]["f1"]["mean"] if entry else None
-            cells.append("–" if value is None else f"{value:.2f}")
+            soft = entry["levels"]["soft"] if entry else None
+            if soft is None or soft["f1"]["mean"] is None:
+                cells.append("–")
+                continue
+            # F1 alone hides why: a short, correct answer against a large gold has high P and tiny R.
+            cells.append(f"{soft['f1']['mean']:.2f} (P {soft['precision']['mean']:.2f} / R {soft['recall']['mean']:.3f})")
         per_question.add_row(str(row["question"])[:70], str(row.get("complexity") or "–"), *cells)
     console.print(per_question)
 
