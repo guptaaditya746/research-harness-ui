@@ -7,6 +7,7 @@ Scoring runs against labelling's gold: triple precision and recall at three leve
 - `matching.py` — `score_levels` (pairing, judge, per-level scores)
 - `relations.py` — entailment rules; `judge.py` — the soft-match judge
 - `benchmark.py`, `stats.py`, `graph_shape.py`
+- `explain.py` — why a gold row scores zero or nothing (`make evaluate ARGS=--explain`)
 
 ## Imports
 
