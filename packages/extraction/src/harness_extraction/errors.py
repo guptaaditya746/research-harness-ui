@@ -7,6 +7,10 @@ class ModelFailure(RuntimeError):
     """A model call failed: provider error, timeout, stop request or unusable reply."""
 
 
+class ContextOverflow(ModelFailure):
+    """The prompt does not fit the model's context window (run reason ``context_window_exceeded``)."""
+
+
 class UnsupportedAnswer(ValueError):
     """The composed answer is not backed by the extracted triples (run reason ``answer_unsupported``).
 
@@ -24,4 +28,4 @@ class UnsupportedAnswer(ValueError):
         self.unknown_sources = list(unknown_sources or [])  # cited ids that are no triple's source
 
 
-__all__ = ["ModelFailure", "UnsupportedAnswer"]
+__all__ = ["ContextOverflow", "ModelFailure", "UnsupportedAnswer"]

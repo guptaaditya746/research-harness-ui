@@ -126,8 +126,13 @@ def main(
     def record(item: dict[str, Any]) -> None:
         with lock, out.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(item, ensure_ascii=False) + "\n")
+        # "facts" counts the final answer's triples: an incomplete run has none, whatever passed review, so the
+        # failing check (what stopped it) and the stage counts are printed with it.
         typer.echo(f"[{item['question_id']}] {item['path']} #{item.get('repetition', '-')} {item.get('run_id') or '-'} "
-                   f"{item.get('status')} {item.get('facts', '')} facts" + (f" ({item['reason']})" if item.get("reason") else ""))
+                   f"{item.get('status')} {item.get('facts', '')} triples in the answer"
+                   + (f" ({item['reason']})" if item.get("reason") else "")
+                   + (f"\n    stages: {item['stages']}" if item.get("stages") and item.get("status") != "answered" else "")
+                   + (f"\n    failed: {item['failed_check']}" if item.get("failed_check") else ""))
 
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=workers) as pool:

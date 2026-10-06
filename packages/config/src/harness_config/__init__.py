@@ -91,6 +91,14 @@ class Settings(BaseSettings):
     model_agent_url: str | None = Field(None, validation_alias=_env("HARNESS_MODEL_AGENT_URL"))
     model_options_json: str = Field("", validation_alias=_env("HARNESS_MODEL_OPTIONS"))
     max_output_tokens: int = Field(4096, validation_alias=_env("HARNESS_MAX_OUTPUT_TOKENS"))
+    # The served models' context window (prompt + reply), in tokens; per alias in HARNESS_MODEL_OPTIONS
+    # ({"heavy-model": {"context_tokens": 65536}}). Answer composition and verification split large
+    # evidence sets into calls that fit, and a call never reserves more reply tokens than are left.
+    model_context_tokens: int = Field(32768, ge=2048, validation_alias=_env("HARNESS_MODEL_CONTEXT_TOKENS"))
+    # Answer composition over many triples: batches composed at the same time, and at most this many
+    # batches (0 = all; the answer graph keeps every triple either way, only the answer text is shorter).
+    answer_batch_concurrency: int = Field(3, ge=1, le=16, validation_alias=_env("HARNESS_ANSWER_BATCH_CONCURRENCY"))
+    answer_max_batches: int = Field(0, ge=0, validation_alias=_env("HARNESS_ANSWER_MAX_BATCHES"))
     model_call_threads: int = Field(16, validation_alias=_env("HARNESS_MODEL_CALL_THREADS"))
     model_stream: bool = Field(False, validation_alias=_env("HARNESS_MODEL_STREAM"))
     provider_max_retries: int = Field(3, validation_alias=_env("PROVIDER_MAX_RETRIES"))
@@ -276,6 +284,13 @@ class Settings(BaseSettings):
             return {}
         value = options.get(alias) if isinstance(options, dict) else None
         return value if isinstance(value, dict) else {}
+
+    def context_tokens(self, alias: str) -> int:
+        """The context window of a model alias: its ``context_tokens`` option, else HARNESS_MODEL_CONTEXT_TOKENS."""
+        try:
+            return int(self.model_options(alias).get("context_tokens") or self.model_context_tokens)
+        except (TypeError, ValueError):
+            return self.model_context_tokens
 
     def run_deadline_seconds(self, path: str, budget: str) -> float:
         """Hard wall-clock limit for one run.

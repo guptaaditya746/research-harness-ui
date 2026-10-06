@@ -106,3 +106,27 @@ def test_prompt_template_is_named_in_the_finished_event(monkeypatch) -> None:
     with model_events(lambda action, detail: events.append((action, detail))):
         complete(OpenAICompatibleModel(model="m"), prompt)
     assert f"prompt {prompt.ref}" in events[-1][1]
+
+
+def test_the_reply_budget_never_exceeds_what_the_context_window_leaves(monkeypatch) -> None:
+    from harness_extraction import ContextOverflow
+
+    seen = use_transport(monkeypatch, lambda _: reply('{"ok": true}'))
+    monkeypatch.setenv("HARNESS_MODEL_CONTEXT_TOKENS", "8192")
+    OpenAICompatibleModel(model="heavy-model").complete_json("s", "x" * 15000)        # about 5,000 tokens
+    assert seen[-1]["max_tokens"] < 4096 and seen[-1]["max_tokens"] > 2500
+    with pytest.raises(ContextOverflow, match="context_window_exceeded"):
+        OpenAICompatibleModel(model="heavy-model").complete_json("s", "x" * 30000)
+    assert len(seen) == 1                                                             # refused before sending
+    monkeypatch.setenv("HARNESS_MODEL_OPTIONS", json.dumps({"heavy-model": {"context_tokens": 65536}}))
+    OpenAICompatibleModel(model="heavy-model").complete_json("s", "x" * 30000)
+    assert seen[-1]["max_tokens"] == 4096
+
+
+def test_a_provider_context_error_is_named_as_such(monkeypatch) -> None:
+    from harness_extraction import ContextOverflow
+
+    use_transport(monkeypatch, lambda _: httpx.Response(400, text='{"error": "litellm.ContextWindowExceededError: '
+                                                                   'maximum context length is 32768 tokens"}'))
+    with pytest.raises(ContextOverflow, match="context_window_exceeded"):
+        OpenAICompatibleModel(model="heavy-model").complete_json("s", "u")

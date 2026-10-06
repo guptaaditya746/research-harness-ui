@@ -82,9 +82,14 @@ def summary(run: dict[str, Any]) -> dict[str, Any]:
     graph = reading.get("graph") or {}
     failed = [f"{check.get('name')}: {check.get('detail')}" for check in run.get("checks") or []
               if check.get("status") == "fail"]
+    # How far the run got: the passing stages' own counts (e.g. "evidence review: 4273 of 10609 ... picked").
+    stages = [f"{check.get('name')}: {check.get('detail')}" for check in run.get("checks") or []
+              if check.get("status") in {"pass", "info"} and check.get("name") in {
+                  "retrieval", "extraction", "evidence review", "answer composition", "agent choice"}]
     return {"status": run.get("status"), "reason": run.get("reason"), "duration_s": run.get("durationS"),
             "facts": len(reading.get("triples") or []), "graph_edges": len(graph.get("edges") or []),
-            "execution_status": run.get("executionStatus"), "failed_check": "; ".join(failed)[:400] or None}
+            "execution_status": run.get("executionStatus"), "failed_check": "; ".join(failed)[:400] or None,
+            "stages": "; ".join(stages)[:300] or None}
 
 
 def main(

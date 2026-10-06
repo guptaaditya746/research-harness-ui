@@ -35,6 +35,19 @@ that is a corpus passage; triples with none are left out and counted (`run.evide
   Commands that still reached for corpus tools are listed and flagged ("evidence document only" check).
   Its `output.max_triples` (YAML) still caps the answer: raise it for questions over many papers.
 
+## Large documents and the context window
+
+A D of 10,000 triples can leave thousands after review, far more than one prompt holds. Every model call
+now fits `HARNESS_MODEL_CONTEXT_TOKENS` (default 32,768, per alias via `HARNESS_MODEL_OPTIONS`
+`context_tokens`): the reply never reserves more tokens than the prompt leaves, and a prompt that cannot fit
+fails as `context_window_exceeded` (not `provider_error`). The evidence review and the answer split their
+input into calls that fit; the answer is composed (and verified) per batch, `HARNESS_ANSWER_BATCH_CONCURRENCY`
+at a time, and the batch answers are joined, each sentence with its own source ids. A batch without a
+supported answer is left out (the run's "answer composition" check says how many). `HARNESS_ANSWER_MAX_BATCHES`
+limits the answer text to N batches spread over the evidence; every reviewed triple stays in the answer graph
+and is scored either way. Such runs are long (about one review call per 24 triples, two answer calls per
+batch): raise the run deadlines on the Settings page.
+
 ## What a run records
 
 `run.runInput` (`corpus` | `evidence_doc`), `run.evidenceDoc` (question id, file, sha256, triples, left out,

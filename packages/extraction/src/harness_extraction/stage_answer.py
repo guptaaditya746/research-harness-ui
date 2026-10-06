@@ -1,19 +1,28 @@
 """Answer composition and verification, with one bounded repair, and the answer's SPARQL.
 
 A mixin of ``ExtractionEngine``.
+
+Large evidence sets (the evidence document as a run's input can leave thousands of triples) do not fit
+one prompt: the triples are split into batches whose composition and verification prompts fit the
+model's context window (``HARNESS_MODEL_CONTEXT_TOKENS``), each batch is answered on its own with the
+same repair rule, and the answers are joined, every sentence keeping its own source ids. A batch whose
+answer is unsupported is left out; only when every batch is unsupported does the answer fail.
 """
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
+from harness_config import settings
 from harness_prompts import render
 from harness_semantic import HRN
 
+from .call_control import parallel_map
 from .citations import _BRACKET, citation_ids, drop_unknown_citations
-from .errors import ModelFailure, UnsupportedAnswer
+from .errors import ContextOverflow, ModelFailure, UnsupportedAnswer
 from .events import emit_model_event, labelled
-from .model_client import ModelClient, complete
+from .model_client import ModelClient, complete, estimate_tokens
 from .schemas import AnswerResult, ExtractedTriple, SchemaInference
 
 
@@ -36,8 +45,27 @@ class AnswerStage:
         research notes), told which statements or ids were rejected. ``report["repaired"]`` records that
         it happened; ``report["citations_dropped"]`` counts sentences dropped from the returned answer
         for citing unknown ids. A second rejection raises ``UnsupportedAnswer``; the caller decides what
-        to show instead.
+        to show instead. Evidence that does not fit one prompt is answered in batches (module docstring);
+        ``report["batches"]`` then describes them.
         """
+        batches = self._answer_batches(question, inferred, triples, verify, verifier, notes)
+        if len(batches) > 1:
+            return self._answer_in_batches(question, inferred, triples, batches, verify, verifier, notes, report)
+        try:
+            return self._answer_once(question, inferred, triples, verify, verifier, notes, report)
+        except ContextOverflow:
+            if len(triples) < 2:
+                raise
+            # The estimate was too low for this evidence: halve it and answer the halves.
+            half = len(triples) // 2
+            return self._answer_in_batches(question, inferred, triples, [triples[:half], triples[half:]],
+                                           verify, verifier, notes, report)
+
+    def _answer_once(
+        self, question: str, inferred: SchemaInference, triples: list[ExtractedTriple], verify: bool,
+        verifier: ModelClient | None, notes: list[str] | None, report: dict[str, Any] | None,
+    ) -> AnswerResult:
+        """One composition (and verification) over ``triples``, with the bounded repair."""
         try:
             return self._compose(question, inferred, triples, verify, verifier, notes, report=report)
         except UnsupportedAnswer as first:
@@ -58,6 +86,79 @@ class AnswerStage:
                 raise UnsupportedAnswer(f"{first}; after one repair: {second}", stage=second.stage,
                                         removed=second.removed, sentences=second.sentences,
                                         unknown_sources=second.unknown_sources) from second
+
+    # ─── Batches ─────────────────────────────────────────────────────────────
+
+    def _answer_batches(self, question: str, inferred: SchemaInference, triples: list[ExtractedTriple],
+                        verify: bool, verifier: ModelClient | None,
+                        notes: list[str] | None) -> list[list[ExtractedTriple]]:
+        """The triples in consecutive batches whose prompts fit the context window: composition gets the
+        batch, verification the batch plus a draft of up to one reply."""
+        config = settings()
+        models = [self.model, *([verifier] if verify and verifier is not None else [])]
+        context = min(config.context_tokens(str(getattr(model, "model", "") or "")) for model in models)
+        reply = config.max_output_tokens
+        empty = render("extraction/answer_composition", {
+            "question": question, "classes": inferred.classes, "properties": inferred.properties, "triples": [],
+            **({"research_notes": list(notes)} if notes else {})})
+        overhead = estimate_tokens(empty.system, empty.user) + 512
+        budget = context - overhead - reply - (reply if verify else 0)
+        budget = max(budget, 1024)
+        batches: list[list[ExtractedTriple]] = [[]]
+        used = 0
+        for triple in triples:
+            cost = estimate_tokens(json.dumps(triple.model_dump()))
+            if batches[-1] and used + cost > budget:
+                batches.append([])
+                used = 0
+            batches[-1].append(triple)
+            used += cost
+        return [batch for batch in batches if batch] or [list(triples)]
+
+    def _answer_in_batches(
+        self, question: str, inferred: SchemaInference, triples: list[ExtractedTriple],
+        batches: list[list[ExtractedTriple]], verify: bool, verifier: ModelClient | None,
+        notes: list[str] | None, report: dict[str, Any] | None,
+    ) -> AnswerResult:
+        config = settings()
+        total = len(batches)
+        if config.answer_max_batches and total > config.answer_max_batches:
+            # Spread over the evidence, not the first batches only: D is ordered by paper.
+            keep = config.answer_max_batches
+            batches = [batches[round(index * total / keep)] for index in range(keep)]
+        emit_model_event("Answer in batches", f"{sum(len(b) for b in batches)} of {len(triples)} triples in "
+                                              f"{len(batches)} of {total} batches that fit the context window")
+
+        def one(batch: list[ExtractedTriple]) -> tuple[AnswerResult | None, UnsupportedAnswer | None, dict]:
+            part: dict[str, Any] = {}
+            try:
+                return self.answer(question, inferred, batch, verify, verifier, notes, part), None, part
+            except UnsupportedAnswer as exc:
+                return None, exc, part
+
+        results = parallel_map(one, batches, config.answer_batch_concurrency)
+        answered = [(result, part) for result, _, part in results if result is not None]
+        failures = [error for _, error, _ in results if error is not None]
+        if report is not None:
+            report["batches"] = {"total": total, "composed": len(batches), "answered": len(answered),
+                                 "unsupported": len(failures), "triples": len(triples),
+                                 "triples_composed": sum(len(b) for b in batches)}
+            report["repaired"] = any(part.get("repaired") for _, part in answered)
+            dropped = [part["citations_dropped"] for _, part in answered if part.get("citations_dropped")]
+            if dropped:
+                report["citations_dropped"] = {"sentences": sum(item["sentences"] for item in dropped),
+                                               "ids": [i for item in dropped for i in item["ids"]][:5]}
+        if not answered:
+            first = failures[0]
+            raise UnsupportedAnswer(f"no batch of the {len(triples)} triples gave a supported answer "
+                                    f"({len(batches)} batches); first: {first}", stage=first.stage,
+                                    removed=first.removed, sentences=first.sentences,
+                                    unknown_sources=first.unknown_sources)
+        parts = [result for result, _ in answered]
+        cited = list(dict.fromkeys(source for result in parts for source in result.cited_source_ids))
+        return AnswerResult(answer=" ".join(result.answer.strip() for result in parts if result.answer.strip()),
+                            cited_source_ids=cited, sparql=self.answer_query(triples, cited),
+                            sentences=[item for result in parts for item in result.sentences])
 
     def _compose(
         self,

@@ -17,6 +17,7 @@ from typing import Any
 from harness_corpus.store import CorpusStore
 from harness_extraction import (
     AnswerResult,
+    ContextOverflow,
     ExtractedTriple,
     ExtractionEngine,
     ModelFailure,
@@ -239,6 +240,12 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, GivenEvidence, RunOu
             self._check(self.stage, "fail", str(exc))
             run, artifacts = self._failure(
                 run_id, started_at, question, budget, "no_results", str(exc)
+            )
+        except ContextOverflow as exc:
+            # Not a provider fault: the prompt was larger than the model's context window.
+            self._check(self.stage, "fail", str(exc))
+            run, artifacts = self._failure(
+                run_id, started_at, question, budget, "context_window_exceeded", str(exc)
             )
         except ModelFailure as exc:
             self._check(self.stage, "fail", f"model call failed: {exc}")

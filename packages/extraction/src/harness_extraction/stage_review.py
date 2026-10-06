@@ -5,6 +5,7 @@ A mixin of ``ExtractionEngine``.
 
 from __future__ import annotations
 
+import json
 from collections import Counter
 from typing import Any
 
@@ -13,7 +14,7 @@ from harness_prompts import render
 
 from .call_control import parallel_map
 from .events import labelled
-from .model_client import ModelClient, complete
+from .model_client import ModelClient, complete, estimate_tokens
 from .schemas import ExtractedTriple
 
 
@@ -49,7 +50,22 @@ class ReviewStage:
             key = (item.subject.casefold().strip(), item.predicate, item.object.casefold().strip())
             deduped.setdefault(key, item)
         candidates = list(deduped.values())
-        batches = [candidates[start : start + batch_size] for start in range(0, len(candidates), batch_size)]
+        # At most ``batch_size`` candidates per call, and never more than fit the reviewer's context window
+        # (each candidate carries up to 1,500 characters of its passage).
+        config = settings()
+        reviewing = reviewer or self.model
+        budget = max(1024, config.context_tokens(str(getattr(reviewing, "model", "") or ""))
+                     - config.max_output_tokens - 2048)
+        batches: list[list[ExtractedTriple]] = [[]]
+        used = 0
+        for item in candidates:
+            cost = estimate_tokens(json.dumps(item.model_dump()), passage_text.get(item.source_id, "")[:1500]) + 16
+            if batches[-1] and (len(batches[-1]) >= batch_size or used + cost > budget):
+                batches.append([])
+                used = 0
+            batches[-1].append(item)
+            used += cost
+        batches = [batch for batch in batches if batch]
 
         def review(batch: list[ExtractedTriple]) -> tuple[list[ExtractedTriple], list[dict[str, str]]]:
             payload = {

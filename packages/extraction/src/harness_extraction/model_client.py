@@ -26,7 +26,7 @@ from tenacity import (
 )
 
 from .call_control import bounded_timeout, run_interruptible
-from .errors import ModelFailure
+from .errors import ContextOverflow, ModelFailure
 from .events import current_prompt, current_purpose, emit_model_event, using_prompt
 
 if TYPE_CHECKING:
@@ -43,6 +43,17 @@ def model_options(alias: str) -> dict[str, Any]:
 
 
 _THINK_BLOCK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+
+
+# Characters per token, on the low side for JSON with ids and numbers: estimates err towards "too big".
+CHARS_PER_TOKEN = 3.0
+_CONTEXT_ERROR = re.compile(r"context.?window|context.?length|maximum context|too many tokens|prompt is too long",
+                            re.IGNORECASE)
+
+
+def estimate_tokens(*texts: str) -> int:
+    """A conservative token count for prompt text (no tokenizer: the served model's is not at hand)."""
+    return int(sum(len(text) for text in texts) / CHARS_PER_TOKEN) + 16
 
 
 def strip_reasoning(text: str) -> str:
@@ -145,6 +156,15 @@ class OpenAICompatibleModel:
         prompt = current_prompt()
         options = model_options(self.model)
         max_tokens = int(options.get("max_tokens") or config.max_output_tokens)
+        # Never reserve more reply tokens than the context window leaves after the prompt.
+        context = config.context_tokens(self.model)
+        prompt_tokens = estimate_tokens(system, user)
+        if prompt_tokens >= context - 256:
+            error = (f"context_window_exceeded: the prompt is about {prompt_tokens} tokens, the context window of "
+                     f"{self.model} is {context} ({purpose})")
+            emit_model_event("Model call failed", error)
+            raise ContextOverflow(error)
+        max_tokens = min(max_tokens, context - prompt_tokens - 128)
         body: dict[str, Any] = {
             "model": self.model,
             "temperature": 0,
@@ -211,6 +231,8 @@ class OpenAICompatibleModel:
         except _ProviderStatus as exc:
             error = f"HTTP {exc.status}: {exc.body}"
             emit_model_event("Model call failed", f"{self.model} · {purpose} · {error}")
+            if exc.status == 400 and _CONTEXT_ERROR.search(exc.body):
+                raise ContextOverflow(f"context_window_exceeded: {error}") from None
             if exc.status == 429 or exc.status >= 500:
                 raise _Transient(error) from None
             raise ModelFailure(error) from None
@@ -254,4 +276,5 @@ def _cut_off_ending(content: str) -> str:
     return f"; it ended with: …{words}" if words else ""
 
 
-__all__ = ["ModelClient", "OpenAICompatibleModel", "complete", "model_options", "strip_reasoning"]
+__all__ = ["CHARS_PER_TOKEN", "ModelClient", "OpenAICompatibleModel", "complete", "estimate_tokens", "model_options",
+           "strip_reasoning"]

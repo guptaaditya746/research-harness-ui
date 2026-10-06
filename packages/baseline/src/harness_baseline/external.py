@@ -29,7 +29,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from harness_extraction import AnswerResult, ExtractedTriple, ModelFailure, SchemaInference
+from harness_extraction import (
+    AnswerResult,
+    ContextOverflow,
+    ExtractedTriple,
+    ModelFailure,
+    SchemaInference,
+)
 from harness_extraction.call_control import call_interrupted
 from harness_semantic import CSKG_INVERSES
 
@@ -124,6 +130,9 @@ class ExternalHarness(Baseline20):
         except NoResults as exc:
             self._check(self.stage, "fail", str(exc))
             run, artifacts = self._failure(run_id, started_at, question, budget, "no_results", str(exc))
+        except ContextOverflow as exc:
+            self._check(self.stage, "fail", str(exc))
+            run, artifacts = self._failure(run_id, started_at, question, budget, "context_window_exceeded", str(exc))
         except ModelFailure as exc:
             self._check(self.stage, "fail", f"model call failed: {exc}")
             run, artifacts = self._failure(run_id, started_at, question, budget, "provider_error", str(exc))

@@ -24,7 +24,7 @@ from .call_control import (
     run_interruptible,
 )
 from .engine import ExtractionEngine, local_name, prompt_shape, relation_name
-from .errors import ModelFailure, UnsupportedAnswer
+from .errors import ContextOverflow, ModelFailure, UnsupportedAnswer
 from .events import (
     current_prompt,
     current_purpose,
@@ -53,6 +53,7 @@ from .schemas import (
 
 __all__ = [
     "AnswerResult",
+    "ContextOverflow",
     "EDCDefinition",
     "EDCDefinitionResult",
     "EDCOpenTriple",

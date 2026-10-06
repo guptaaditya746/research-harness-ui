@@ -114,3 +114,23 @@ def test_nothing_picked_is_no_results(tmp_path: Path) -> None:
     run = runner.run(QUESTION, run_id="r-none")["run"]
     assert run.status == "incomplete" and run.reason == "no_results"
     assert run.run_input == "evidence_doc"
+
+
+def test_a_context_overflow_is_its_own_reason_not_a_provider_error(tmp_path: Path) -> None:
+    from harness_extraction import ContextOverflow
+
+    store = corpus(tmp_path / "corpus")
+    write_doc(tmp_path / "docs")
+
+    class Overflows(PickingModel):
+        def complete_json(self, system: str, user: str) -> dict:
+            if "keep_ids" in system:
+                return super().complete_json(system, user)
+            raise ContextOverflow("context_window_exceeded: HTTP 400: ContextWindowExceededError")
+
+    runner = Baseline20(store, ExtractionEngine(Overflows(), hand_written_subschema()), planner=NoPlanner())
+    runner.evidence_doc = docs.load(tmp_path / "docs", QUESTION, store.by_passage)
+    run = runner.run(QUESTION, run_id="r-big")["run"]
+    assert run.status == "incomplete" and run.reason == "context_window_exceeded"
+    checks = {check.name: check for check in run.checks}
+    assert checks["evidence review"].status == "pass"                  # how far it got stays visible

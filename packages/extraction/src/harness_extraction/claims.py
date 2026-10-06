@@ -11,9 +11,11 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+from harness_config import settings
 from harness_prompts import render
 from harness_schema.models import ClaimField, ClaimRelation, ClaimSubgraph, EvidenceAnchor, Triple
 
+from .call_control import parallel_map
 from .events import labelled
 from .model_client import complete
 
@@ -192,14 +194,19 @@ def enrich_result_claims(
     by_source = {str(row["passage_id"]): str(row["text"]) for row in passages}
     allowed = {"method", "metric", "benchmark", "setting", "comparator", "changeType", "value", "unit"}
     enriched = {claim.id: claim for claim in claims}
-    for start in range(0, len(candidates), 6):
-        batch = candidates[start:start + 6]
-        response = complete(model, render("extraction/claim_enrichment", {"claims": [{
+
+    def ask(batch: list[ClaimSubgraph]) -> Any:
+        return complete(model, render("extraction/claim_enrichment", {"claims": [{
             "id": claim.id, "paper_id": claim.paper_id,
             "fields": {name: field.value for name, field in claim.fields.items()},
             "sources": {source: by_source.get(source, excerpt)[:2500]
                         for source, excerpt in claim.evidence.items()},
         } for claim in batch]}, ensure_ascii=False))
+
+    # Batches of six claims, sent HARNESS_EXTRACTION_CONCURRENCY at a time (many claims: the evidence
+    # document as input can give hundreds); each batch changes only its own claims.
+    batches = [candidates[start:start + 6] for start in range(0, len(candidates), 6)]
+    for response in parallel_map(ask, batches, settings().extraction_concurrency):
         if not isinstance(response, dict):
             continue
         for item in response.get("enrichments", []):

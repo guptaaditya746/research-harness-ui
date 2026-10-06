@@ -192,6 +192,14 @@ class ResearchSteps:
             dropped = report["citations_dropped"]
             self._check("answer composition", "warn", f"{dropped['sentences']} sentence(s) citing ids that are no "
                         f"triple's source were dropped: {', '.join(dropped['ids'][:3])}")
+        if report.get("batches"):
+            batches = report["batches"]
+            self._check("answer composition", "warn" if batches["unsupported"] else "info",
+                        f"{batches['triples']} triples did not fit one prompt: answered in {batches['composed']} "
+                        f"batches" + (f" (of {batches['total']}; HARNESS_ANSWER_MAX_BATCHES)" if
+                                      batches["composed"] < batches["total"] else "")
+                        + (f", {batches['unsupported']} without a supported answer left out"
+                           if batches["unsupported"] else "") + "; every triple stays in the answer graph")
         if report.get("repaired"):
             self._check("answer composition", "warn", "the first answer had no supported, cited claim; "
                         "it was written once more from the triples"
