@@ -4,6 +4,7 @@
     make benchmark-runs ARGS="--ids nlp11,nlp27"          # a few questions (question ids or gold row ids)
     make benchmark-runs ARGS="--paths agentic,external --repetitions 1"
     make benchmark-runs ARGS="--resume results/benchmark_runs-<time>.jsonl"   # only the missing repetitions
+    make benchmark-runs ARGS="--input evidence_doc"      # the evidence document D is each run's input
 
 Runs go through POST /benchmark/execute, exactly like "Run benchmark" on the Benchmark page: they are
 stamped with the evaluation snapshot (which `make evaluate` matches against the gold rows), and an
@@ -66,6 +67,8 @@ def main(
     api: Annotated[str, typer.Option(help="Harness API base URL.")] = "http://127.0.0.1:8000",
     timeout: Annotated[float, typer.Option(help="Seconds to wait for one run.")] = 3600,
     resume: Annotated[Path | None, typer.Option(help="Earlier results file: skip finished groups.")] = None,
+    run_input: Annotated[str | None, typer.Option("--input", help="corpus or evidence_doc (docs/RUN_INPUT.md); "
+                                                                  "default: the API's HARNESS_RUN_INPUT.")] = None,
 ) -> None:
     source = gold or Path(settings().datasets_root or ROOT / "datasets") / "gold" / "candidates.jsonl"
     rows = selected(gold_questions(source, gold_version), ids)
@@ -108,7 +111,8 @@ def main(
                 try:
                     response = client.post("/benchmark/execute", json={
                         "question": row["question"], "path": path, "repetitions": 1,
-                        "budget": "slow" if path == "agentic" else budget})
+                        "budget": "slow" if path == "agentic" else budget,
+                        **({"run_input": run_input} if run_input else {})})
                     response.raise_for_status()
                     run_id = response.json()["ids"][0]
                 except httpx.HTTPError as exc:

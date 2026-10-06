@@ -2,7 +2,8 @@
 
 Nodes: retrieve -> infer_schema -> extract_build -> query_answer. Fact questions are answered
 from verified facts before the graph runs (see ``facts``). The steps live in mixins:
-``retrieval``, ``research_steps``, ``facts`` and ``outcomes``.
+``retrieval``, ``research_steps``, ``facts``, ``given_evidence`` (the evidence document D as input) and
+``outcomes``.
 """
 
 from __future__ import annotations
@@ -26,11 +27,14 @@ from harness_observability import record_stage
 from harness_schema.models import (
     Check,
     ClaimSubgraph,
+    Run,
     TraceRow,
 )
 from langgraph.graph import END, START, StateGraph
 
+from .evidence_doc import EvidenceDoc
 from .facts import FactAnswers
+from .given_evidence import GivenEvidence
 from .outcomes import RunOutcomes
 from .planner import QueryPlan, QueryPlanner
 from .research_steps import ResearchSteps
@@ -45,7 +49,7 @@ from .state import (
 )
 
 
-class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
+class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, GivenEvidence, RunOutcomes):
     """One research run: plan the question, answer facts directly, else run the graph."""
 
     def __init__(
@@ -83,6 +87,8 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         # Findings the agentic path hands over (statements + evidence ids); see _research_notes.
         self.agent_findings: list[dict[str, Any]] = []
         self.max_passages = max_passages
+        # The run input "evidence_doc": D's triples replace retrieval and extraction (given_evidence.py).
+        self.evidence_doc: EvidenceDoc | None = None
         self.started = 0.0
         self.trace: list[TraceRow] = []
         self.current_run_id: str | None = None
@@ -163,6 +169,12 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
         self.checks = []
         self.stage = "question understanding"
         try:
+            if self.evidence_doc is not None:
+                self.last_route = "evidence_doc"
+                state = self._doc_state(question)
+                self.stage = "triple provenance"
+                run, artifacts = self._success(run_id, started_at, question, budget, state)
+                return {"run": self._stamped(run), "artifacts": artifacts}
             plan = self._plan(question)
             self._emit(
                 "Understanding question",
@@ -246,6 +258,12 @@ class Baseline20(RetrievalStep, ResearchSteps, FactAnswers, RunOutcomes):
             )
             self._check(self.stage, "fail", f"{reason}: {exc}")
             run, artifacts = self._failure(run_id, started_at, question, budget, reason, str(exc))
-        run = run.model_copy(update={"checks": list(self.checks)})
-        return {"run": run, "artifacts": artifacts}
+        return {"run": self._stamped(run), "artifacts": artifacts}
+
+    def _stamped(self, run: Run) -> Run:
+        """The run with its checks and, when D was the input, which evidence document it read."""
+        update: dict[str, Any] = {"checks": list(self.checks)}
+        if self.evidence_doc is not None:
+            update |= {"run_input": "evidence_doc", "evidence_doc": self.evidence_doc.summary()}
+        return run.model_copy(update=update)
 

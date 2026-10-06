@@ -5,6 +5,7 @@
     make evaluate ARGS="--variants-only"   # soft level without the judge (judge failed its agreement check)
     make evaluate ARGS="--json --out results/benchmark.json"
     make evaluate ARGS="--explain --ids nlp33"   # why a question scores what it scores (pairing, triples)
+    make evaluate ARGS="--input evidence_doc"    # runs that read the evidence document D (docs/RUN_INPUT.md)
 
 Reads the gold from $DATASETS_ROOT/gold/candidates.jsonl (installed by `labelling install`) and the
 runs from $ARTIFACT_ROOT. The same numbers appear on the Benchmark page. Metric definitions,
@@ -60,6 +61,8 @@ def main(
     gold_version: Annotated[str | None, typer.Option(help="Only gold rows of this version (e.g. pilot-v1).")] = None,
     ids: Annotated[str | None, typer.Option(help="Only these question ids or gold row ids, comma-separated.")] = None,
     explain_rows: Annotated[bool, typer.Option("--explain", help="Diagnose each gold row instead of scoring.")] = False,
+    run_input: Annotated[str, typer.Option("--input", help="corpus (the usual runs) or evidence_doc (runs that read "
+                                                           "the evidence document D); never mixed.")] = "corpus",
 ) -> None:
     datasets = settings().datasets_root or ROOT / "datasets"
     candidates = [row for row in GoldCandidateStore(Path(datasets) / "gold" / "candidates.jsonl").list()
@@ -71,10 +74,12 @@ def main(
     if judge and variants_only:
         raise typer.BadParameter("--judge and --variants-only exclude each other")
     scorer = _judge(judge, variants_only)
+    if run_input not in {"corpus", "evidence_doc"}:
+        raise typer.BadParameter("--input is corpus or evidence_doc")
     if explain_rows:
-        _explain(candidates, runs, scorer)
+        _explain(candidates, runs, scorer, run_input)
         return
-    result = build_benchmark(candidates, runs, relations=load_relations(), judge=scorer)
+    result = build_benchmark(candidates, runs, relations=load_relations(), judge=scorer, run_input=run_input)
     result["judge"] = "off" if scorer is None else ("live" if judge else "cache")
     result["judge_calls"] = scorer.calls if scorer else 0
     # Who labelled the gold: people (Argilla), computed (structural) or a model (silver versions).
@@ -88,6 +93,8 @@ def main(
     if as_json:
         console.print_json(json.dumps(result, default=str))
         return
+    console.print(f"Input: {'the evidence document D' if run_input == 'evidence_doc' else 'the corpus'} "
+                  f"({sum(run.run_input == run_input for run in runs)} of {len(runs)} runs)")
     console.print(f"{len(candidates)} approved gold questions, {len(runs)} runs; rules: "
                   f"{', '.join(result['relations'])}")
     if drafts or any(source.startswith("model") for source in sources):
@@ -141,12 +148,12 @@ def main(
     console.print(per_question)
 
 
-def _explain(candidates: list[dict], runs: list, scorer: CachedJudge | None) -> None:
+def _explain(candidates: list[dict], runs: list, scorer: CachedJudge | None, run_input: str = "corpus") -> None:
     relations = load_relations()
     if not candidates:
         console.print("no approved gold rows (check --ids / --gold-version and `labelling install`)")
     for row in candidates:
-        report = explain(row, runs, relations=relations, judge=scorer)
+        report = explain(row, runs, relations=relations, judge=scorer, run_input=run_input)
         console.rule(f"{report['id']} ({report['gold_version']})")
         console.print_json(json.dumps({key: value for key, value in report.items() if key != "hints"}, default=str))
         for hint in report["hints"] or ["nothing obviously wrong: look at `matched` / `missed` on the Benchmark page"]:

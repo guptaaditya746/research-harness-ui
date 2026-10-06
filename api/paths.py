@@ -23,3 +23,8 @@ def datasets_root() -> Path:
 
 def fixtures_dir() -> Path:
     return settings().fixtures_dir or ROOT / "web" / "fixtures"
+
+
+def evidence_doc_root() -> Path:
+    """labelling's evidence documents (<question id>/doc.json), the input of "evidence_doc" runs."""
+    return settings().evidence_doc_root or datasets_root() / "evidence_docs"

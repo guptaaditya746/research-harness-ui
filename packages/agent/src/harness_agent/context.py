@@ -115,6 +115,8 @@ class Conversation:
     scale: float = 1.0
     summary: str | None = None
     masked_results: int = 0
+    # The template that frames the grounded context (agent/evidence_doc_context when D is the input).
+    grounded_prompt: str = "agent/grounded_context"
 
     def _grounded_message(self) -> dict[str, Any] | None:
         if not self.grounded:
@@ -133,7 +135,7 @@ class Conversation:
                         "tools (structured_facts, search_evidence, read_evidence).",
             }
         return {"role": "user", "content": text(
-            "agent/grounded_context", context_json=json.dumps(rendered, ensure_ascii=False))}
+            self.grounded_prompt, context_json=json.dumps(rendered, ensure_ascii=False))}
 
     def messages(self) -> list[dict[str, Any]]:
         head = list(self.fixed)

@@ -3,6 +3,7 @@
 import type { Run } from './generated/run';
 import { pathName, when } from './format';
 import { Progress } from './Result';
+import { type Config, SettingsPanel } from './SettingsPanel';
 import type { BenchmarkQuestion, Budget, GoldCandidate, PaperLabel, RunPath } from './types';
 
 const intro = { maxWidth: '56ch', marginBottom: 40 } as const;
@@ -36,8 +37,9 @@ function BudgetChoice({ title, note, value, options, onChange }: {
   </div>;
 }
 
-export function SettingsScreen({ baseMode, agMode, save }: {
+export function SettingsScreen({ baseMode, agMode, save, onConfig }: {
   baseMode: Budget; agMode: Budget; save: (change: { baseline?: Budget; agentic?: Budget }) => void;
+  onConfig?: (config: Config) => void;
 }) {
   return <>
     <h2>Settings</h2>
@@ -48,6 +50,9 @@ export function SettingsScreen({ baseMode, agMode, save }: {
       <BudgetChoice title="Agentic research budget" note="Fast caps planning depth and skips re-checks; the agent still chooses its own actions."
         value={agMode} options={[['fast', 'Fast'], ['slow', 'Slow · deeper research']]} onChange={value => save({ agentic: value })} />
     </div>
+    <h3 style={{ marginTop: 56 }}>Harness settings</h3>
+    <p className="muted" style={intro}>What runs read (the corpus, or the question's evidence document D), the models, time limits, how much evidence each path reads, extraction and the agent. Each run records the values it used.</p>
+    <SettingsPanel onSaved={onConfig} />
   </>;
 }
 
@@ -61,7 +66,7 @@ export function RunsScreen({ runs, openArtifact, setOpenArtifact, artifactBody, 
       <summary>
         <span className="muted micro">{when(run.startedAt)}</span>
         <span style={{ flex: '1 1 240px', fontSize: 15.5 }}>{run.question}</span>
-        <span className="muted micro">{pathName(run.path)} · {run.budget} · {run.durationS} s</span>
+        <span className="muted micro">{pathName(run.path)} · {run.budget}{run.runInput === "evidence_doc" ? " · input: evidence document" : ""} · {run.durationS} s</span>
       </summary>
       <div style={{ display: 'grid', gap: 10, marginTop: 14 }}>
         <div>{run.status}{run.reason ? ` — ${run.reason}` : ''}</div>
@@ -113,13 +118,14 @@ export function GoldScreen({ candidates, drafts, setDraft, errors, save }: {
 
 const fixed = (value: number | null | undefined, digits: number) => value?.toFixed(digits) ?? '—';
 
-export function BenchmarkScreen({ rows, externalOn, refresh, run }: {
-  rows: BenchmarkQuestion[]; externalOn: boolean; refresh: () => void; run: (row: BenchmarkQuestion) => void;
+export function BenchmarkScreen({ rows, externalOn, refresh, run, runInput = 'corpus' }: {
+  rows: BenchmarkQuestion[]; externalOn: boolean; refresh: () => void; run: (row: BenchmarkQuestion) => void; runInput?: string;
 }) {
   const columns = externalOn ? ['baseline', 'adaptive-baseline', 'agentic', 'external'] : ['baseline', 'adaptive-baseline', 'agentic'];
   return <>
     <h2>Benchmark</h2>
     <p className="muted">Triple precision, recall and F1 against reviewed gold, averaged over repetitions. Each run’s evaluation mode records the agentic path’s top concept.</p>
+    <p className="muted micro">Runs that read {runInput === 'evidence_doc' ? 'the evidence document D' : 'the corpus'} (the run input in Settings; the two are scored separately).</p>
     <button className="btn btn-secondary" onClick={refresh}>Refresh</button>
     {rows.length === 0 && <p className="muted" style={{ marginTop: 20 }}>No approved gold questions yet. Approve a candidate on the Gold page first.</p>}
     <table className="table">

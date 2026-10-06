@@ -46,3 +46,16 @@ def test_local_paper_keys_against_dblp_iris_share_no_subject() -> None:
     assert comparison["judge_pairs"] == 1 and comparison["judge_pending"] == 1
     assert any("make evaluate ARGS=--judge" in hint for hint in report["hints"])
     assert any("strict is 0 by construction" in hint for hint in report["hints"])
+
+
+def test_runs_of_the_two_inputs_are_scored_apart() -> None:
+    from harness_evaluation.benchmark import build_benchmark
+
+    corpus_run = run([(DBLP, "evaluatesOn", "BenchY")], run_id="r-c")
+    doc_run = run([("p99", "evaluatesOn", "BenchY")], run_id="r-d").model_copy(update={"run_input": "evidence_doc"})
+    gold = row("p99")
+    for chosen, expected in (("corpus", ["r-c"]), ("evidence_doc", ["r-d"])):
+        result = build_benchmark([gold], [corpus_run, doc_run], relations=PredicateRelations(), run_input=chosen)
+        assert result["run_input"] == chosen
+        assert result["questions"][0]["paths"][0]["repetitions"] == expected
+    assert "read the other input" in hints(gold, [corpus_run, doc_run])

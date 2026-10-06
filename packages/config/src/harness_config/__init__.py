@@ -187,6 +187,18 @@ class Settings(BaseSettings):
     external_command: str = Field("", validation_alias=_env("HARNESS_EXTERNAL_COMMAND"))
     external_config: str = Field("", validation_alias=_env("HARNESS_EXTERNAL_CONFIG"))
 
+    # ─── Run input (docs/RUN_INPUT.md) ───────────────────────────────────────
+    # What a run reads: "corpus" (it searches the papers, the usual way) or "evidence_doc" (the question's
+    # evidence document D from labelling is the input: the path picks the triples that answer and writes
+    # the answer; retrieval and extraction are skipped). A run request may name its own input.
+    run_input: Literal["corpus", "evidence_doc"] = Field("corpus", validation_alias=_env("HARNESS_RUN_INPUT"))
+    # labelling's evidence_docs folder (<question id>/doc.json); empty = <datasets root>/evidence_docs.
+    evidence_doc_root: Path | None = Field(None, validation_alias=_env("HARNESS_EVIDENCE_DOC_ROOT"))
+    # Triples per pick (evidence review) call when D is the input.
+    evidence_doc_batch: int = Field(24, ge=4, le=200, validation_alias=_env("HARNESS_EVIDENCE_DOC_BATCH"))
+    # Triples per result of the agent's and the external agent's D tools.
+    evidence_doc_page: int = Field(25, ge=5, le=200, validation_alias=_env("HARNESS_EVIDENCE_DOC_PAGE"))
+
     # ─── Paths and datasets (None = the repository default) ──────────────────
     corpus_root: Path | None = Field(None, validation_alias=_env("CORPUS_ROOT"))
     artifact_root: Path | None = Field(None, validation_alias=_env("ARTIFACT_ROOT"))
@@ -215,6 +227,10 @@ class Settings(BaseSettings):
     ontology_hash: str = Field("unknown", validation_alias=_env("ONTOLOGY_HASH"))
     retrieval_index_version: str = Field("unknown", validation_alias=_env("RETRIEVAL_INDEX_VERSION"))
 
+    # Where the API keeps the settings changed on the Settings page (harness_config.ui); empty =
+    # <artifact root>/ui_settings.json. They apply over this file and the profile.
+    ui_settings_file: Path | None = Field(None, validation_alias=_env("HARNESS_UI_SETTINGS_FILE"))
+
     # The settings profile in use (applied by load_env_file); empty = none.
     profile: str = Field("", validation_alias=_env("HARNESS_PROFILE"))
 
@@ -226,7 +242,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "model_edc", "model_agent_url", "agent_context_tokens", "corpus_root", "artifact_root",
-        "datasets_root", "fixtures_dir", "database_url", "corpus_snapshot_id",
+        "datasets_root", "fixtures_dir", "database_url", "corpus_snapshot_id", "evidence_doc_root", "ui_settings_file",
         "labelling_normalization_file", "labelling_vocabulary_file", mode="before",
     )
     @classmethod

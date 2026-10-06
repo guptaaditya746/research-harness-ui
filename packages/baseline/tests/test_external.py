@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from harness_baseline.evidence_doc import DocTriple, EvidenceDoc
 from harness_baseline.external import ExternalHarness, predicate_name
 from harness_corpus.store import CorpusStore
 from harness_extraction import ExtractionEngine, ModelFailure
@@ -38,8 +39,11 @@ triples = [
     {"subject": "robot videos", "predicate": "cskg-ont:usedBy", "object": "MethodX",
      "source_id": "p4-abstract", "evidence": "robot learning"},
 ]
+doc = json.loads(Path(args[args.index("--triples-file") + 1]).read_text()) if "--triples-file" in args else None
+if doc is not None and mode != "ignores_doc":
+    triples = [{key: row[key] for key in ("subject", "predicate", "object", "source_id", "evidence")} for row in doc[:1]]
 status = {"answered": "answered", "empty": "answered", "limits": "limits_exceeded", "other_corpus": "answered",
-          "provider": "error"}[mode]
+          "provider": "error", "ignores_doc": "answered"}[mode]
 corpus = "/somewhere/else" if mode == "other_corpus" else os.environ.get("CORPUS_ROOT", "")
 result = {"status": status, "answer": f"Answer to: {question} [p4-abstract].", "triples": [] if mode == "empty" else triples,
           "dropped_triples": [{"triple": {}, "why": "unknown source_id 'x'"}], "exit_status": "Submitted",
@@ -48,7 +52,9 @@ result = {"status": status, "answer": f"Answer to: {question} [p4-abstract].", "
           "harness": {"name": "mini-swe-agent", "version": "2.4.6"}, "config": {"model": "openai/heavy-model"},
           "error": "APIConnectionError: connection refused" if mode == "provider" else None,
           "knowledge_base": {"corpus_dir": corpus, "passages": 1}, "evidence_not_in_source": 1,
-          "env": sorted(os.environ), "cwd_tmp": str(out.parent), "events": events}
+          "env": sorted(os.environ), "cwd_tmp": str(out.parent), "events": events,
+          "input": {"kind": "evidence_doc", "triples": len(doc), "corpus_commands": ["kbsearch video"]}
+          if doc is not None and mode != "ignores_doc" else {"kind": "corpus"}}
 (out / "result.json").write_text(json.dumps(result))
 (out / "trajectory.json").write_text(json.dumps({"messages": []}))
 '''
@@ -160,3 +166,30 @@ def test_stop_kills_the_external_process(tmp_path: Path) -> None:
         run = harness.run("q", run_id="r-ext3")["run"]
     assert run.status == "incomplete" and run.reason == "provider_error"
     assert time.monotonic() - started < 10
+
+
+def _doc() -> EvidenceDoc:
+    triples = [DocTriple(id="t00001", reading="i1", s="p4", p="usesDataset", o="robot videos", paper_id="p4",
+                         source_id="p4-abstract", evidence="robot learning"),
+               DocTriple(id="t00002", reading="i1", s="p4", p="usesOptimizer", o="AdamW", paper_id="p4",
+                         source_id="p4-abstract", evidence="robot learning")]
+    return EvidenceDoc(question_id="q90", question="Which data does VPP use?", path=Path("doc.json"), sha256="x",
+                       interpretations=[{"id": "i1", "label": "As asked", "gloss": ""}], triples=triples)
+
+
+def test_with_d_as_input_the_external_agent_gets_the_triples_file(tmp_path: Path) -> None:
+    harness = runner(tmp_path, "answered")
+    harness.evidence_doc = _doc()
+    run = harness.run("Which data does VPP use?", run_id="r-extdoc")["run"]
+    assert run.status == "answered" and run.run_input == "evidence_doc" and run.evidence_doc["triples"] == 2
+    assert [(t.p, t.o) for t in run.readings[0].triples] == [("usesDataset", "robot videos")]
+    checks = {check.name: check for check in run.checks}
+    assert "evidence document" in checks["retrieval"].detail
+    assert checks["evidence document only"].status == "warn"           # it still reached for kbsearch
+
+
+def test_an_external_harness_that_ignores_d_fails_the_run(tmp_path: Path) -> None:
+    harness = runner(tmp_path, "ignores_doc")
+    harness.evidence_doc = _doc()
+    run = harness.run("Which data does VPP use?", run_id="r-extold")["run"]
+    assert run.status == "incomplete" and run.reason == "external_failed"

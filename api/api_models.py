@@ -18,6 +18,8 @@ class RunRequest(BaseModel):
     parent_run_id: str | None = None
     origin: str = "private"
     deadline_seconds: int | None = None
+    # "corpus" or "evidence_doc" (docs/RUN_INPUT.md); None = the HARNESS_RUN_INPUT setting.
+    run_input: str | None = None
 
 
 class RatingRequest(BaseModel):
@@ -65,6 +67,14 @@ class BenchmarkExecuteRequest(BaseModel):
     # Agentic only: the concept to research. When omitted, each repetition lets
     # the agent propose concepts and researches its top-ranked grounded one.
     concept: ConceptChoice | None = None
+    # "corpus" or "evidence_doc"; None = the HARNESS_RUN_INPUT setting.
+    run_input: str | None = None
+
+
+class ConfigUpdate(BaseModel):
+    """Settings-page changes: {variable: value}; null restores the value from before the UI changed it."""
+    model_config = ConfigDict(extra="forbid")
+    values: dict[str, str | None]
 
 
 class SettingsUpdate(BaseModel):

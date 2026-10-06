@@ -3,6 +3,7 @@
 Modules:
 - ``pipeline``: ``Baseline20``, the run entry point and graph wiring.
 - ``retrieval``, ``research_steps``, ``facts``, ``outcomes``: the pipeline's steps (mixins).
+- ``evidence_doc``, ``given_evidence``: the evidence document D as a run's input (docs/RUN_INPUT.md).
 - ``state``: pipeline state, results and early outcomes (``NoResults`` and friends).
 - ``planner``: question understanding (``QueryPlanner``) and paper resolution.
 - ``answer_graph``: the connected answer graph shown in the UI.

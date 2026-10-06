@@ -24,8 +24,9 @@ from api_models import RunRequest
 from capacity import run_slots
 from harness_agent import AgenticResearch
 from harness_baseline import Baseline20, ExternalHarness
+from harness_baseline import evidence_doc as evidence_docs
 from harness_baseline.planner import QueryPlanner, corpus_profile
-from harness_config import settings
+from harness_config import settings, ui
 from harness_corpus.store import CorpusStore
 from harness_extraction import (
     ExtractionEngine,
@@ -38,7 +39,7 @@ from harness_observability import run_observation
 from harness_runs import ArtifactStore, ClaimStore, GoldCandidateStore, RelationRegistry
 from harness_schema.models import ConceptChoice, Run, TraceRow, required_artifacts
 from harness_semantic import hand_written_subschema
-from paths import corpus_root, fixtures_dir
+from paths import corpus_root, evidence_doc_root, fixtures_dir
 from sse_starlette import JSONServerSentEvent
 
 LOGGER = logging.getLogger(__name__)
@@ -108,6 +109,10 @@ class RunRuntime:
         self.queued: set[str] = set()
         self.stop_requested: set[str] = set()
         self.settings = {"baseline": "fast", "agentic": "slow"}
+        # Settings changed on the Settings page (harness_config.ui), kept in a file and applied again here.
+        self.ui_file = settings().ui_settings_file or artifact_root / "ui_settings.json"
+        self.ui_originals: dict[str, str | None] = {}
+        self.ui_overrides = ui.load_file(self.ui_file, self.ui_originals)
         self.fixture_overrides: dict[str, Run] = {}
         self.picks: dict[str, tuple[str, int, ConceptChoice]] = {}
         self.lock = threading.RLock()
@@ -190,6 +195,18 @@ class RunRuntime:
             raise ValueError("budget must be fast or slow")
         if not request.question.strip():
             raise ValueError("question is required")
+        run_input = request.run_input or settings().run_input
+        if run_input not in {"corpus", "evidence_doc"}:
+            raise ValueError("run_input must be corpus or evidence_doc")
+        request = request.model_copy(update={"run_input": run_input})
+        recorded_settings = ui.values()
+        doc = None
+        if run_input == "evidence_doc":
+            # Fail before the run starts: without D there is nothing to read.
+            doc = evidence_docs.find(evidence_doc_root(), request.question.strip())
+            if doc is None:
+                raise ValueError(f"no evidence document for this question in {evidence_doc_root()} (build it "
+                                 "with `labelling evidence-docs`, or set HARNESS_EVIDENCE_DOC_ROOT)")
         run_id = f"r-{uuid.uuid4().hex[:8]}"
         with self.lock:
             self.events[run_id] = []
@@ -273,7 +290,7 @@ class RunRuntime:
                         )
                     ),
                 ):
-                    result = self._execute(request, question, run_id, sink, acquire)
+                    result = self._execute(request, question, run_id, sink, acquire, doc)
                     if observation is not None:
                         observation.update(
                             output={
@@ -298,6 +315,8 @@ class RunRuntime:
                         "evaluation_mode": request.evaluation_mode,
                         "snapshot": request.snapshot,
                         "parent_run_id": request.parent_run_id,
+                        "run_input": run_input,
+                        "settings": recorded_settings,
                         "trace": trace,
                         "prompt_hashes": {**result["run"].prompt_hashes, **prompt_versions(trace)},
                     }
@@ -364,12 +383,22 @@ class RunRuntime:
         threading.Thread(target=execute, name=f"run-{run_id}", daemon=True).start()
         return run_id
 
-    def _execute(self, request: RunRequest, question: str, run_id: str, sink, acquire) -> dict:
-        """Run one request, holding model slots only while research runs."""
+    def _execute(self, request: RunRequest, question: str, run_id: str, sink, acquire,
+                 doc_file: Path | None = None) -> dict:
+        """Run one request, holding model slots only while research runs. ``doc_file``: the evidence
+        document that is the run's input (run input "evidence_doc"), else None."""
+
+        def given(runner: Baseline20) -> evidence_docs.EvidenceDoc | None:
+            if doc_file is None:
+                return None
+            return evidence_docs.load(doc_file.parent.parent, question, runner.corpus.by_passage)
+
         if request.path == "external" and not self.custom_runner:
             held = acquire(*run_slots(request.origin))
             try:
-                return self._external_runner(sink).run(question, request.budget, run_id)
+                external = self._external_runner(sink)
+                external.evidence_doc = given(external)
+                return external.run(question, request.budget, run_id)
             finally:
                 for slot in held:
                     slot.release()
@@ -380,6 +409,8 @@ class RunRuntime:
                 else self._runner(sink, request.path == "baseline-enhanced")
             )
             kwargs = {"concept": request.concept} if request.concept else {}
+            if doc_file is not None:
+                runner.evidence_doc = given(runner)
             held = acquire(*run_slots(request.origin))
             try:
                 return runner.run(question, request.budget, run_id, **kwargs)
@@ -412,6 +443,7 @@ class RunRuntime:
             sink,
             agent_model=agent_model,
             high_model=high_model,
+            **({"evidence_doc": doc} if (doc := given(baseline)) else {}),
         )
         concept = request.concept
         proposal: dict | None = None
@@ -506,6 +538,7 @@ class RunRuntime:
             parentRunId=request.parent_run_id,
             evaluationMode=request.evaluation_mode,
             snapshot=request.snapshot,
+            runInput=request.run_input or "corpus",
             artifacts=list(required_artifacts(request.path)),
         )
         try:
@@ -645,3 +678,14 @@ class RunRuntime:
                 yield JSONServerSentEvent(data={"run_id": run_id}, event="done")
                 return
             await asyncio.sleep(0.05)
+
+
+def change_ui_settings(runtime: RunRuntime, changes: dict[str, str | None]) -> dict[str, str]:
+    """Apply Settings-page changes (validated; None restores the earlier value) and keep them in the file.
+    Refused while a run is active: a run reads its settings throughout, and must not see two versions."""
+    with runtime.lock:
+        if runtime.running:
+            raise RuntimeError(f"{len(runtime.running)} run(s) active: change settings when they have finished")
+        runtime.ui_overrides = ui.apply(changes, runtime.ui_originals)
+    ui.save_file(runtime.ui_file, runtime.ui_overrides)
+    return runtime.ui_overrides

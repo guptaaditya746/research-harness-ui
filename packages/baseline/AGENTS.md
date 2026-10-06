@@ -8,6 +8,7 @@ The Pipeline paths (Fast, Adaptive) and the steps the Agentic path reuses: quest
 - `retrieval.py`, `research_steps.py`, `facts.py` (one method per fact operation, `FACT_OPERATIONS`), `outcomes.py`
 - `run_graph.py` — the run's RDF provenance graph; `answer_graph.py` — the UI graph
 - `planner.py` — query plans; `external.py` — the External harness adapter
+- `evidence_doc.py`, `given_evidence.py` — the evidence document D as a run's input (docs/RUN_INPUT.md)
 
 ## Imports
 

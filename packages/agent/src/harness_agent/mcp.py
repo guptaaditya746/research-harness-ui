@@ -93,15 +93,18 @@ class MCPToolClient:
             ]
 
     async def _run_agent_async(
-        self, model: Any, question: str, grounded_context: dict[str, Any] | None = None
+        self, model: Any, question: str, grounded_context: dict[str, Any] | None = None, session: Any = None,
     ) -> str:
+        if session is not None:
+            # A local session (the evidence document's tools): no MCP server is involved.
+            return await ToolLoop(self, model, session, question, grounded_context).run()
         async with streamablehttp_client(self.url, timeout=30, sse_read_timeout=300) as (
             read_stream,
             write_stream,
             _,
-        ), ClientSession(read_stream, write_stream) as session:
-            await session.initialize()
-            return await ToolLoop(self, model, session, question, grounded_context).run()
+        ), ClientSession(read_stream, write_stream) as mcp_session:
+            await mcp_session.initialize()
+            return await ToolLoop(self, model, mcp_session, question, grounded_context).run()
 
     def next_id(self, prefix: str) -> str:
         """The next call id of this client's records ("tool-007", "context-008", ...)."""
@@ -109,9 +112,10 @@ class MCPToolClient:
         return f"{prefix}-{self._counter:03d}"
 
     def run_agent(
-        self, model: Any, question: str, grounded_context: dict[str, Any] | None = None
+        self, model: Any, question: str, grounded_context: dict[str, Any] | None = None, session: Any = None,
     ) -> str:
-        """Run an open-ended model/tool conversation over one MCP session."""
+        """Run an open-ended model/tool conversation over one MCP session (or over ``session``, a local
+        stand-in with ``list_tools`` / ``call_tool``, such as the evidence document's tools)."""
         try:
             # The supervisor phase has its own deadline. A slow model turn
             # must not consume the entire research run; observations already
@@ -124,7 +128,7 @@ class MCPToolClient:
             # and asyncio.run would wait for it.
             with phase_budget(timeout_s + PHASE_GRACE_S):
                 return asyncio.run(asyncio.wait_for(
-                    self._run_agent_async(model, question, grounded_context), timeout_s
+                    self._run_agent_async(model, question, grounded_context, session), timeout_s
                 ))
         except BaseExceptionGroup as group:
             # The MCP client runs in an anyio task group, so a run's Stop or

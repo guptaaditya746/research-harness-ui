@@ -29,7 +29,10 @@ class ConceptProposalStep:
         return names or set(DEFAULT_CLASSES)
 
     def propose(self, question: str, budget: str, run_id: str) -> dict:
-        """Let the agent model propose 3-4 concept readings before research."""
+        """Let the agent model propose 3-4 concept readings before research (with the evidence document as
+        input: its interpretations, see doc_research.py)."""
+        if getattr(self, "evidence_doc", None) is not None:
+            return self._propose_from_doc(question, budget, run_id)
         started = monotonic()
         started_at = datetime.now(UTC)
         trace: list[TraceRow] = []

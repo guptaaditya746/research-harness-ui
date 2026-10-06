@@ -177,6 +177,9 @@ export interface Run {
   searchCoverage: Record<string, string | number | boolean> | null;
   evaluationMode: boolean;
   snapshot: EvaluationSnapshot | null;
+  runInput: "corpus" | "evidence_doc";
+  evidenceDoc: Record<string, unknown> | null;
+  settings: Record<string, string>;
   concept: ConceptChoice | null;
   concepts: Array<ConceptChoice>;
   parentRunId: string | null;

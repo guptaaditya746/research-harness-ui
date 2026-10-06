@@ -122,6 +122,9 @@ class ToolLoop:
     def __init__(self, client: Any, model: Any, session: Any, question: str,
                  grounded_context: dict[str, Any] | None) -> None:
         self.client, self.model, self.session, self.question = client, model, session, question
+        # A local session (the evidence document's tools, doc_tools.py) brings its own tools and prompts.
+        self.local = bool(getattr(session, "local", False))
+        self.allowed = tuple(getattr(session, "allowed_tools", CURATED_TOOLS))
         self.config = settings()
         grounded = grounded_context or {}
         self.ledger = ResearchLedger(question=question)
@@ -153,13 +156,13 @@ class ToolLoop:
         tools = [{"type": "function", "function": {
             "name": item.name, "description": item.description or "", "parameters": item.inputSchema}}
             for item in listed.tools]
-        tools = [tool for tool in tools if tool["function"]["name"] in CURATED_TOOLS]
+        tools = [tool for tool in tools if tool["function"]["name"] in self.allowed]
         tools.append(FINDING_TOOL_SPEC)
         tools.sort(key=lambda tool: (CORE_TOOLS.index(tool["function"]["name"])
                                      if tool["function"]["name"] in CORE_TOOLS else len(CORE_TOOLS)))
         self.tools = tools
         self.core_count = sum(1 for tool in tools if tool["function"]["name"] in CORE_TOOLS)
-        loaded_skills = relevant(self.question)
+        loaded_skills = [] if self.local else relevant(self.question)
         for skill in loaded_skills:
             self.client.sink({
                 "call_id": self.client.next_id("skill"), "agent": self.client.agent,
@@ -170,7 +173,7 @@ class ToolLoop:
                 "expected_evidence_type": "research_skill",
             })
         supervisor = render(
-            "agent/research_supervisor",
+            "agent/evidence_doc_supervisor" if self.local else "agent/research_supervisor",
             skills_catalog=catalog(),
             loaded_skills="; ".join(f"{skill.name}@{skill.version}: {skill.instructions}" for skill in loaded_skills),
             skills=loaded_skills,
@@ -181,7 +184,9 @@ class ToolLoop:
             {"role": "user", "content": self.question},
         ]
         self.conversation = Conversation(fixed, grounded=self.grounded,
-                                         keep_results=max(0, self.config.agent_keep_results))
+                                         keep_results=max(0, self.config.agent_keep_results),
+                                         grounded_prompt="agent/evidence_doc_context" if self.local
+                                         else "agent/grounded_context")
         self.window = discover_window(self.model)
         self.reply_tokens = min(self.config.agent_reply_tokens, max(512, self.window // 4))
 

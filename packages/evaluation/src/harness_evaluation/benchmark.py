@@ -2,8 +2,10 @@
 
 Pure (no API state): the API's ``/benchmark`` and ``make evaluate`` both call
 ``build_benchmark``. A run is paired with a gold row when the question text and
-the path match and, when the row has a snapshot, the run's evaluation snapshot
-is identical (same corpus, ontology, claim schema and index versions).
+the path match, the run read the chosen input (``run_input``: "corpus", or
+"evidence_doc" when the evidence document D was its input; the two are never
+mixed) and, when the row has a snapshot, the run's evaluation snapshot is
+identical (same corpus, ontology, claim schema and index versions).
 Repetitions are averaged per question first; intervals are over questions.
 """
 
@@ -81,9 +83,11 @@ def _by_complexity(question_rows: list[dict]) -> dict:
     return {"metric": "triple F1 per question, mean and 95% bootstrap interval over questions", "rows": rows}
 
 
-def matching_runs(candidate: dict, runs: Iterable[Run], path: str) -> list[Run]:
-    """The runs of ``path`` for this gold row: same question text and, if the row has one, same snapshot."""
-    matching = [run for run in runs if run.question == candidate.get("question") and run.path == path]
+def matching_runs(candidate: dict, runs: Iterable[Run], path: str, run_input: str = "corpus") -> list[Run]:
+    """The runs of ``path`` for this gold row: same question text, same input and, if the row has one, same
+    snapshot."""
+    matching = [run for run in runs if run.question == candidate.get("question") and run.path == path
+                and run.run_input == run_input]
     if candidate.get("snapshot") is not None:
         matching = [run for run in matching
                     if run.snapshot and run.snapshot.model_dump(by_alias=True) == candidate["snapshot"]]
@@ -92,15 +96,15 @@ def matching_runs(candidate: dict, runs: Iterable[Run], path: str) -> list[Run]:
 
 def build_benchmark(
     candidates: Iterable[dict], runs: Iterable[Run], *, relations: PredicateRelations,
-    judge: Judge | None = None, cost: Callable[[Run], dict] | None = None,
+    judge: Judge | None = None, cost: Callable[[Run], dict] | None = None, run_input: str = "corpus",
 ) -> dict:
-    """Scores per question and path, plus the complexity × path summary."""
+    """Scores per question and path, plus the complexity × path summary, for runs of one input."""
     runs = list(runs)
     question_rows = []
     for candidate in candidates:
         path_rows = []
         for path in PATHS:
-            matching = matching_runs(candidate, runs, path)
+            matching = matching_runs(candidate, runs, path, run_input)
             evaluations = []
             for run in matching:
                 if run.status != "answered":
@@ -179,6 +183,7 @@ def build_benchmark(
         "categories": sorted({row["category"] for row in question_rows}),
         "by_complexity": _by_complexity(question_rows),
         "relations": list(relations.source_files),
+        "run_input": run_input,
     }
 
 

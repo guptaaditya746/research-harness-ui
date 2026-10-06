@@ -1223,6 +1223,35 @@
       ],
       "default": null
     },
+    "runInput": {
+      "default": "corpus",
+      "enum": [
+        "corpus",
+        "evidence_doc"
+      ],
+      "title": "Runinput",
+      "type": "string"
+    },
+    "evidenceDoc": {
+      "anyOf": [
+        {
+          "additionalProperties": true,
+          "type": "object"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Evidencedoc"
+    },
+    "settings": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Settings",
+      "type": "object"
+    },
     "concept": {
       "anyOf": [
         {

@@ -52,6 +52,10 @@ export default function App() {
   const loadLibrary = () => getJson<{ questions: LibraryQuestion[] }>(`${api}/questions`).then(data => setLibrary(data.questions || [])).catch(() => undefined);
   useEffect(() => { loadLibrary(); }, []);
   useEffect(() => { if (!libraryOpen) return; const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setLibraryOpen(false); }; window.addEventListener('keydown', close); return () => window.removeEventListener('keydown', close); }, [libraryOpen]);
+  const [runInput, setRunInput] = useState('corpus');
+  const noteConfig = (config: { settings: { name: string; value: string }[] }) =>
+    setRunInput(config.settings.find(row => row.name === 'HARNESS_RUN_INPUT')?.value || 'corpus');
+  useEffect(() => { getJson<{ settings: { name: string; value: string }[] }>(`${api}/config`).then(noteConfig).catch(() => undefined); }, []);
   useEffect(() => { getJson<{ baseline: 'fast' | 'slow'; agentic: 'fast' | 'slow'; external?: 'on' | 'off' }>(`${api}/settings`).then(value => { setBaseMode(value.baseline); setAgMode(value.agentic); setExternalOn(value.external === 'on'); }).catch(() => undefined); }, []);
   const saveSettings = (change: { baseline?: 'fast' | 'slow'; agentic?: 'fast' | 'slow' }) => {
     if (change.baseline) setBaseMode(change.baseline);
@@ -69,7 +73,7 @@ export default function App() {
     getJson<{ content: string }>(`${api}/runs/${id}/artifacts/${name}`).then(data => setArtifactBody(data.content)).catch(error => setArtifactBody(`Could not load ${name}: ${error.message}`));
   }, [openArtifact]);
   useEffect(() => { if (scene !== 'gold') return; getJson<GoldCandidate[]>(`${api}/datasets/candidates`).then(rows => { setCandidates(rows); setDrafts({}); setGoldErrors({}); }).catch(error => setNotice(`Gold candidates could not be loaded: ${error.message}`)); }, [scene]);
-  const loadBenchmark = () => getJson<{ questions: BenchmarkQuestion[] }>(`${api}/benchmark`).then(data => setBenchmarkRows(data.questions || [])).catch(error => setNotice(`Benchmark could not be loaded: ${error.message}`));
+  const loadBenchmark = () => getJson<{ questions: BenchmarkQuestion[] }>(`${api}/benchmark?run_input=${runInput}`).then(data => setBenchmarkRows(data.questions || [])).catch(error => setNotice(`Benchmark could not be loaded: ${error.message}`));
   useEffect(() => { if (scene === 'benchmark') loadBenchmark(); }, [scene]);
   const runBenchmark = async (row: BenchmarkQuestion) => {
     try {
@@ -219,11 +223,11 @@ export default function App() {
     </header>
     <main className="main"><div className="content">
       {scene === 'corpus' && <CorpusScreen papers={papers} />}
-      {scene === 'settings' && <SettingsScreen baseMode={baseMode} agMode={agMode} save={saveSettings} />}
+      {scene === 'settings' && <SettingsScreen baseMode={baseMode} agMode={agMode} save={saveSettings} onConfig={noteConfig} />}
       {scene === 'runs' && <RunsScreen runs={runs} openArtifact={openArtifact} setOpenArtifact={setOpenArtifact} artifactBody={artifactBody} openRun={openRun} />}
       {scene === 'gold' && <GoldScreen candidates={candidates} drafts={drafts} errors={goldErrors} save={saveGold}
         setDraft={(key, value) => setDrafts(previous => ({ ...previous, [key]: value }))} />}
-      {scene === 'benchmark' && <BenchmarkScreen rows={benchmarkRows} externalOn={externalOn} refresh={loadBenchmark} run={runBenchmark} />}
+      {scene === 'benchmark' && <BenchmarkScreen rows={benchmarkRows} externalOn={externalOn} refresh={loadBenchmark} run={runBenchmark} runInput={runInput} />}
       {notice && <p className="notice" role="alert">{notice}</p>}
       {askScene && <>
         <div className="question-wrap"><textarea className="input question" rows={Math.max(1, Math.ceil(question.length / 38))} value={question} onChange={e => setQuestion(e.target.value)} placeholder="Ask a question about the corpus" aria-label="Question" /></div>
@@ -235,7 +239,7 @@ export default function App() {
             title={externalOn ? 'An off-the-shelf agent (mini-SWE-agent) with bash commands over the same corpus and ontology, none of our pipeline' : 'The External path is off: set HARNESS_EXTERNAL_COMMAND and HARNESS_EXTERNAL_CONFIG'}>External</button>
           <button className="btn btn-secondary" disabled={noQuestion} onClick={() => runCompare()}>Compare all</button>
           <button className="text-button micro" aria-expanded={libraryOpen} aria-controls="question-library" disabled={busy} onClick={() => setLibraryOpen(open => !open)}>{libraryOpen ? 'Close question library' : `Question library (${library.length})`}</button>
-          <button className="text-button muted micro" onClick={() => setScene('settings')}>Budgets: baseline {baseMode}, agentic {agMode} · change</button>
+          <button className="text-button muted micro" onClick={() => setScene('settings')}>Input: {runInput === 'evidence_doc' ? 'evidence document D' : 'corpus'} · budgets: baseline {baseMode}, agentic {agMode} · change</button>
         </div>
         {libraryOpen && !busy && <QuestionLibrary items={library} filter={libraryFilter} setFilter={setLibraryFilter}
           onPick={text => { setQuestion(text); setLibraryOpen(false); }} onRun={(kind, text) => runFixture(kind, text)} onCompare={text => runCompare(text)} />}

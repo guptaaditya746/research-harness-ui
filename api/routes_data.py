@@ -1,4 +1,4 @@
-"""Data endpoints: gold candidates, relation registry, corpus papers, question library, budgets."""
+"""Data endpoints: gold candidates, relation registry, corpus papers, question library, budgets, settings."""
 
 from __future__ import annotations
 
@@ -7,12 +7,12 @@ import logging
 from pathlib import Path
 
 import app_state
-from api_models import CandidateUpdate, RelationReviewRequest, SettingsUpdate
+from api_models import CandidateUpdate, ConfigUpdate, RelationReviewRequest, SettingsUpdate
 from fastapi import APIRouter, HTTPException
-from harness_config import settings
+from harness_config import settings, ui
 from harness_corpus.store import CorpusStore
 from paths import corpus_root, datasets_root
-from runtime import external_configured
+from runtime import change_ui_settings, external_configured
 
 router = APIRouter()
 LOGGER = logging.getLogger(__name__)
@@ -130,3 +130,26 @@ def update_budget_settings(request: SettingsUpdate) -> dict[str, str]:
         raise HTTPException(422, "budgets must be fast or slow")
     app_state.runtime.settings.update(changes)
     return dict(app_state.runtime.settings)
+
+
+def _config() -> dict:
+    runtime = app_state.runtime
+    return {"settings": ui.describe(), "overrides": dict(runtime.ui_overrides), "file": str(runtime.ui_file),
+            "active_runs": len(runtime.running), "external": "on" if external_configured() else "off"}
+
+
+@router.get("/config")
+def get_config() -> dict:
+    """The settings the Settings page may change (harness_config.ui), with their current values."""
+    return _config()
+
+
+@router.put("/config")
+def update_config(request: ConfigUpdate) -> dict:
+    try:
+        change_ui_settings(app_state.runtime, request.values)
+    except RuntimeError as exc:
+        raise HTTPException(409, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    return _config()

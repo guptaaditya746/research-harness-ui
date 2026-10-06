@@ -172,3 +172,7 @@
 .timeline-bar.failed { fill: none; stroke: var(--color-accent-2); stroke-width: 1.5; stroke-dasharray: 3 2; }
 .timeline-tick { stroke: var(--color-accent-2-700); stroke-width: 1.4; }
 .timeline-mark { fill: var(--color-text); }
+
+/* Settings page: one harness setting per row (label | control and help); stacked on narrow screens. */
+.setting-row { display: grid; grid-template-columns: minmax(12rem, 18rem) minmax(0, 1fr); gap: 4px 18px; align-items: start; }
+@media (max-width: 720px) { .setting-row { grid-template-columns: minmax(0, 1fr); } }

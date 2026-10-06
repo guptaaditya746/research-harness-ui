@@ -24,13 +24,14 @@ def _variables(name: str) -> dict:
         "agent/decision_rejected": {"problems": ["decision cites unobserved ids: p99",
                                                  "no corpus tool was called"]},
         "agent/grounded_context": {"context_json": ""},
+        "agent/evidence_doc_context": {"context_json": ""},
         "planning/query_plan": {"operations": {}},
     }.get(name, {})
 
 
 def test_only_v2_exists_and_it_defines_every_prompt() -> None:
     assert SETS == ("v2",)
-    assert len(names()) == 19
+    assert len(names()) == 21
 
 
 @pytest.mark.parametrize("name", names("v2"))

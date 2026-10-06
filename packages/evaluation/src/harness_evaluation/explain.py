@@ -74,12 +74,18 @@ def _compare(gold: list[Mapping[str, Any]], run: Run, relations: PredicateRelati
 
 
 def explain(row: Mapping[str, Any], runs: Iterable[Run], *, relations: PredicateRelations,
-            judge: Judge | None = None) -> dict[str, Any]:
-    """Diagnostics for one gold row (see the module docstring), with plain-language ``hints``."""
-    runs = list(runs)
+            judge: Judge | None = None, run_input: str = "corpus") -> dict[str, Any]:
+    """Diagnostics for one gold row (see the module docstring), with plain-language ``hints``. Only runs of
+    ``run_input`` are paired; runs of the other input are counted in a hint."""
+    every = list(runs)
+    runs = [run for run in every if run.run_input == run_input]
+    other = sum(1 for run in every if run.run_input != run_input and run.question == row.get("question"))
     question = row.get("question")
     same = [run for run in runs if run.question == question]
     hints: list[str] = []
+    if other:
+        hints.append(f"{other} runs of this question read the other input (not {run_input}); "
+                     f"they are scored with --input {'corpus' if run_input != 'corpus' else 'evidence_doc'}")
     if not same:
         near = get_close_matches(str(question), sorted({run.question for run in runs}), n=3, cutoff=0.6)
         hints.append("no saved run has this exact question text"

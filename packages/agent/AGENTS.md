@@ -8,6 +8,7 @@ The Agentic path: concept readings before research, the MCP tool loop, paper rea
 - `tool_loop.py` — `ToolLoop`: one agent conversation; `decisions.py` — the curated tools and the decision checks
 - `mcp.py` — `MCPToolClient` (MCP sessions, phase deadline)
 - `concepts.py`, `proposal.py`, `readers.py`, `verification.py`, `context.py`, `research_state.py`
+- `doc_research.py`, `doc_tools.py` — the evidence document D as input: D-only tools, D's readings (docs/RUN_INPUT.md)
 
 ## Imports
 

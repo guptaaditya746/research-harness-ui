@@ -28,12 +28,14 @@ from time import monotonic
 from typing import Any
 
 from harness_baseline import Baseline20
+from harness_baseline.evidence_doc import EvidenceDoc
 from harness_baseline.planner import RANKING_OPERATIONS
 from harness_config import settings
 from harness_observability import record_tool_call
 from harness_schema.models import Check, ConceptChoice, Run, TraceRow, required_artifacts
 
 from .decisions import id_list, validate_findings
+from .doc_research import DocResearch
 from .evidence import evidence_ids
 from .load import heavy_queue_depth
 from .mcp import MCPToolClient, MCPUnavailable
@@ -95,7 +97,7 @@ class _Session:
         return round(monotonic() - self.started, 3)
 
 
-class AgenticResearch(ConceptProposalStep):
+class AgenticResearch(DocResearch, ConceptProposalStep):
     """Agent-path runner sharing evidence and graph invariants with baseline."""
 
     def __init__(
@@ -104,8 +106,11 @@ class AgenticResearch(ConceptProposalStep):
         trace_sink: Callable[[TraceRow], None] | None = None,
         agent_model: object | None = None,
         high_model: object | None = None,
+        evidence_doc: EvidenceDoc | None = None,
     ):
         self.baseline = baseline
+        # The run input "evidence_doc": research over D only (doc_research.py).
+        self.evidence_doc = evidence_doc
         self.trace_sink = trace_sink or (lambda _: None)
         self.agent_model = agent_model or baseline.extraction.model
         self.high_model = high_model or self.agent_model
@@ -130,6 +135,8 @@ class AgenticResearch(ConceptProposalStep):
             question=question, budget=budget, run_id=run_id, concept=concept,
             concept_input=concept.model_dump(by_alias=False), started=monotonic(),
         )
+        if self.evidence_doc is not None:
+            return self._run_on_doc(session)
         self._route(session)
         if session.fact_route is None:
             self._check_heavy_load(session)

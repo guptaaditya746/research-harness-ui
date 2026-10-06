@@ -24,6 +24,8 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | `agent/research_supervisor` | System prompt of the agent tool loop (skills rendered in) |
 | `agent/decision_rejected` | Message sending an invalid agent decision back with its problems |
 | `agent/grounded_context` | Research context message (JSON appended) |
+| `agent/evidence_doc_supervisor` | System prompt of the agent tool loop when the evidence document D is the input (docs/RUN_INPUT.md) |
+| `agent/evidence_doc_context` | Research context message in that mode (JSON appended) |
 | `agent/independent_verifier` | Fresh-context check of the agent's cited evidence |
 | `agent/compaction_summary` | Summary of the oldest tool exchanges when the agent's context is 80% full (Phase 3c) |
 | `agent/paper_reader` | Parallel reader: up to four findings from one paper's top passages (Phase 3d) |

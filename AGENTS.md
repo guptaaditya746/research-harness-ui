@@ -21,6 +21,8 @@ Every package has its own `AGENTS.md` (what it owns, entry points, what it may i
 | Claim subgraphs (also imported by `labelling`) | `packages/extraction/src/harness_extraction/claims.py` |
 | Prompts (every model call) and few-shot examples | `packages/prompts/src/harness_prompts/templates/{v1,v2}/`, `examples/` — see `docs/PROMPTS.md` |
 | Settings / environment variables | `packages/config/src/harness_config/__init__.py`, `.env.example` |
+| Settings page (UI-editable settings), `/config` | `packages/config/src/harness_config/ui.py`, `api/routes_data.py`, `web/src/SettingsPanel.tsx` |
+| Run input: the corpus or the evidence document D | `docs/RUN_INPUT.md`; `harness_baseline/evidence_doc.py`, `given_evidence.py`; `harness_agent/doc_research.py`, `doc_tools.py` |
 | Corpus tools for the agent (MCP) | `packages/mcp_corpus/src/harness_mcp_corpus/server.py` |
 | Corpus store, BM25 + dense (hybrid) ranking, ingest | `packages/corpus/src/harness_corpus/` (`store.py`, `dense.py`) |
 | Run / API contract (Pydantic, generated TS types) | `packages/schema/src/harness_schema/models.py` → `make fixtures` |

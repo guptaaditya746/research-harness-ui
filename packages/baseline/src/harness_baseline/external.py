@@ -132,7 +132,7 @@ class ExternalHarness(Baseline20):
             self._check(self.stage, "fail", str(exc))
             run, artifacts = self._failure(run_id, started_at, question, budget, reason, str(exc))
         artifacts.update(files)
-        return {"run": run.model_copy(update={"checks": list(self.checks)}), "artifacts": artifacts}
+        return {"run": self._stamped(run), "artifacts": artifacts}
 
     # ─── The subprocess ──────────────────────────────────────────────────
 
@@ -151,6 +151,14 @@ class ExternalHarness(Baseline20):
         out = folder / "run"
         command = [*self.command, "run", "--config", self.config_path, "--question-file", str(question_file),
                    "--run-id", run_id, "--out", str(out), "--events"]
+        if self.evidence_doc is not None:
+            # The run input "evidence_doc": D's triples are the agent's only evidence (kbdoc in external-harness).
+            doc_file = folder / "evidence_doc.json"
+            rows = [{**{("triple_id" if key == "id" else key): value for key, value in triple.row().items()},
+                     "evidence": triple.evidence, "interpretation": triple.reading}
+                    for triple in self.evidence_doc.triples]
+            doc_file.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+            command += ["--triples-file", str(doc_file)]
         self._emit("Starting external harness", f"{Path(self.config_path).name} · {' '.join(self.command[-2:])}")
         stderr = (folder / "stderr.log").open("w+", encoding="utf-8")
         try:
@@ -277,7 +285,16 @@ class ExternalHarness(Baseline20):
         self._check("external harness", "warn" if any(audit) else "pass",
                     "; ".join(item for item in [f"{summary}; {len(result.get('triples') or [])} triples", *notes, *audit]
                               if item))
-        self._check("retrieval", "skipped", f"the external agent searched on its own ({usage.get('commands', 0)} commands)")
+        given = (result.get("input") or {}).get("kind") == "evidence_doc"
+        if self.evidence_doc is not None and not given:
+            raise ExternalFailure("external_failed: the external harness did not take the evidence document as input "
+                                  "(update external-harness: xh run --triples-file)")
+        reached = (result.get("input") or {}).get("corpus_commands") or []
+        if reached:
+            self._check("evidence document only", "warn", f"{len(reached)} commands reached for corpus tools that "
+                        f"were not on its PATH: {reached[0][:80]}")
+        self._check("retrieval", "skipped", f"the external agent read the evidence document ({usage.get('commands', 0)} "
+                    "commands)" if given else f"the external agent searched on its own ({usage.get('commands', 0)} commands)")
         if not triples:
             answer = " ".join(str(result.get("answer") or "").split())[:300]
             raise NoResults(f"the external agent answered without a usable triple ({summary})"

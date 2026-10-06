@@ -28,18 +28,21 @@ def _run_cost(run: Run) -> dict[str, float | int]:
 
 
 @router.get("/benchmark")
-def benchmark(category: str | None = None, judge: bool = True) -> dict:
+def benchmark(category: str | None = None, judge: bool = True, run_input: str = "corpus") -> dict:
     """Approved benchmark questions with aggregated path scores (see harness_evaluation.benchmark).
 
     ``judge=false`` reports the soft level from reviewer variants only (use it when the judge's
-    agreement with people is below the bar, see labelling docs/EVALUATION.md).
+    agreement with people is below the bar, see labelling docs/EVALUATION.md). ``run_input``: corpus (the
+    usual runs) or evidence_doc (runs that read the evidence document D); never mixed.
     """
+    if run_input not in {"corpus", "evidence_doc"}:
+        raise HTTPException(422, "run_input must be corpus or evidence_doc")
     candidates = [row for row in app_state.runtime.gold.list() if row.get("status") == "approved"]
     if category:
         candidates = [row for row in candidates if row.get("category") == category]
     # Cache-only judge: opening the page never starts model calls (`make evaluate ARGS=--judge` fills it).
     result = build_benchmark(candidates, app_state.runtime.list(), relations=load_relations(),
-                             judge=CachedJudge() if judge else None, cost=_run_cost)
+                             judge=CachedJudge() if judge else None, cost=_run_cost, run_input=run_input)
     result["judge"] = "cache" if judge else "off"
     return result
 
@@ -75,6 +78,7 @@ def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
                 evaluation_mode=True,
                 snapshot=snapshot,
                 concept=request.concept if request.path == "agentic" else None,
+                run_input=request.run_input,
             )
         )
         for _ in range(request.repetitions)
@@ -84,4 +88,5 @@ def execute_benchmark(request: BenchmarkExecuteRequest) -> dict[str, object]:
         "repetitions": request.repetitions,
         "evaluation_mode": True,
         "snapshot": snapshot.model_dump(by_alias=True),
+        "run_input": request.run_input or settings().run_input,
     }

@@ -1,7 +1,7 @@
 """The handoff run JSON, with v2 terminal metadata added explicitly."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -245,6 +245,12 @@ class Run(Contract):
     search_coverage: dict[str, str | int | bool] | None = Field(default=None, alias="searchCoverage")
     evaluation_mode: bool = Field(default=False, alias="evaluationMode")
     snapshot: EvaluationSnapshot | None = None
+    # What the run read: "corpus" (it searched the papers) or "evidence_doc" (the question's evidence
+    # document D was its input; ``evidence_doc`` records which file). Scores are compared within one input.
+    run_input: Literal["corpus", "evidence_doc"] = Field(default="corpus", alias="runInput")
+    evidence_doc: dict[str, Any] | None = Field(default=None, alias="evidenceDoc")
+    # The settings that are editable in the UI, as they were when the run started.
+    settings: dict[str, str] = Field(default_factory=dict)
     concept: ConceptChoice | None = None
     concepts: list[ConceptChoice] = Field(default_factory=list)
     parent_run_id: str | None = Field(default=None, alias="parentRunId")
