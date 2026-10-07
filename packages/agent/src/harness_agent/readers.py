@@ -35,6 +35,8 @@ LOGGER = logging.getLogger(__name__)
 class ReaderResult:
     paper_id: str
     passage_ids: list[str] = field(default_factory=list)
+    # The passages the reader was shown (id and text): the verifier looks cited reader passages up here.
+    passages: list[dict[str, str]] = field(default_factory=list)
     findings: list[dict[str, Any]] = field(default_factory=list)
     duration_ms: float = 0.0
     error: str | None = None
@@ -84,9 +86,10 @@ def read_paper(model: Any, corpus: Any, question: str, concept: dict | None, pap
         result.error = "no passages"
         return result
     title = getattr(corpus, "paper_title", lambda _pid: None)(paper_id)
+    result.passages = [{"passage_id": str(row["passage_id"]), "text": str(row.get("text", ""))[:PASSAGE_CHARS]}
+                       for row in rows]
     payload = {
-        "passages": [{"passage_id": str(row["passage_id"]), "text": str(row.get("text", ""))[:PASSAGE_CHARS]}
-                     for row in rows],
+        "passages": result.passages,
         "paper": {"paper_id": paper_id, "title": title},
         "research_interpretation": interpretation or None,
         "question": question,

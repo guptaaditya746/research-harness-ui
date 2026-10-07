@@ -4,6 +4,10 @@
 choose the tools on offer (budget, forced first call), keep the conversation within the window
 (summary, then fitting), send the turn, then either check the final decision (sent back once with
 its problems) or run the requested tool calls and add the exchange.
+
+Bounds: the tool budget (``HARNESS_AGENT_MAX_TOOL_CALLS``) is a hard cap per call, so parallel calls
+in one turn cannot overshoot it; the number of turns is capped at the budget plus ``TURN_MARGIN``
+(the last turn offers no tools and asks for the decision); the phase deadline is ``mcp.py``'s.
 """
 
 from __future__ import annotations
@@ -47,6 +51,9 @@ from .skills import catalog, relevant
 ToolSink = Callable[[dict[str, Any]], None]
 SUMMARISE_AT = 0.8     # share of the usable window at which older exchanges are summarised
 SUMMARY_MIN_SAVING = 1_500  # tokens the archivable exchanges must hold before a summary is worth a call
+# Turns allowed beyond the tool budget: findings, the budget note, a sent-back decision, refused or
+# repeated calls. Without a tool budget (0) only the phase deadline bounds the loop.
+TURN_MARGIN = 8
 # Priority order: the evidence tools the supervisor is told to prefer, then the specialist tools,
 # which are dropped first when space is short.
 CORE_TOOLS = ["search_evidence", "read_evidence", FINDING_TOOL, "structured_facts", "aggregate_facts",
@@ -111,6 +118,10 @@ def result_count(result: Any) -> int | None:
     return None
 
 
+class TurnLimitReached(RuntimeError):
+    """The agent used every turn it is allowed without a final decision (ends the loop like the deadline)."""
+
+
 def _ids_of_claims(grounded: dict[str, Any]) -> set[str]:
     return {str(claim.get("id")) for claim in grounded.get("preliminary_claims", [])
             if isinstance(claim, dict) and claim.get("id") is not None}
@@ -145,7 +156,10 @@ class ToolLoop:
         self.reply_tokens = 0
         self.retried_for_length = False
         self.budget_note_sent = False
+        self.last_note_sent = False
         self.turn_number = 0
+        budget = self.config.agent_max_tool_calls
+        self.max_turns = budget + TURN_MARGIN if budget > 0 else 0
         self.tools: list[dict[str, Any]] = []
         self.core_count = 0
 
@@ -201,11 +215,15 @@ class ToolLoop:
                 except ModelFailure:
                     # Stopped or out of time: end the loop with what we have.
                     return ""
-                budget_reached = 0 < self.config.agent_max_tool_calls <= self.ledger.tool_calls
-                offered = self._offered(budget_reached)
+                budget_reached = self._budget_reached()
+                last_turn = 0 < self.max_turns <= self.turn_number + 1
+                offered = [] if last_turn else self._offered(budget_reached)
                 await self._summarise_older(offered)
                 self._compact(offered)
-                self._note_budget(offered, budget_reached)
+                if last_turn:
+                    self._note_last_turn()
+                else:
+                    self._note_budget(offered, budget_reached)
                 self._check_fits(offered)
                 response = await self._send(http, offered, turn_timeout)
                 if response is None:
@@ -217,10 +235,35 @@ class ToolLoop:
                 requested = message.get("tool_calls") or []
                 if not requested:
                     final = str(message.get("content") or "")
-                    if self._send_back(final):
+                    if not last_turn and self._send_back(final):
                         continue
                     return final
+                if last_turn:
+                    self._stop_at_turn_limit(len(requested))
                 await self._run_calls(message, requested, offered, budget_reached)
+
+    def _budget_reached(self) -> bool:
+        return 0 < self.config.agent_max_tool_calls <= self.ledger.tool_calls
+
+    def _note_last_turn(self) -> None:
+        """The last allowed turn: no tools are offered and the agent is told to decide now."""
+        conversation = self.conversation
+        if conversation.exchanges and not self.last_note_sent:
+            self.last_note_sent = True
+            conversation.exchanges[-1].append({"role": "user", "content": (
+                f"This is your last turn (turn {self.max_turns} of {self.max_turns}): no more tool calls. "
+                "Reply now with your final JSON decision.")})
+
+    def _stop_at_turn_limit(self, requested: int) -> None:
+        """The last turn asked for tools anyway: record it and end the loop like the phase deadline."""
+        detail = (f"agent turn limit reached: {self.turn_number} turns (tool budget "
+                  f"{self.config.agent_max_tool_calls} + {TURN_MARGIN}) without a final decision")
+        self._checkpoint({"mode": "turn_limit"}, {
+            "turns": self.turn_number, "max_turns": self.max_turns, "corpus_calls": self.ledger.tool_calls,
+            "requested_on_last_turn": requested, "notes": len(self.ledger.notes),
+        }, "Stop the agent loop at its turn limit.")
+        emit_model_event("Agent turn limit", detail)
+        raise TurnLimitReached(detail)
 
     def _offered(self, budget_reached: bool) -> list[dict[str, Any]]:
         """Tool budget reached: only the scratchpad is left, then the decision. Until a corpus tool
@@ -415,6 +458,8 @@ class ToolLoop:
         tool_messages: list[dict[str, Any]] = []
         digests: list[str] = []
         for call in requested:
+            # The budget is checked per call: parallel calls of one turn stop at it too.
+            budget_reached = budget_reached or self._budget_reached()
             tool_message, digest = await self._run_call(call, offered_names, budget_reached)
             tool_messages.append(tool_message)
             digests.append(digest)
@@ -439,6 +484,12 @@ class ToolLoop:
                 status, error = "unavailable", result["error"]
             elif name == FINDING_TOOL:
                 result, status, error = self._record_finding(arguments)
+            elif budget_reached:
+                # Offered at the start of the turn, but earlier calls of this turn used the
+                # budget up: refuse it (not executed, not counted).
+                result = {"error": f"unavailable: tool budget reached ({self.ledger.tool_calls} corpus "
+                                   "calls); record findings, then reply with your final JSON decision"}
+                status, error = "unavailable", result["error"]
             elif repeat is not None:
                 # The same call again returns the same data; answer
                 # from the ledger and say so, instead of looping.

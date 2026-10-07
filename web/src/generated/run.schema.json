@@ -1282,6 +1282,18 @@
       "default": null,
       "title": "Parentrunid"
     },
+    "attemptId": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Attemptid"
+    },
     "checks": {
       "items": {
         "$ref": "#/$defs/Check"

@@ -157,12 +157,19 @@ def _replace(path: Path, write) -> None:
 
 
 def rrf(rankings: Sequence[Sequence[str]], k: int = 60) -> list[tuple[str, float]]:
-    """Reciprocal rank fusion (Cormack et al., 2009): sum of 1 / (k + rank) over the rankings."""
+    """Reciprocal rank fusion (Cormack et al., 2009): sum of 1 / (k + rank) over the rankings.
+
+    Equal fused scores (e.g. rank 1 in one list only and rank 1 in the other only) are broken by the
+    best rank the item reached in any single list, then by id, so the order is deterministic and does
+    not favour an id spelling. A single ranking comes back in its own order.
+    """
     scores: dict[str, float] = {}
+    best: dict[str, int] = {}
     for ranking in rankings:
         for rank, item in enumerate(ranking, start=1):
             scores[item] = scores.get(item, 0.0) + 1.0 / (k + rank)
-    return sorted(scores.items(), key=lambda entry: (-entry[1], entry[0]))
+            best[item] = min(best.get(item, rank), rank)
+    return sorted(scores.items(), key=lambda entry: (-entry[1], best[entry[0]], entry[0]))
 
 
 __all__ = ["QUERY_INSTRUCTION", "DenseIndex", "build_dense_index", "embed_texts", "passages_digest", "rrf"]

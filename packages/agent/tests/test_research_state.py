@@ -52,3 +52,31 @@ def test_decision_problems_name_exactly_what_to_fix() -> None:
         == ["the final message must be one JSON object with keys verified_claim_ids, additional_evidence_ids, reasoning_summary"]
     # Answers computed from verified facts do not require a tool call to be accepted.
     assert decision_problems(ok, observed=observed, claim_ids=claims, corpus_calls=0, needs_tools=False) == []
+
+
+def test_digest_names_triples_with_their_source_passage() -> None:
+    ledger = ResearchLedger(question="q")
+    ledger.record("doc_search", {"total": 1, "items": [
+        {"subject": "p97", "predicate": "evaluatesOn", "object": "BenchY", "paper_id": "p97",
+         "source_id": "p97-0", "evidence": "MethodX is evaluated on BenchY.", "triple_id": "t00001",
+         "interpretation": "i1"},
+    ]}, "collect", arguments={"query": "BenchY"}, call_id="tool-001")
+    [line] = ledger.digests[0]["items"]
+    assert line == "t00001 (source p97-0): p97 evaluatesOn BenchY"
+
+
+def test_digest_keeps_the_first_ids_of_aggregate_lists() -> None:
+    ledger = ResearchLedger(question="q")
+    fact_ids = [f"p{n}-venue" for n in range(12)]
+    ledger.record("aggregate_facts", {"total": 1, "items": [
+        {"value": "VenueZ", "count": 12, "paper_ids": [f"p{n}" for n in range(12)], "fact_ids": fact_ids,
+         "source_ids": ["p0-metadata", "p1-metadata"]},
+    ]}, "collect", arguments={"operation": "count"}, call_id="tool-001")
+    [line] = ledger.digests[0]["items"]
+    assert line.startswith("VenueZ · 12 | paper_ids: p0, p1, p2, p3, p4 +7 more")
+    assert "fact_ids: p0-venue, p1-venue, p2-venue, p3-venue, p4-venue +7 more" in line
+    assert "source_ids: p0-metadata, p1-metadata" in line and "more |" not in line.split("source_ids")[1]
+    huge = {"value": "x" * 500, "fact_ids": ["f" * 80 for _ in range(10)], "source_ids": ["s" * 80] * 10}
+    ledger.record("aggregate_facts", {"items": [huge]}, "collect", arguments={"operation": "x"})
+    [bounded] = ledger.digests[1]["items"]
+    assert len(bounded) <= 320 and bounded.startswith("x" * 120 + " | fact_ids: ")

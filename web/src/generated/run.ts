@@ -183,6 +183,7 @@ export interface Run {
   concept: ConceptChoice | null;
   concepts: Array<ConceptChoice>;
   parentRunId: string | null;
+  attemptId: string | null;
   checks: Array<Check>;
   coverage: number | null;
   theta: number;

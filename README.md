@@ -358,8 +358,8 @@ research, scoped by the resolved papers and the plan's evidence focus. Invalid p
 unresolved papers and uncovered facts fall back to research visibly in the trace. The
 question's wording never selects a route.
 
-On the agentic path the agent first proposes 3–4 concept readings, each grounded with
-corpus search hits. The chosen concept travels with the unchanged question as structured
+On the agentic path the agent first proposes concept readings (one for an unambiguous
+question, several for an ambiguous one), each grounded with corpus search hits. The chosen concept travels with the unchanged question as structured
 input (`Run.concept`); picking is idempotent, and each child run records `parentRunId`.
 Stop and the per-run deadline cancel runs cooperatively, including model calls that are
 already in flight.

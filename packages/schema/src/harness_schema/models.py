@@ -254,6 +254,10 @@ class Run(Contract):
     concept: ConceptChoice | None = None
     concepts: list[ConceptChoice] = Field(default_factory=list)
     parent_run_id: str | None = Field(default=None, alias="parentRunId")
+    # Evaluation: the runs of one attempt (one research run per proposed reading of an ambiguous question)
+    # share this id; the benchmark unions their chosen readings into one prediction. None = the run is an
+    # attempt of its own.
+    attempt_id: str | None = Field(default=None, alias="attemptId")
     checks: list[Check] = Field(default_factory=list)
     coverage: float | None = None
     theta: float = 0.30

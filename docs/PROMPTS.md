@@ -20,7 +20,7 @@ reply = complete(model, prompt)          # records prompt.ref (name@set:hash) in
 | Name | Model call |
 |---|---|
 | `planning/query_plan` | Question understanding: typed query plan |
-| `agent/concept_proposal` | 3–4 concept readings before agentic research |
+| `agent/concept_proposal` | concept readings before agentic research: one for an unambiguous question, several (up to `READINGS_MAX`) for an ambiguous one |
 | `agent/research_supervisor` | System prompt of the agent tool loop (skills rendered in) |
 | `agent/decision_rejected` | Message sending an invalid agent decision back with its problems |
 | `agent/grounded_context` | Research context message (JSON appended) |

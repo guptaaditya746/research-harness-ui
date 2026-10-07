@@ -33,15 +33,16 @@ from typing import Any
 
 import httpx
 from harness_config import settings
+from harness_extraction.model_client import CHARS_PER_TOKEN
 from harness_prompts import text
 
 DEFAULT_WINDOW = 32_768
 
 
 def estimate_tokens(value: Any) -> int:
-    """Conservative token estimate for JSON-heavy chat payloads (~3 chars/token)."""
+    """Conservative token estimate for JSON-heavy chat payloads (``CHARS_PER_TOKEN``, ~3 chars/token)."""
     text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-    return len(text) // 3 + 1
+    return int(len(text) / CHARS_PER_TOKEN) + 1
 
 
 _WINDOW_PATTERNS = (
@@ -259,7 +260,7 @@ class Conversation:
             overflow = self.tokens(tools) - limit
             results = [m for m in self.exchanges[-1] if m.get("role") == "tool"]
             if results:
-                cut_chars = int(overflow * 3 / self.scale) // len(results) + 200
+                cut_chars = int(overflow * CHARS_PER_TOKEN / self.scale) // len(results) + 200
                 for message in results:
                     content = str(message.get("content") or "")
                     keep = max(400, len(content) - cut_chars)
@@ -285,8 +286,10 @@ def result_digest(tool: str, result: Any, ledger_digest: dict[str, Any] | None =
 
 
 def cap_tool_result(content: str, limit_tokens: int) -> str:
-    """Bound one tool result so a single large page cannot fill the window."""
-    max_chars = max(2_000, limit_tokens * 3 // 4)
+    """Bound one tool result to ``limit_tokens`` (the tool loop passes a quarter of the usable window),
+    converted to characters with the same ``CHARS_PER_TOKEN`` as ``estimate_tokens``; at least 2,000
+    characters. Several results together are kept inside the window by ``Conversation.fit``."""
+    max_chars = max(2_000, int(limit_tokens * CHARS_PER_TOKEN))
     if len(content) <= max_chars:
         return content
     return content[:max_chars] + (

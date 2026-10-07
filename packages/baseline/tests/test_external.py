@@ -43,13 +43,17 @@ doc = json.loads(Path(args[args.index("--triples-file") + 1]).read_text()) if "-
 if doc is not None and mode != "ignores_doc":
     triples = [{key: row[key] for key in ("subject", "predicate", "object", "source_id", "evidence")} for row in doc[:1]]
 status = {"answered": "answered", "empty": "answered", "limits": "limits_exceeded", "other_corpus": "answered",
-          "provider": "error", "ignores_doc": "answered"}[mode]
+          "provider": "error", "ignores_doc": "answered", "unsandboxed": "answered", "truncated": "answered"}[mode]
 corpus = "/somewhere/else" if mode == "other_corpus" else os.environ.get("CORPUS_ROOT", "")
 result = {"status": status, "answer": f"Answer to: {question} [p4-abstract].", "triples": [] if mode == "empty" else triples,
           "dropped_triples": [{"triple": {}, "why": "unknown source_id 'x'"}], "exit_status": "Submitted",
           "problem": "answer.json is missing" if mode == "limits" else None,
           "usage": {"model_calls": 1, "commands": 1}, "duration_s": 2.0,
-          "harness": {"name": "mini-swe-agent", "version": "2.4.6"}, "config": {"model": "openai/heavy-model"},
+          "harness": {"name": "mini-swe-agent", "version": "2.4.6"},
+          "config": {"model": "openai/heavy-model", "sandbox": "bubblewrap", "max_triples": 500},
+          "model": "openai/heavy-model-used", "sandbox": "none" if mode == "unsandboxed" else "bubblewrap",
+          "truncated_triples": 2 if mode == "truncated" else 0, "max_triples": 500,
+          "not_in_doc": 1 if doc is not None else 0,
           "error": "APIConnectionError: connection refused" if mode == "provider" else None,
           "knowledge_base": {"corpus_dir": corpus, "passages": 1}, "evidence_not_in_source": 1,
           "env": sorted(os.environ), "cwd_tmp": str(out.parent), "events": events,
@@ -106,7 +110,8 @@ def test_an_external_run_becomes_a_normal_answered_run(tmp_path: Path, monkeypat
     rows: list = []
     result = runner(tmp_path, "answered", rows).run("Which data does VPP use?", run_id="r-ext1")
     run, artifacts = result["run"], result["artifacts"]
-    assert run.path == "external" and run.status == "answered" and run.model_agent == "openai/heavy-model"
+    # The model the run actually used (result.json "model"), not only the configured one.
+    assert run.path == "external" and run.status == "answered" and run.model_agent == "openai/heavy-model-used"
     reading = run.readings[0]
     assert {(t.p, t.o) for t in reading.triples} == {("usesDataset", "robot videos"), ("authoredBy", "Ada Byron"),
                                                     ("authoredBy", "Grace Hopper"),      # authorOf inverted, type dropped
@@ -122,6 +127,8 @@ def test_an_external_run_becomes_a_normal_answered_run(tmp_path: Path, monkeypat
     detail = checks["external harness"].detail
     assert checks["external harness"].status == "warn" and "1 dropped by the answer contract" in detail
     assert "1 with a predicate that is not a relation" in detail and "1 quote evidence not found" in detail
+    assert "model openai/heavy-model-used · sandbox bubblewrap" in detail and "sandbox off" not in detail
+    assert "cut by" not in detail and "evidence document" not in detail
     # The process saw neither our keys nor our data paths, got an absolute corpus path, and its folder is gone.
     external = json.loads(artifacts["external_result.json"])
     assert "DATASETS_ROOT" not in external["env"] and "LANGFUSE_SECRET_KEY" not in external["env"]
@@ -186,6 +193,18 @@ def test_with_d_as_input_the_external_agent_gets_the_triples_file(tmp_path: Path
     checks = {check.name: check for check in run.checks}
     assert "evidence document" in checks["retrieval"].detail
     assert checks["evidence document only"].status == "warn"           # it still reached for kbsearch
+    assert "1 of them not triples of the evidence document" in checks["external harness"].detail
+
+
+@pytest.mark.parametrize(("mode", "text"), [
+    ("unsandboxed", "sandbox off: commands could read the whole machine (not an evaluation run)"),
+    ("truncated", "2 triples cut by its output.max_triples (500)")])
+def test_an_unsandboxed_or_truncated_external_run_is_marked(tmp_path: Path, mode: str, text: str) -> None:
+    run = runner(tmp_path, mode).run("q", run_id="r-ext4")["run"]
+    check = next(check for check in run.checks if check.name == "external harness")
+    assert run.status == "answered" and check.status == "warn" and text in check.detail
+    if mode == "unsandboxed":
+        assert "sandbox none" in check.detail
 
 
 def test_an_external_harness_that_ignores_d_fails_the_run(tmp_path: Path) -> None:

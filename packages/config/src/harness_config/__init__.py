@@ -162,8 +162,10 @@ class Settings(BaseSettings):
     agent_first_tool_choice: Literal["auto", "required"] = Field(
         "required", validation_alias=_env("HARNESS_AGENT_FIRST_TOOL_CHOICE"))
     mcp_agent_timeout_s: float = Field(90, validation_alias=_env("HARNESS_MCP_AGENT_TIMEOUT_S"))
-    readings_min: int = Field(3, validation_alias=_env("READINGS_MIN"))
-    readings_max: int = Field(4, validation_alias=_env("READINGS_MAX"))
+    # Concept readings the agent proposes: one when the question has one sensible interpretation, several
+    # only when it is ambiguous. Used as given; READINGS_MIN > READINGS_MAX fails the proposal (no clamp).
+    readings_min: int = Field(1, ge=1, le=8, validation_alias=_env("READINGS_MIN"))
+    readings_max: int = Field(4, ge=1, le=8, validation_alias=_env("READINGS_MAX"))
     hide_ungrounded_readings: bool = Field(True, validation_alias=_env("HARNESS_HIDE_UNGROUNDED_READINGS"))
     # Phase 4: invented classes are subclasses of an existing class ("subclass"), or not allowed at
     # all ("off": they become hrn:ResearchEntity). Invented properties always get a parent property.

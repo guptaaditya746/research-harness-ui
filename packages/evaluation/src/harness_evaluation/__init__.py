@@ -6,6 +6,8 @@
 - ``relations``: RDFS/OWL rules for the entailed level (closed with owlrl).
 - ``judge``: the cached soft-match judge (no model calls unless the caller passes one).
 - ``stats``: bootstrap confidence intervals over questions.
+- ``evaluate_gold_row`` / ``evaluate_attempt``: a run, or the runs of one attempt, against one gold row;
+  an ambiguous question is scored AmbigQA-style (set F1 against the union of its accepted readings).
 
 The metric definitions, their reasons and their limits are documented in the
 labelling repository (``docs/EVALUATION.md``).
@@ -210,6 +212,22 @@ def score_claims(
             "aligned": len(matches), "details": details}
 
 
+def _question_id(question: str, question_id: str | None) -> str | None:
+    """The question id the shared corpus_10 normalization needs (looked up by text when not given)."""
+    shared = _shared_vocabulary()
+    if question_id is None and shared:
+        module, vocabulary = shared
+        return module.question_id_for_text(question, vocabulary)
+    return question_id
+
+
+def eligible_for_path_score(run: Run) -> bool:
+    """An answered, non-degraded run produced by its own path (anything else scores as an empty prediction)."""
+    return (run.status == "answered" and run.execution_status != "degraded"
+            and not (run.reason or "").startswith("agentic_degraded:")
+            and run.producing_path in {None, run.path})
+
+
 def evaluate_run(
     run: Run, gold_triples: Iterable[Triple | Mapping[str, object]],
     gold_claims: Iterable[ClaimSubgraph | Mapping[str, object]] | None = None,
@@ -226,10 +244,7 @@ def evaluate_run(
     rejected = list(rejected)
     relations = relations if relations is not None else load_relations()
     claim_gold = list(gold_claims) if gold_claims is not None else None
-    shared = _shared_vocabulary()
-    if question_id is None and shared:
-        module, vocabulary = shared
-        question_id = module.question_id_for_text(run.question, vocabulary)
+    question_id = _question_id(run.question, question_id)
     gold_keys = {canonical_triple_key(item, question_id) for item in gold}
     rows = []
     for index, reading in enumerate(run.readings):
@@ -271,58 +286,144 @@ def evaluate_run(
     selected_levels = next((row["levels"] for row in rows if row["index"] == run.chosen_reading), None)
     return {"run_id": run.id, "path": run.path, "status": run.status,
             "producing_path": run.producing_path, "execution_status": run.execution_status,
-            "eligible_for_path_score": run.status == "answered" and run.execution_status != "degraded" and
-            not (run.reason or "").startswith("agentic_degraded:") and
-            run.producing_path in {None, run.path},
+            "eligible_for_path_score": eligible_for_path_score(run),
             "gold": len(gold_keys), "gold_claims": len(claim_gold) if claim_gold is not None else None,
             "readings": rows, "chosen_reading": run.chosen_reading, "chosen": selected,
             "chosen_levels": selected_levels}
+
+
+def accepted_readings(row: Mapping[str, object]) -> list[Mapping[str, object]]:
+    """The row's accepted readings that have gold triples. A reading without computable gold cannot be
+    scored or covered."""
+    return [item for item in row.get("accepted_readings") or [] if item.get("gold_triples")]
+
+
+def reading_labels(row: Mapping[str, object]) -> list[str]:
+    """One distinct label per accepted reading (its label, else its id, else its position)."""
+    labels: list[str] = []
+    for index, reading in enumerate(accepted_readings(row)):
+        label = str(reading.get("label") or reading.get("reading_id") or f"reading {index + 1}")
+        labels.append(f"{label} ({index + 1})" if label in labels else label)
+    return labels
+
+
+def row_gold(row: Mapping[str, object]) -> list:
+    """The gold a prediction is scored against: the row's ``gold_triples`` plus every accepted reading's.
+
+    AmbigQA (Min et al., 2020) scores a prediction, a set of (interpretation, answer) pairs, with F1
+    against all interpretations of the question; the union is that set here. In labelling's export the
+    row's own ``gold_triples`` are the triples reviewed without an interpretation (empty for an ambiguous
+    question) and each reading carries only the triples reviewed under it, so the union counts nothing
+    twice. A triple in several of them (same canonical key) is one gold fact: the scorer merges the copies,
+    vital if any copy is vital, their variants pooled.
+    """
+    return [*(row.get("gold_triples") or []),
+            *(item for reading in accepted_readings(row) for item in reading["gold_triples"] or [])]
+
+
+def _readings_recall(
+    triples: list, row: Mapping[str, object], *, question_id: str | None,
+    relations: PredicateRelations, judge: Judge | None,
+) -> dict[str, float]:
+    """Soft recall of a prediction against each accepted reading's own gold, by reading label."""
+    recall: dict[str, float] = {}
+    for label, reading in zip(reading_labels(row), accepted_readings(row), strict=True):
+        levels = score_levels(triples, reading["gold_triples"],
+                              key=lambda item: canonical_triple_key(item, question_id),
+                              relations=relations, judge=judge)
+        recall[label] = float(levels["levels"]["soft"]["recall"])
+    return recall
+
+
+def _readings_summary(recall: dict[str, float], row: Mapping[str, object]) -> dict:
+    readings = accepted_readings(row)
+    return {"levels_gold": "readings_union" if readings else "row",
+            "readings_recall": recall,
+            "readings_covered": sum(value > 0 for value in recall.values()) if readings else None,
+            "readings_accepted": len(readings)}
 
 
 def evaluate_gold_row(
     run: Run, row: Mapping[str, object], *, relations: PredicateRelations | None = None,
     judge: Judge | None = None, question_id: str | None = None,
 ) -> dict:
-    """Evaluate a run against one gold row, using everything the row carries.
+    """Evaluate one run against one gold row, using everything the row carries.
 
-    Reviewer-rejected triples (``forbidden_alternatives``) feed judged precision. For an ambiguous
-    question, ``accepted_readings`` may give one gold set per accepted reading: the run is scored
-    against the row's own gold and against each reading's gold, and the best soft F1 is kept (the
-    AmbigQA/ASQA convention). ``accepted_reading`` names the reading credited (None = the row's own
-    gold). The original exact metric (``chosen``) always refers to the row's own gold.
+    Reviewer-rejected triples (``forbidden_alternatives``) feed judged precision. For an ambiguous question
+    the gold is the union of the accepted readings' gold (``row_gold``; ``levels_gold`` = "readings_union"),
+    scored once, AmbigQA set F1: a run triple is correct if it matches any reading's gold, and recall is over
+    all readings, so a run that answers one of two equally large readings gets recall of about 1/2. The
+    exact metric (``chosen``) uses the same union. ``readings_recall`` gives the chosen reading's soft recall
+    against each reading's own gold, ``readings_covered`` how many readings it recovers anything of. A run
+    researches one reading; the runs of one attempt are scored together by ``evaluate_attempt``.
     """
     relations = relations if relations is not None else load_relations()
-    rejected = list(row.get("forbidden_alternatives") or [])
-    base = evaluate_run(run, row.get("gold_triples") or [], row.get("gold_claims"), question_id=question_id,
-                        relations=relations, judge=judge, rejected=rejected)
-    base["accepted_reading"] = None
-    base["levels_gold"] = "row"            # which gold the levels used; ``chosen`` always uses the row's
-    readings = [item for item in row.get("accepted_readings") or [] if item.get("gold_triples")]
-    if not readings:
-        return base
+    question_id = _question_id(run.question, question_id)
+    result = evaluate_run(run, row_gold(row), row.get("gold_claims"), question_id=question_id,
+                          relations=relations, judge=judge,
+                          rejected=list(row.get("forbidden_alternatives") or []))
+    chosen = run.chosen_reading
+    triples = list(run.readings[chosen].triples) if chosen is not None and chosen < len(run.readings) else []
+    recall = _readings_recall(triples, row, question_id=question_id, relations=relations,
+                              judge=judge if triples else None) if accepted_readings(row) else {}
+    result.update(_readings_summary(recall, row))
+    return result
 
-    def soft_f1(result: dict) -> float:
-        levels = result.get("chosen_levels") or {}
-        return float(levels.get("levels", {}).get("soft", {}).get("f1", 0.0))
 
-    best_score, best_index, best = soft_f1(base), None, base
-    for index, reading in enumerate(readings):
-        result = evaluate_run(run, reading["gold_triples"], None, question_id=question_id,
-                              relations=relations, judge=judge, rejected=rejected)
-        if soft_f1(result) > best_score:
-            best_score, best_index, best = soft_f1(result), index, result
-    if best_index is None:
-        return base
-    base["chosen_levels"] = best["chosen_levels"]
-    for mine, theirs in zip(base["readings"], best["readings"], strict=True):
-        mine["levels"] = theirs["levels"]
-    base["levels_gold"] = "accepted_reading"
-    base["accepted_reading"] = {"index": best_index, "label": readings[best_index].get("label"),
-                                "measure": readings[best_index].get("measure"), "gold": best["gold"]}
-    return base
+def _reading_label(run: Run) -> str:
+    if run.concept is not None:
+        return run.concept.label
+    chosen = run.chosen_reading
+    return run.readings[chosen].label if chosen is not None and chosen < len(run.readings) else run.id
+
+
+def evaluate_attempt(
+    runs: Iterable[Run], row: Mapping[str, object], *, relations: PredicateRelations | None = None,
+    judge: Judge | None = None, question_id: str | None = None,
+) -> dict:
+    """Score one attempt, the runs sharing an attempt id (``Run.attempt_id``; a run without one is an
+    attempt of its own), as ONE prediction against one gold row.
+
+    The prediction is the union of the chosen-reading triples of the attempt's eligible runs (answered,
+    not degraded, produced by their own path); a failed reading run adds nothing, so it lowers recall. A
+    reading researched twice in one attempt (a resumed batch) counts once: its latest eligible run.
+    The prediction is scored like one run (``evaluate_gold_row``): set F1 against ``row_gold``, plus the
+    per-reading recall. An attempt without an eligible run is not ``eligible_for_path_score`` (the
+    benchmark scores it as an empty prediction).
+    """
+    runs = list(runs)
+    if not runs:
+        raise ValueError("an attempt needs at least one run")
+    relations = relations if relations is not None else load_relations()
+    question_id = _question_id(runs[0].question, question_id)
+    latest: dict[str, Run] = {}
+    for run in sorted((run for run in runs if eligible_for_path_score(run)), key=lambda run: run.started_at):
+        latest[_reading_label(run)] = run
+    used = list(latest.values())
+    readings = [run.readings[run.chosen_reading] for run in used if run.chosen_reading is not None]
+    triples = [item for reading in readings for item in reading.triples]
+    claims = list({claim.id: claim for reading in readings for claim in reading.claims}.values())
+    gold = row_gold(row)
+    claim_gold = row.get("gold_claims")
+    key = lambda item: canonical_triple_key(item, question_id)
+    recall = _readings_recall(triples, row, question_id=question_id, relations=relations,
+                              judge=judge if triples else None) if accepted_readings(row) else {}
+    return {
+        "run_ids": [run.id for run in runs],
+        "scored_runs": [run.id for run in used],
+        "eligible_for_path_score": bool(used),
+        "gold": len({key(item) for item in gold}),
+        "chosen": score_triples(triples, gold, question_id=question_id).as_dict(),
+        "claim": score_claims(claims, claim_gold)["claim"] if claim_gold is not None else None,
+        "chosen_levels": score_levels(triples, gold, key=key, relations=relations,
+                                      judge=judge if used else None,
+                                      rejected=list(row.get("forbidden_alternatives") or [])),
+        **_readings_summary(recall, row),
+    }
 
 
 __all__ = [
-    "LEVELS", "Judge", "LevelScore", "PredicateRelations", "TripleScore", "canonical_triple_key",
-    "evaluate_gold_row", "evaluate_run", "load_relations", "score_claims", "score_levels", "score_triples",
+    "LEVELS", "Judge", "LevelScore", "PredicateRelations", "TripleScore", "accepted_readings",
+    "canonical_triple_key", "eligible_for_path_score", "evaluate_attempt", "evaluate_gold_row", "evaluate_run",
+    "load_relations", "reading_labels", "row_gold", "score_claims", "score_levels", "score_triples",
 ]

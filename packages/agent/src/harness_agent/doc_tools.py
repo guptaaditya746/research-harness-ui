@@ -24,14 +24,16 @@ _SPECS: dict[str, tuple[str, dict[str, Any]]] = {
         ("What the evidence document holds: how many triples, its interpretations, its relations and its "
          "papers with their triple counts. Call it first."), {"type": "object", "properties": {}}),
     "doc_search": (
-        "Rank the document's triples by the words of a query (subject, relation, object and passage text).",
+        ("Rank the document's triples by the words of a query (subject, relation, object and passage text), "
+         "a page at a time: the result gives the total matches and the next_offset of the next page."),
         {"type": "object", "properties": {
             "query": {"type": "string", "description": "Words to look for."},
-            "limit": {"type": "integer", "description": "How many triples (default: one page)."}},
+            "offset": {"type": "integer", "description": "Rank to start from (default 0; use next_offset)."},
+            "limit": {"type": "integer", "description": "How many triples (default: one page; at most four)."}},
          "required": ["query"]}),
     "doc_triples": (
         ("List the document's triples, optionally only one relation, subject, paper or interpretation, a "
-         "page at a time."),
+         "page at a time: the result gives the total matches and the next_offset of the next page."),
         {"type": "object", "properties": {
             "predicate": {"type": "string"}, "subject": {"type": "string"}, "paper_id": {"type": "string"},
             "interpretation": {"type": "string", "description": "An interpretation id from doc_overview."},
@@ -80,11 +82,29 @@ class EvidenceDocSession:
             return {"error": f"unknown tool {name}; the tools are {', '.join(DOC_TOOLS)}"}
         return handler(**{key: value for key, value in arguments.items() if not key.startswith("_")})
 
-    def _limit(self, value: object) -> int:
+    def _page(self, rows: list[Any], offset: object, limit: object) -> dict[str, Any]:
+        """One page of ``rows`` with where it stands: total, offset, "showing a–b of N", next_offset.
+
+        A page holds at most four default pages (``HARNESS_EVIDENCE_DOC_PAGE`` × 4); a larger
+        ``limit`` is cut to that and the result says so (``limit_capped_to``)."""
         try:
-            return max(1, min(int(value), self.page * 4))
+            size = max(1, int(limit)) if limit is not None else self.page
         except (TypeError, ValueError):
-            return self.page
+            size = self.page
+        capped = min(size, self.page * 4)
+        try:
+            start = max(0, int(offset or 0))
+        except (TypeError, ValueError):
+            start = 0
+        page = rows[start:start + capped]
+        end = start + len(page)
+        return {
+            "total": len(rows), "offset": start, "returned": len(page),
+            "showing": f"{start + 1}–{end} of {len(rows)}" if page else f"none of {len(rows)} at offset {start}",
+            "items": [_row(t) for t in page],
+            **({"next_offset": end} if end < len(rows) else {}),
+            **({"limit_capped_to": capped} if capped < size else {}),
+        }
 
     def _doc_overview(self) -> dict[str, Any]:
         triples = self.doc.triples
@@ -98,13 +118,12 @@ class EvidenceDocSession:
             "page_size": self.page,
         }
 
-    def _doc_search(self, query: str = "", limit: object = None) -> dict[str, Any]:
+    def _doc_search(self, query: str = "", offset: object = 0, limit: object = None) -> dict[str, Any]:
         wanted = set(_words(query))
         scored = [(sum(self._idf.get(word, 0.0) for word in wanted & set(words)), index)
                   for index, words in enumerate(self._text)]
         ranked = [index for score, index in sorted(scored, key=lambda item: (-item[0], item[1])) if score > 0]
-        items = [_row(self.doc.triples[index]) for index in ranked[: self._limit(limit)]]
-        return {"total": len(ranked), "items": items}
+        return self._page([self.doc.triples[index] for index in ranked], offset, limit)
 
     def _doc_triples(self, predicate: str = "", subject: str = "", paper_id: str = "", interpretation: str = "",
                      offset: object = 0, limit: object = None) -> dict[str, Any]:
@@ -113,13 +132,7 @@ class EvidenceDocSession:
                   and (not subject or subject.casefold() in t.s.casefold())
                   and (not paper_id or (t.paper_id or "") == paper_id)
                   and (not interpretation or t.reading == interpretation)]
-        try:
-            start = max(0, int(offset or 0))
-        except (TypeError, ValueError):
-            start = 0
-        page = chosen[start:start + self._limit(limit)]
-        return {"total": len(chosen), "offset": start, "items": [_row(t) for t in page],
-                **({"next_offset": start + len(page)} if start + len(page) < len(chosen) else {})}
+        return self._page(chosen, offset, limit)
 
     def _doc_read(self, triple_ids: object = None) -> dict[str, Any]:
         ids = [str(item) for item in triple_ids] if isinstance(triple_ids, list) else [str(triple_ids or "")]

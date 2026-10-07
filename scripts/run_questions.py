@@ -8,9 +8,13 @@
     make run-questions ARGS="--resume results/run_questions-<time>.jsonl"   # skip what already answered
 
 Needs the API (`make demo` or `make dev`) and the models. For Agentic, each question first gets a
-proposal run (the readings you would see in the UI); then one research run is started per reading,
-exactly as picking it in the UI would. Results are appended to results/run_questions-<time>.jsonl as
-they finish, so an interrupted batch keeps its progress. Afterwards: make graph-shape ARGS="-n 200".
+proposal run (the readings you would see in the UI: one for an unambiguous question, several for an
+ambiguous one); then one research run is started per reading, as picking it in the UI would. The
+reading runs of one question form ONE attempt: they carry the proposal's id as ``attempt_id``, and the
+benchmark unions their chosen readings into one prediction scored against all accepted readings
+(AmbigQA set F1); they are never averaged as repetitions. Results are appended to
+results/run_questions-<time>.jsonl as they finish, so an interrupted batch keeps its progress (a
+resumed reading joins the same attempt). Afterwards: make graph-shape ARGS="-n 200".
 """
 
 from __future__ import annotations
@@ -154,10 +158,10 @@ def main(
                     continue
                 try:
                     child = start(client, {"question": row["question"], "path": path, "budget": budget,
-                                           "concept": concept, "parent_run_id": first})
+                                           "concept": concept, "parent_run_id": first, "attempt_id": first})
                     result = wait(client, child, timeout)
                     record({**base, "reading": label, "reading_index": index, "readings": len(concepts),
-                            "proposal_id": first, "run_id": child, **summary(result)})
+                            "proposal_id": first, "attempt_id": first, "run_id": child, **summary(result)})
                 except (httpx.HTTPError, TimeoutError) as exc:
                     record({**base, "reading": label, "reading_index": index, "proposal_id": first,
                             "run_id": None, "status": "error", "reason": str(exc)[:300]})

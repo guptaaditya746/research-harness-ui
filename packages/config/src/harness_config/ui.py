@@ -34,7 +34,7 @@ CATALOG: tuple[tuple[str, str, str, str], ...] = (
     ("Models", "model_agent", "Agent model", "The agent's tool loop."),
     ("Models", "model_high", "High model", "Concept readings and schema inference."),
     ("Models", "model_judge", "Judge / reviewer model", "Evidence review, answer verification, soft-match judge."),
-    ("Models", "model_rerank", "Reranker", "A served reranker alias; empty = fused order only."),
+    ("Models", "model_rerank", "Reranker", "A served reranker alias, used in both retrieval modes; empty = fused order only."),
     ("Models", "max_output_tokens", "Max output tokens", "Per model reply."),
     ("Models", "model_context_tokens", "Context window, tokens",
      "Prompt + reply of the served models; large answers are split into calls that fit (per alias: HARNESS_MODEL_OPTIONS)."),
@@ -76,8 +76,10 @@ CATALOG: tuple[tuple[str, str, str, str], ...] = (
     ("Agent", "agent_summary_compaction", "Summarise older turns", "Compact the conversation when it grows."),
     ("Agent", "agent_reflections", "Decision corrections", "Times a rejected decision is sent back."),
     ("Agent", "agent_first_tool_choice", "First turn", "required = the first reply must call a tool."),
-    ("Agent", "readings_min", "Readings at least", "Concept readings the agent proposes."),
-    ("Agent", "readings_max", "Readings at most", "Concept readings the agent proposes."),
+    ("Agent", "readings_min", "Readings at least",
+     "Concept readings the agent proposes; 1 lets an unambiguous question get a single reading."),
+    ("Agent", "readings_max", "Readings at most",
+     "Concept readings for an ambiguous question; must not be below 'Readings at least'."),
     ("Agent", "hide_ungrounded_readings", "Hide ungrounded readings", "Readings without a supporting passage."),
 )
 # Read outside the Settings class (see Settings.run_deadline_seconds), with their built-in defaults.

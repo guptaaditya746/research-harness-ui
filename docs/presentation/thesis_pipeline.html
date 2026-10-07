@@ -98,7 +98,7 @@
        people: true   -> people badge (human work)
        current: true  -> highlighted as "currently working here"
        sources: [...] -> keys of SOURCES whose idea this stage uses (chips under the box)
-       ours: "text"   -> an "ours" chip: what in this stage is our own contribution
+       ours: "text"   -> an "ours" chip: what in this stage is our own contribution (oursTitle: its longer tooltip)
      Stages of one lane are joined left to right automatically (sorted by col).
    - LINKS: extra arrows between lanes: [from id, to id, label].
    - LLM_ICON_SRC: a data:image/... URI of the Qwen logo, to replace the generic LLM icon.
@@ -117,7 +117,7 @@ const SOURCES = {
   rrf:      { short: "RRF",             kind: "paper", cite: "Cormack, Clarke & Büttcher. Reciprocal Rank Fusion. SIGIR 2009 (hybrid BM25 + dense ranking)" },
   dblp:     { short: "DBLP",            kind: "tool",  cite: "DBLP knowledge graph and RDF schema (papers, authors, venues, citations)" },
   cskg:     { short: "CS-KG 2.0",       kind: "tool",  cite: "CS-KG 2.0 ontology of computer-science entities and relations (KMi, The Open University)" },
-  ambigqa:  { short: "AmbigQA",         kind: "paper", cite: "Min et al. AmbigQA: Answering Ambiguous Open-domain Questions. EMNLP 2020 (one answer per interpretation)" },
+  ambigqa:  { short: "AmbigQA",         kind: "paper", cite: "Min et al. AmbigQA: Answering Ambiguous Open-domain Questions. EMNLP 2020 (decide whether a question is ambiguous; answers are a set of (interpretation, answer) pairs scored by F1 against all interpretations). Here AmbigQA-style: one grounded reading per interpretation, scored as a set" },
   edc:      { short: "EDC",             kind: "paper", cite: "Zhang & Soh. Extract, Define, Canonicalize: An LLM-based Framework for Knowledge Graph Construction. EMNLP 2024" },
   mcp:      { short: "MCP",             kind: "tool",  cite: "Model Context Protocol (Anthropic, 2024): how the agent calls corpus tools" },
   sweagent: { short: "mini-SWE-agent",  kind: "paper", cite: "Yang et al. SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering. NeurIPS 2024 (mini-SWE-agent is its minimal version)" },
@@ -149,7 +149,7 @@ const STAGES = [
   { id: "index",   lane: "corpus",  col: 2, name: "Index",           desc: "BM25 + dense",          llm: false, sources: ["bm25", "rrf"] },
   { id: "onto",    lane: "corpus",  col: 3, name: "Ontology",        desc: "DBLP + CS-KG",          llm: false, sources: ["dblp", "cskg"] },
   // Research harness (one run)
-  { id: "question",lane: "harness", col: 0, name: "Question",        desc: "+ readings",            llm: true,  sources: ["ambigqa"], ours: "grounded readings" },
+  { id: "question",lane: "harness", col: 0, name: "Question",        desc: "+ readings",            llm: true,  sources: ["ambigqa"], ours: "one reading per interpretation", oursTitle: "AmbigQA-style: one grounded reading per interpretation, scored as a set" },
   { id: "retrieve",lane: "harness", col: 1, name: "Retrieve",        desc: "search the corpus",     llm: false, sources: ["mcp"], ours: "agent research" },
   { id: "schema",  lane: "harness", col: 2, name: "Schema",          desc: "terms for the answer",  llm: true,  ours: "per-question schema" },
   { id: "edc",     lane: "harness", col: 3, name: "EDC",             desc: "extract · define · map",llm: true,  sources: ["edc"] },
@@ -197,7 +197,7 @@ function chipsOf(s) {
     if (!src) { console.warn("unknown source", key); return null; }
     return { kind: src.kind, text: src.short, title: src.cite, key };
   }).filter(Boolean);
-  if (s.ours) out.push({ kind: "ours", text: s.ours, title: `Our contribution: ${s.ours}` });
+  if (s.ours) out.push({ kind: "ours", text: s.ours, title: `Our contribution: ${s.oursTitle || s.ours}` });
   return out;
 }
 const stackHeight = n => n ? 8 + n * CHIP_H + (n - 1) * CHIP_GAP : 0;

@@ -315,6 +315,7 @@ class RunRuntime:
                         "evaluation_mode": request.evaluation_mode,
                         "snapshot": request.snapshot,
                         "parent_run_id": request.parent_run_id,
+                        "attempt_id": request.attempt_id or result["run"].attempt_id,
                         "run_input": run_input,
                         "settings": recorded_settings,
                         "trace": trace,
@@ -447,18 +448,23 @@ class RunRuntime:
         )
         concept = request.concept
         proposal: dict | None = None
+        attempt_id: str | None = None
         if concept is None:
             # One short planning call: it needs no research slot, so it never
             # waits behind another user's long-running research.
             proposal = runner.propose(question, request.budget, run_id)
-            if not request.evaluation_mode or proposal["run"].status != "awaiting_reading":
+            if (not request.evaluation_mode or proposal["run"].status != "awaiting_reading"
+                    or not proposal["run"].concepts):
                 return proposal
-            # Evaluation runs are unattended: research the agent's top-ranked
-            # grounded concept and record that it was selected automatically.
-            concept = proposal["run"].concepts[0].model_copy(update={"auto_selected": True})
+            # Evaluation runs are unattended and one attempt covers every proposed reading:
+            # this run researches the first one, each further reading gets its own run.
+            concept, attempt_id = self._evaluation_readings(request, run_id, proposal["run"])
             sink(
                 TraceRow(
-                    atS=0.0, action="Concept auto-selected for evaluation", returned=concept.label
+                    atS=0.0, action="Concept auto-selected for evaluation",
+                    returned=concept.label + (
+                        f" (+{len(proposal['run'].concepts) - 1} more readings, attempt {attempt_id})"
+                        if attempt_id else ""),
                 )
             )
         held = acquire(*run_slots(request.origin))
@@ -467,10 +473,30 @@ class RunRuntime:
         finally:
             for slot in held:
                 slot.release()
+        if attempt_id is not None:
+            result["run"] = result["run"].model_copy(update={"attempt_id": attempt_id})
         if proposal is not None:
             result["run"] = result["run"].model_copy(update={"concepts": proposal["run"].concepts})
             result["artifacts"]["plans.json"] = proposal["artifacts"]["plans.json"]
         return result
+
+    def _evaluation_readings(self, request: RunRequest, run_id: str, proposed: Run) -> tuple[ConceptChoice, str | None]:
+        """The readings an unattended evaluation attempt researches: all the proposal shows (AmbigQA scores one
+        answer per interpretation, as a set). Ungrounded readings are already hidden by the proposal
+        (HARNESS_HIDE_UNGROUNDED_READINGS). The proposal lists grounded readings first, otherwise in the model's
+        order (no ranking by evidence). This run researches the first; every further reading gets its own run,
+        started now, with this run as parent and its id as the shared attempt id; the benchmark unions the
+        attempt's chosen readings into one prediction. A single reading needs no attempt id (returns None)."""
+        concepts = [item.model_copy(update={"auto_selected": True}) for item in proposed.concepts]
+        if len(concepts) == 1:
+            return concepts[0], None
+        for concept in concepts[1:]:
+            self.start(RunRequest(
+                question=request.question, path=request.path, budget=request.budget, evaluation_mode=True,
+                snapshot=request.snapshot, concept=concept, parent_run_id=run_id, attempt_id=run_id,
+                origin=request.origin, deadline_seconds=request.deadline_seconds, run_input=request.run_input,
+            ))
+        return concepts[0], run_id
 
     # ─── Crash safety: a run that was active when the API stopped ──────────
 
@@ -536,6 +562,7 @@ class RunRuntime:
             trace=trace,
             concept=request.concept,
             parentRunId=request.parent_run_id,
+            attemptId=request.attempt_id,
             evaluationMode=request.evaluation_mode,
             snapshot=request.snapshot,
             runInput=request.run_input or "corpus",

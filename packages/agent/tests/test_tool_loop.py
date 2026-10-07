@@ -77,7 +77,7 @@ def final(decision: dict) -> dict:
     return {"role": "assistant", "content": json.dumps(decision)}
 
 
-def run_loop(monkeypatch, script: list[dict]) -> tuple[str, FakeSession, list[dict]]:
+def run_loop(monkeypatch, script: list[dict], window: str = "32000") -> tuple[str, FakeSession, list[dict]]:
     session = FakeSession()
 
     @asynccontextmanager
@@ -87,7 +87,7 @@ def run_loop(monkeypatch, script: list[dict]) -> tuple[str, FakeSession, list[di
     monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
     monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
     monkeypatch.setattr(tool_loop_module.httpx, "AsyncClient", ScriptedModelClient)
-    monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", "32000")
+    monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", window)
     ScriptedModelClient.script = list(script)
     ScriptedModelClient.sent = []
     records: list[dict] = []
@@ -288,8 +288,8 @@ def test_calls_to_tools_not_offered_are_refused_without_mcp(monkeypatch) -> None
     assert "budget" in refused[0]["error"]
 
 
-def _summary_run(monkeypatch, keep: str, calls: int) -> tuple[SummaryModel, list[dict]]:
-    _session_with(monkeypatch, ["search_evidence"], text="long passage " * 400)
+def _summary_run(monkeypatch, keep: str, calls: int, text: str = "long passage " * 400) -> tuple[SummaryModel, list[dict]]:
+    _session_with(monkeypatch, ["search_evidence"], text=text)
     monkeypatch.setenv("HARNESS_AGENT_CONTEXT_TOKENS", "6000")
     monkeypatch.setenv("HARNESS_AGENT_KEEP_RESULTS", keep)
     session = FakeSession()
@@ -312,7 +312,9 @@ def _summary_run(monkeypatch, keep: str, calls: int) -> tuple[SummaryModel, list
 
 
 def test_a_new_summary_merges_the_earlier_one(monkeypatch) -> None:
-    model, _ = _summary_run(monkeypatch, "0", 8)
+    # Results of ~2,000 characters: a 6,000-token window holds a few exchanges, so summaries recur
+    # (larger results, up to a quarter of the window each, are dropped by fitting before a second summary).
+    model, _ = _summary_run(monkeypatch, "0", 8, text="long passage " * 150)
     requests = getattr(model, "summary_requests", [])
     assert len(requests) >= 2
     assert requests[0]["earlier_summary"] is None
@@ -368,3 +370,109 @@ def test_the_scratchpad_alone_is_never_forced(monkeypatch) -> None:
     first = ScriptedModelClient.bodies[0]
     assert [tool["function"]["name"] for tool in first["tools"]] == ["record_finding"]
     assert first["tool_choice"] == "auto"
+
+
+def parallel_calls(*calls: tuple[str, dict]) -> dict:
+    return {"role": "assistant", "content": None, "tool_calls": [
+        {"id": f"par-{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}
+        for index, (name, arguments) in enumerate(calls)]}
+
+
+def test_the_tool_budget_is_a_hard_cap_per_call_even_for_parallel_calls(monkeypatch) -> None:
+    # Budget 3: one call, then five in parallel (four corpus calls and a finding) -> only two more run.
+    monkeypatch.setenv("HARNESS_AGENT_MAX_TOOL_CALLS", "3")
+    _session_with(monkeypatch, ["search_evidence"], text="a passage")
+    ScriptedModelClient.bodies = []
+    _, session, records = run_loop(monkeypatch, [
+        tool_call("search_evidence", {"query": "q0"}),
+        parallel_calls(*[("search_evidence", {"query": f"q{n}"}) for n in range(1, 5)],
+                       ("record_finding", {"statement": "p1-a matters.", "evidence_ids": ["p1-a"]})),
+        final({"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "ok"}),
+    ])
+    assert len(session.calls) == 3                                   # never more than the budget
+    corpus = [record for record in records if record["tool"] == "search_evidence"]
+    assert [record["status"] for record in corpus] == ["ok", "ok", "ok", "unavailable", "unavailable"]
+    assert corpus[3]["error"].startswith("unavailable: tool budget reached (3 corpus calls)")
+    finding = [record for record in records if record["tool"] == "record_finding"]
+    assert [record["status"] for record in finding] == ["ok"]        # the scratchpad stays available
+    third = ScriptedModelClient.bodies[2]
+    assert [tool["function"]["name"] for tool in third["tools"]] == ["record_finding"]
+    refused = [m for m in ScriptedModelClient.sent[2] if m.get("tool_call_id") in {"par-2", "par-3"}]
+    assert len(refused) == 2 and all("tool budget reached" in m["content"] for m in refused)
+
+
+def test_the_last_allowed_turn_offers_no_tools_and_asks_for_the_decision(monkeypatch) -> None:
+    # Budget 1 -> 1 + TURN_MARGIN turns; an agent that keeps recording findings is stopped there.
+    monkeypatch.setenv("HARNESS_AGENT_MAX_TOOL_CALLS", "1")
+    max_turns = 1 + tool_loop_module.TURN_MARGIN
+    decision = {"verified_claim_ids": [], "additional_evidence_ids": ["p4-intro"], "reasoning_summary": "ok"}
+    ScriptedModelClient.bodies = []
+    answer, _, records = run_loop(monkeypatch, [
+        tool_call("search_evidence", {"query": "VPP"}),
+        *[tool_call("record_finding", {"statement": f"note {n}", "evidence_ids": ["p4-intro"]}, f"call-{n}")
+          for n in range(max_turns - 2)],
+        final(decision),
+    ])
+    assert json.loads(answer) == decision
+    assert len(ScriptedModelClient.bodies) == max_turns
+    assert [r["status"] for r in records if r["tool"] == "record_finding"] == ["ok"] * (max_turns - 2)
+    last = ScriptedModelClient.bodies[-1]
+    assert "tools" not in last and "last turn" in last["messages"][-1]["content"]
+
+
+def test_tool_calls_on_the_last_turn_end_the_loop_like_the_deadline(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setenv("HARNESS_AGENT_MAX_TOOL_CALLS", "1")
+    max_turns = 1 + tool_loop_module.TURN_MARGIN
+    with pytest.raises(mcp_module.MCPUnavailable, match="turn limit"):
+        run_loop(monkeypatch, [
+            tool_call("search_evidence", {"query": "VPP"}),
+            *[tool_call("search_evidence", {"query": "VPP"}, f"call-{n}") for n in range(max_turns - 1)],
+        ])
+    assert ScriptedModelClient.script == []                          # exactly max_turns turns were sent
+
+
+def test_turn_limit_is_recorded_as_a_checkpoint(monkeypatch) -> None:
+    import pytest
+
+    monkeypatch.setenv("HARNESS_AGENT_MAX_TOOL_CALLS", "1")
+    max_turns = 1 + tool_loop_module.TURN_MARGIN
+    session = FakeSession()
+
+    @asynccontextmanager
+    async def fake_transport(*args, **kwargs):
+        yield (None, None, None)
+
+    monkeypatch.setattr(mcp_module, "streamablehttp_client", fake_transport)
+    monkeypatch.setattr(mcp_module, "ClientSession", lambda read, write: session)
+    monkeypatch.setattr(tool_loop_module.httpx, "AsyncClient", ScriptedModelClient)
+    ScriptedModelClient.script = [tool_call("search_evidence", {"query": "VPP"}, f"call-{n}") for n in range(max_turns)]
+    records: list[dict] = []
+    model = SimpleNamespace(model="granite", base_url="http://model", api_key="k", timeout_s=30)
+    with pytest.raises(mcp_module.MCPUnavailable):
+        MCPToolClient(records.append).run_agent(model, "Which paper introduced VPP?", {"answer_source": "research"})
+    [stop] = [r for r in records if r["tool"] == "context_checkpoint" and r["arguments"].get("mode") == "turn_limit"]
+    assert stop["result"]["turns"] == max_turns and stop["result"]["corpus_calls"] == 1
+    assert len(session.calls) == 1                                   # the later calls were refused or cached
+
+
+def test_max_size_results_and_history_are_compacted_not_overflowed(monkeypatch) -> None:
+    # Window 12,000 tokens: usable limit (12,000 - 2,048) * 0.9 = 8,956; one result may take a quarter
+    # (2,239 tokens = 6,717 characters). Three such results per turn over several turns exceed the window.
+    from harness_agent.context import estimate_tokens
+
+    _session_with(monkeypatch, ["search_evidence"], text="long passage " * 4000)
+    monkeypatch.setenv("HARNESS_AGENT_SUMMARY_COMPACTION", "false")
+    ScriptedModelClient.bodies = []
+    script = [parallel_calls(*[("search_evidence", {"query": f"q{turn}-{n}"}) for n in range(3)]) for turn in range(4)]
+    _, session, records = run_loop(monkeypatch, [*script, final(
+        {"verified_claim_ids": [], "additional_evidence_ids": ["p1-a"], "reasoning_summary": "ok"})], window="12000")
+    limit = int((12_000 - 2_048) * 0.9)
+    first_results = [m for m in ScriptedModelClient.bodies[1]["messages"] if m["role"] == "tool"]
+    assert len(first_results) == 3
+    assert all(6_717 <= len(m["content"]) <= 6_717 + 100 and "truncated" in m["content"] for m in first_results)
+    for body in ScriptedModelClient.bodies:
+        assert estimate_tokens(body["messages"]) + estimate_tokens(body.get("tools", [])) <= limit
+    assert [r for r in records if r["tool"] == "context_checkpoint"]   # compaction ran
+    assert len(session.calls) == 12

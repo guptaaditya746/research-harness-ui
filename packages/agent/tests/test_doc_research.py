@@ -72,6 +72,23 @@ def test_doc_tools_search_page_and_read_only_the_document(tmp_path: Path) -> Non
     assert chosen_triples(doc, {"t00001", "p97-2"}) == {"t00001", "t00003"}
 
 
+def test_doc_search_and_doc_triples_page_with_offset_and_say_where_they_stand(tmp_path: Path) -> None:
+    _, doc = setup(tmp_path)
+    session = EvidenceDocSession(doc)
+    first = asyncio.run(session.call_tool("doc_search", {"query": "MethodX evaluated", "limit": 2}))
+    assert first["total"] == 3 and first["returned"] == 2 and first["next_offset"] == 2
+    assert first["showing"] == "1–2 of 3"
+    rest = asyncio.run(session.call_tool("doc_search", {"query": "MethodX evaluated", "offset": first["next_offset"]}))
+    assert rest["showing"] == "3–3 of 3" and "next_offset" not in rest
+    seen = [item["triple_id"] for item in first["items"] + rest["items"]]
+    assert sorted(seen) == ["t00001", "t00002", "t00003"]
+    # A limit above four pages is cut to four pages, and the result says so instead of silently.
+    capped = asyncio.run(session.call_tool("doc_triples", {"limit": 10_000}))
+    assert capped["limit_capped_to"] == session.page * 4 and capped["showing"] == "1–3 of 3"
+    beyond = asyncio.run(session.call_tool("doc_triples", {"offset": 9}))
+    assert beyond["items"] == [] and beyond["showing"] == "none of 3 at offset 9"
+
+
 def test_readings_are_the_documents_interpretations(tmp_path: Path) -> None:
     store, doc = setup(tmp_path, readings=2)
     baseline = Baseline20(store, ExtractionEngine(PickingModel(), hand_written_subschema()), refine=True)

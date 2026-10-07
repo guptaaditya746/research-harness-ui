@@ -15,7 +15,10 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-ID_KEYS = ("passage_id", "fact_id", "reference_id", "paper_id", "claim_id", "source_id")
+ID_KEYS = ("triple_id", "passage_id", "fact_id", "reference_id", "paper_id", "claim_id", "source_id")
+BRIEF_CHARS = 120       # the id and identifying fields of one digest line
+LIST_IDS_SHOWN = 5      # ids kept from each *_ids list of a row
+BRIEF_MAX_CHARS = 320   # one digest line with its id lists
 # Tools that answer for one paper at a time; a long run of these on different
 # papers is what aggregate_facts / metadata_table replace.
 PER_PAPER_TOOLS = {"structured_facts", "facts", "citations", "read_evidence", "evidence_for_claim"}
@@ -42,22 +45,44 @@ def _handles(value: Any) -> set[str]:
     return set()
 
 
+def _id_lists(item: dict[str, Any]) -> str:
+    """The row's ``*_ids`` lists, each cut to ``LIST_IDS_SHOWN`` ids with a "+k more" marker."""
+    parts = []
+    for key, value in item.items():
+        if not key.endswith("_ids") or not isinstance(value, list):
+            continue
+        ids = [str(entry) for entry in value if isinstance(entry, (str, int))]
+        if ids:
+            more = len(ids) - LIST_IDS_SHOWN
+            parts.append(f"{key}: {', '.join(ids[:LIST_IDS_SHOWN])}" + (f" +{more} more" if more > 0 else ""))
+    return " | ".join(parts)
+
+
 def _brief(item: Any) -> str:
-    """One short line per returned item: its id and the fields that identify it."""
+    """One bounded line per returned item: its id, the fields that identify it and its id lists.
+
+    A triple (the evidence document's tools) is named by its ``triple_id`` with the passage it comes
+    from (``source_id``); aggregate rows keep the first ids of each ``*_ids`` list.
+    """
     if not isinstance(item, dict):
         return str(item)[:100]
     handle_key = next((key for key in ID_KEYS if item.get(key) not in (None, "")), None)
     handle = str(item[handle_key]) if handle_key else None
+    shown = {handle_key}
+    if handle_key == "triple_id" and item.get("source_id") not in (None, ""):
+        handle = f"{handle} (source {item['source_id']})"
+        shown.add("source_id")
     if {"subject", "predicate", "object"} <= item.keys():
         body = f"{item['subject']} {item['predicate']} {item['object']}"
     else:
         body = " · ".join(
             str(value) for key, value in item.items()
-            if key != handle_key and not key.endswith("_ids") and isinstance(value, (str, int, float))
+            if key not in shown and not key.endswith("_ids") and isinstance(value, (str, int, float))
             and str(value).strip()
         )
-    line = f"{handle}: {body}" if handle else body
-    return line[:120]
+    line = (f"{handle}: {body}" if handle else body)[:BRIEF_CHARS]
+    lists = _id_lists(item)
+    return f"{line} | {lists}"[:BRIEF_MAX_CHARS] if lists else line
 
 
 def signature(tool: str, arguments: dict[str, Any] | None) -> str:

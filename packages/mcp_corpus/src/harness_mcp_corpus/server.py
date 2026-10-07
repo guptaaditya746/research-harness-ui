@@ -72,9 +72,10 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
         return corpus.abstracts(keys(paper_ids), offset, limit)
 
     @mcp.tool(
-        description="Exact lexical search: every term must appear in the passage (implicit AND). Supports "
-        '"quoted phrases", OR, NOT, NEAR/n and paper:/year:/section: fields. For natural-language '
-        "questions use search_evidence; for regular expressions use grep."
+        description="Exact word search: every term must appear in the passage as a whole word, ignoring case "
+        "(implicit AND). No stemming: graph does not find graphs or paragraph, so join variants with OR. "
+        'Supports "quoted phrases" (consecutive words), OR, NOT, NEAR/n and paper:/year:/section: fields. '
+        "For natural-language questions use search_evidence; for regular expressions use grep."
     )
     def search(dsl: str, scope: dict | None = None, offset: int = 0, limit: int = 10) -> dict:
         return corpus.search(dsl, norm_scope(scope), offset, limit)
@@ -187,9 +188,9 @@ def create_server(root: Path, host: str = "127.0.0.1", port: int = 8765) -> Fast
 
     @mcp.tool(description=(
         "Main evidence search. Write the question or topic in natural language; not every word has to "
-        "appear. Ranks passages by BM25 fused with dense embeddings (when the corpus has a dense index), "
-        "returning stable passage IDs, scores and coverage. Use search for exact boolean queries and grep "
-        "for regular expressions."
+        "appear. Ranks passages by BM25, fused with dense embeddings when hybrid retrieval is on, and "
+        "reordered by a reranker when one is configured (rerank_rank); returns stable passage IDs, fused "
+        "scores and coverage. Use search for exact boolean queries and grep for regular expressions."
     ))
     def search_evidence(query: str, scope: dict | None = None, limit: int = 20) -> dict:
         scope = norm_scope(scope)

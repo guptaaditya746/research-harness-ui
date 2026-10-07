@@ -41,7 +41,7 @@ export function Sidebar({ run, reading, onRate, onPromote }: { run: Run; reading
     <div><div className="section-title" style={{ marginBottom: 14 }}>Metrics</div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
         {[
-          ['Concept disagreement', reading?.metrics.disagreement == null ? 'n/a — single pass' : reading.metrics.disagreement.toFixed(2), '1 − mean pairwise Jaccard over 3 independent concept plans'],
+          ['Concept disagreement', reading?.metrics.disagreement == null ? 'n/a — not measured' : reading.metrics.disagreement.toFixed(2), 'not measured by the harness: there are no independent concept plans to compare'],
           ['Triple precision', metric(reading?.metrics.precision), 'returned triples that are correct against the gold set'],
           ['Triple recall', metric(reading?.metrics.recall), 'gold triples for this reading that were returned'],
         ].map(([label, value, note]) => <div key={label} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

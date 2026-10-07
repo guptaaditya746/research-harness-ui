@@ -57,7 +57,7 @@ def concept(label: str, term: str = "video prediction") -> dict:
             "search_terms": [term]}
 
 
-def test_agent_always_proposes_three_to_four_concepts_before_research() -> None:
+def test_agent_proposes_concept_readings_before_research() -> None:
     baseline = StubBaseline()
     baseline.corpus = SearchCorpus()
     model = ConceptModel([{"concepts": [
@@ -82,7 +82,8 @@ def test_agent_always_proposes_three_to_four_concepts_before_research() -> None:
     assert set(result["artifacts"]) == set(required_artifacts("agentic")) - {"run.json"}
 
 
-def test_too_few_concepts_retries_then_fails_visibly() -> None:
+def test_too_few_concepts_retries_then_fails_visibly(monkeypatch) -> None:
+    monkeypatch.setenv("READINGS_MIN", "2")
     model = ConceptModel([{"concepts": [concept("Only one")]}, {"concepts": []}])
     run = AgenticResearch(StubBaseline(), agent_model=model).run("Q?", "fast", "r-few")["run"]
     assert model.calls == 2

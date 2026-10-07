@@ -104,3 +104,33 @@ def test_reader_findings_join_the_hand_off(monkeypatch) -> None:
     assert [call["agent"] for call in calls if call["tool"] == "paper_reader"] == ["reader:p2", "reader:p1"]
     checks = {check.name: check for check in result["run"].checks}
     assert checks["paper readers"].status == "pass"
+
+
+def test_the_verifier_reads_cited_reader_passages_from_the_readers_records(monkeypatch) -> None:
+    monkeypatch.setattr(AgenticResearch, "_heavy_queue_depth", staticmethod(lambda: 0))
+    monkeypatch.setenv("HARNESS_SUBAGENT_READERS", "2")
+    from test_agentic import CONCEPT, StubBaseline, VerifierModel
+
+    class Baseline(StubBaseline):
+        def __init__(self):
+            self.seed_passage_ids = []
+            self.agent_findings = []
+            self.corpus = Corpus()
+
+    def run_agent(self, model, question, grounded_context):
+        self.sink({"call_id": "tool-001", "agent": "supervisor", "tool": "search_evidence",
+                   "arguments": {"query": "q"}, "status": "ok", "duration_ms": 1.0, "result_count": 1,
+                   "result": {"items": [{"passage_id": "p2-b", "text": "text of p2-b"}]}})
+        return json.dumps({"verified_claim_ids": [], "additional_evidence_ids": ["p2-b"], "reasoning_summary": "x"})
+
+    monkeypatch.setattr(MCPToolClient, "run_agent", run_agent)
+    baseline = Baseline()
+    verifier = VerifierModel({"supported_ids": ["p2-b", "p2-a", "p1-a"], "unsupported_ids": [], "notes": ""})
+    baseline.refinement_model = verifier
+    result = AgenticResearch(baseline, agent_model=ReaderModel()).run("Compare.", "slow", "r-read-v", concept=CONCEPT)
+    [request] = verifier.requests
+    # The readers' findings cite p2-a and p1-a: their passage texts come from the reader records.
+    assert request["cited_evidence"] == {"p2-b": "text of p2-b", "p2-a": "text of p2-a", "p1-a": "text of p1-a"}
+    assert request["evidence_not_found_in_session"] == []
+    checks = {check.name: check for check in result["run"].checks}
+    assert checks["independent verification"].status == "pass"

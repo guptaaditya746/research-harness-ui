@@ -10,7 +10,9 @@ are documented in the labelling repository: `docs/EVALUATION.md`. This README is
 
 - `__init__.py` — `canonical_triple_key`, `score_triples` (the original exact set metric),
   `score_claims`, `evaluate_run` (every reading; adds `levels`), `evaluate_gold_row` (a gold row
-  with rejected alternatives and accepted readings for ambiguous questions).
+  with rejected alternatives; an ambiguous question is scored AmbigQA-style, set F1 against the union of
+  its accepted readings, with per-reading recall), `evaluate_attempt` (the runs sharing an attempt id
+  scored as one prediction).
 - `matching.py` — `score_levels`: strict / entailed / soft precision and recall, one-to-one
   (SciPy weighted assignment), locally closed DBLP scoring, vital recall, judged precision,
   and the matched / missed / extra triples for the Interpretation window.

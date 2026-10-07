@@ -121,8 +121,9 @@ class AgenticResearch(DocResearch, ConceptProposalStep):
     ):
         """Run agentic research.
 
-        Without a chosen ``concept`` the agent first proposes 3-4 concept
-        readings and the run stops at ``awaiting_reading``. Research proceeds
+        Without a chosen ``concept`` the agent first proposes concept readings
+        (one for an unambiguous question, READINGS_MIN..READINGS_MAX) and the
+        run stops at ``awaiting_reading``. Research proceeds
         only once a concept has been chosen; the question itself is never
         rewritten, the concept travels alongside it as structured input.
         """
@@ -327,7 +328,8 @@ class AgenticResearch(DocResearch, ConceptProposalStep):
             self._tool_sink(session, {
                 "call_id": f"reader-{result.paper_id}", "agent": f"reader:{result.paper_id}",
                 "tool": "paper_reader", "arguments": {"paper_id": result.paper_id},
-                "result": {"passage_ids": result.passage_ids, "findings": result.findings},
+                "result": {"passage_ids": result.passage_ids, "findings": result.findings,
+                           "passages": result.passages},
                 "result_count": len(result.findings), "duration_ms": result.duration_ms,
                 "status": "error" if result.error else "ok", **({"error": result.error} if result.error else {}),
                 "purpose": "Read one paper's top passages in parallel and report findings.",
@@ -479,9 +481,11 @@ class AgenticResearch(DocResearch, ConceptProposalStep):
             ))
         elif verified or cited:
             # A second opinion from a fresh context: does the cited evidence
-            # actually support what the agent decided? Advisory, never a gate.
+            # actually support what the agent decided? Advisory, never a gate. Cited reader
+            # passages are looked up in the readers' records.
+            readers = [item for item in session.tool_calls if item["tool"] == "paper_reader"]
             session.independent, check = self._independent_verification(
-                session.question, decision, verified, cited, session.corpus_calls, base_run,
+                session.question, decision, verified, cited, [*session.corpus_calls, *readers], base_run,
             )
             session.agent_checks.append(check)
         self._apply_decision(session, verified, unknown_claims, cited, unobserved)
@@ -731,7 +735,8 @@ class AgenticResearch(DocResearch, ConceptProposalStep):
             "skills_loaded": [item["result"] for item in tool_calls if item["tool"] == "load_skill"],
         }
         artifacts["ledger.json"] = json.dumps(shared_ledger, indent=2).encode()
-        artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": 0.42 if ambiguous else None, "awaiting_reading": ambiguous}, indent=2).encode()
+        # Plan agreement is not measured (there are no independent concept plans to compare): always None.
+        artifacts["disagreement.json"] = json.dumps({"independent_plans": len(plans), "agreement": None, "awaiting_reading": ambiguous}, indent=2).encode()
         artifacts["readings.json"] = json.dumps([r.model_dump(by_alias=True) for r in run.readings], indent=2).encode()
         artifacts["verification.json"] = json.dumps(self._verification_record(session, run, decision),
                                                     indent=2).encode()

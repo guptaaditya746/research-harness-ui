@@ -3,11 +3,17 @@
 Retrieval roles:
 
 - ``grep``: exact regular expressions.
-- ``search``: exact lexical/boolean DSL (every term must appear; phrases, OR, NOT, NEAR/n, fields).
+- ``search``: exact boolean DSL over whole words (every term must appear as a word; phrases, OR, NOT,
+  NEAR/n, fields; see ``dsl.py``).
 - ``hybrid_rank``: ranked natural-language retrieval: BM25 over all passages in scope (no boolean
-  filter) fused with dense embeddings (reciprocal rank fusion) when ``index/dense`` exists, and an
-  optional reranker (``HARNESS_MODEL_RERANK``). The agent's ``search_evidence`` uses it.
+  filter) fused with dense embeddings (reciprocal rank fusion) when ``HARNESS_RETRIEVAL_MODE=hybrid``
+  and ``index/dense`` exists, then an optional reranker (``HARNESS_MODEL_RERANK``, in either mode).
+  The agent's ``search_evidence`` and the Fast/Adaptive retrieval step use it.
 - ``rank_evidence``: BM25 scores for a given set of passages.
+
+BM25 is bm25s' default variant (``method="lucene"``, k1 = 1.5, b = 0.75) over the tokens of
+``dsl.bm25_terms``: lowercase, ``\\b\\w\\w+\\b``, bm25s' English stopword list, no stemming. Changing
+any of these needs an index rebuild (``make ingest``).
 """
 
 from __future__ import annotations
@@ -30,6 +36,7 @@ from .dsl import (  # noqa: F401 - re-exported
     PATTERN_BUDGET_S,
     PATTERN_MAX_LENGTH,
     BoundedPattern,
+    bm25_terms,
     lex,
     matches,
 )
@@ -37,8 +44,18 @@ from .rows import UnknownIdentifier, in_scope, paged, read_jsonl
 from .store_tools import CorpusTools
 
 LOGGER = logging.getLogger(__name__)
-FUSION_DEPTH = 200     # candidates taken from each ranking before fusion
+# Candidates taken from each ranking before fusion. Cormack et al. (2009) fused runs of 1,000; cutting
+# a list costs nothing here (BM25 and dense already score every passage in scope). A call restricted to
+# given passage ids fuses all of them, so no candidate falls out below the depth.
+FUSION_DEPTH = 1000
 RERANK_DEPTH = 30      # fused candidates sent to the optional reranker
+
+
+def _term_counts(query: str, text: str) -> float:
+    """No-BM25-index fallback (small test corpora): occurrences of the query's BM25 tokens in the text,
+    tokenised the same way as BM25 (``bm25_terms``), so both fallbacks and the index agree on words."""
+    terms = set(bm25_terms(query))
+    return float(sum(token in terms for token in bm25_terms(text))) if terms else 0.0
 
 class CorpusStore(CorpusTools):
     def __init__(self, root: Path):
@@ -239,11 +256,8 @@ class CorpusStore(CorpusTools):
                 if doc["passage_id"] in allowed
             ]
         else:
-            terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 2]
-            rows = [
-                {**self.by_passage[passage_id], "score": float(sum(self.by_passage[passage_id]["text"].casefold().count(term) for term in terms))}
-                for passage_id in allowed
-            ]
+            rows = [{**self.by_passage[passage_id], "score": _term_counts(query, self.by_passage[passage_id]["text"])}
+                    for passage_id in allowed]
             rows.sort(key=lambda row: (-row["score"], row["passage_id"]))
         return paged(rows, offset, limit)
 
@@ -261,10 +275,8 @@ class CorpusStore(CorpusTools):
             return [(doc["passage_id"], float(score))
                     for doc, score in zip(ranked.documents[0], ranked.scores[0], strict=True)
                     if score > 0 and doc["passage_id"] in allowed]
-        # No BM25 index (small test corpora): count content words of four letters or more.
-        terms = [term for term in re.findall(r"[a-z0-9]+", query.casefold()) if len(term) > 3]
-        scored = [(pid, float(sum(self.by_passage[pid]["text"].casefold().count(t) for t in terms)))
-                  for pid in allowed]
+        # No BM25 index (small test corpora): the same term counts as ``rank_evidence``'s fallback.
+        scored = [(pid, _term_counts(query, self.by_passage[pid]["text"])) for pid in allowed]
         return sorted((row for row in scored if row[1] > 0), key=lambda row: (-row[1], row[0]))
 
     def embed_query(self, query: str) -> np.ndarray | None:
@@ -278,8 +290,14 @@ class CorpusStore(CorpusTools):
             return None
         return _cached_query_embedding(query, str(self.dense.meta.get("model") or settings().model_embedding))
 
-    def _rerank(self, query: str, ranked: list[str]) -> list[str] | None:
-        """Reorder the top fused candidates with a served reranker (LiteLLM ``/rerank``), if configured."""
+    def _rerank(self, query: str, ranked: list[str]) -> tuple[list[str], dict[str, float]] | None:
+        """Reorder the top fused candidates with a served reranker (LiteLLM ``/rerank``), if configured.
+
+        Returns the reranked head (at most ``RERANK_DEPTH`` passages; the caller keeps the rest in
+        fused order) and the reranker's relevance score per head passage (empty when the service
+        returns an order only). It runs whenever ``HARNESS_MODEL_RERANK`` is set, in lexical and
+        hybrid mode alike.
+        """
         model = settings().model_rerank.strip()
         if not model or not ranked:
             return None
@@ -294,16 +312,20 @@ class CorpusStore(CorpusTools):
             )
             response.raise_for_status()
             results = response.json()["results"]
-            if all("relevance_score" in item for item in results):
+            scored = bool(results) and all("relevance_score" in item for item in results)
+            if scored:
                 results = sorted(results, key=lambda item: -float(item["relevance_score"]))
             order = list(dict.fromkeys(head[int(item["index"])] for item in results))
+            relevance: dict[str, float] = {}
+            if scored:
+                for item in results:
+                    relevance.setdefault(head[int(item["index"])], float(item["relevance_score"]))
             if not order:
                 raise ValueError("empty rerank result")
         except (httpx.HTTPError, KeyError, ValueError, IndexError, TypeError) as exc:
             LOGGER.warning("Reranker %s unavailable (%s); keeping the fused order", model, exc)
             return None
-        placed = set(order)
-        return order + [pid for pid in ranked if pid not in placed]
+        return order, relevance
 
     def hybrid_rank(
         self, query: str, scope: dict | None = None, passage_ids: list[str] | None = None,
@@ -311,8 +333,15 @@ class CorpusStore(CorpusTools):
     ) -> dict:
         """Ranked retrieval for a natural-language query: BM25 ∪ dense, fused, optionally reranked.
 
-        Items are passages with ``score`` (fused), ``bm25_rank`` and ``dense_rank`` (None when that
-        ranking did not return the passage). ``retrieval`` says which rankings took part.
+        Items are passages in the final order with ``score`` (the fused RRF score), ``bm25_rank`` and
+        ``dense_rank`` (None when that ranking did not return the passage), and ``rerank_rank`` /
+        ``rerank_score`` (None unless the reranker placed the passage; ``rerank_score`` also None when
+        the service returns an order only). After a rerank the order follows ``rerank_rank`` (1, 2, ...)
+        for the head and the fused order below it, so ``score`` is then no longer monotone.
+        ``retrieval`` says which rankings took part (``bm25``, ``bm25+dense``, ``+rerank``; ``none``).
+
+        A query without any BM25 token (empty, stopwords or one-letter words only) returns nothing,
+        also in hybrid mode: its embedding would be the query instruction alone.
         """
         restrict = set(passage_ids) if passage_ids is not None else None
         allowed = {
@@ -322,25 +351,35 @@ class CorpusStore(CorpusTools):
             and (not (scope or {}).get("section_roles")
                  or any(role.casefold() in p["section_path"].casefold() for role in scope["section_roles"]))
         }
-        bm25 = [pid for pid, _ in self._bm25_order(query, allowed)[:FUSION_DEPTH]]
-        vector = self.embed_query(query) if allowed else None
+        if not allowed or not bm25_terms(query):
+            return {**paged([], offset, limit), "retrieval": "none", "passages_in_scope": len(allowed)}
+        depth = FUSION_DEPTH if restrict is None else max(FUSION_DEPTH, len(allowed))
+        bm25 = [pid for pid, _ in self._bm25_order(query, allowed)[:depth]]
+        vector = self.embed_query(query)
         dense: list[str] = []
         if vector is not None:
             try:
-                dense = [pid for pid, _ in self.dense.search(vector, allowed, FUSION_DEPTH)]
+                dense = [pid for pid, _ in self.dense.search(vector, allowed, depth)]
             except (ValueError, OSError) as exc:  # e.g. the embedding model changed dimension
                 LOGGER.warning("Dense search failed (%s); using BM25 only", exc)
         fused = rrf([ranking for ranking in (bm25, dense) if ranking])
         order = [pid for pid, _ in fused]
         reranked = self._rerank(query, order)
         method = "+".join(name for name, ranking in (("bm25", bm25), ("dense", dense)) if ranking) or "none"
+        relevance: dict[str, float] = {}
+        rerank_rank: dict[str, int] = {}
         if reranked is not None:
-            order, method = reranked, method + "+rerank"
+            head, relevance = reranked
+            rerank_rank = {pid: rank for rank, pid in enumerate(head, start=1)}
+            order = head + [pid for pid in order if pid not in rerank_rank]
+            method += "+rerank"
         scores = dict(fused)
         bm25_rank = {pid: rank for rank, pid in enumerate(bm25, start=1)}
         dense_rank = {pid: rank for rank, pid in enumerate(dense, start=1)}
         rows = [{**self.by_passage[pid], "score": round(scores.get(pid, 0.0), 6),
-                 "bm25_rank": bm25_rank.get(pid), "dense_rank": dense_rank.get(pid)} for pid in order]
+                 "bm25_rank": bm25_rank.get(pid), "dense_rank": dense_rank.get(pid),
+                 "rerank_rank": rerank_rank.get(pid),
+                 "rerank_score": round(relevance[pid], 6) if pid in relevance else None} for pid in order]
         return {**paged(rows, offset, limit), "retrieval": method, "passages_in_scope": len(allowed)}
 
     def reference_title(self, reference_id: str) -> str | None:

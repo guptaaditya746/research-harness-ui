@@ -1,5 +1,10 @@
 """Agent-proposed concept readings shown before every agentic research run.
 
+How many: ``READINGS_MIN``..``READINGS_MAX`` (default 1..4), used as given; the prompt asks for one
+reading when the question has one sensible interpretation and for several only when it is genuinely
+ambiguous (as AmbigQA first decides whether a question is ambiguous at all). A minimum above the
+maximum fails the proposal instead of being clamped.
+
 The question's top passages and keyphrases are retrieved first (``CorpusStore.hybrid_rank``),
 shown to the model with the question, and each reading cites the passages that support it. Each
 reading is then grounded by ranked retrieval: a passage supports it when it contains every content
@@ -8,7 +13,7 @@ cited it. A corpus without ranked retrieval (a plain test double) gets exact-phr
 
 ``HARNESS_HIDE_UNGROUNDED_READINGS`` (default true, ranked grounding only) drops readings without
 any supporting passage, unless none has support. Hiding runs after the minimum-count check, so
-fewer than three readings can be shown: better than readings the corpus cannot answer.
+fewer than ``READINGS_MIN`` readings can be shown: better than readings the corpus cannot answer.
 ``evidence_hits`` counts supporting passages among the top ``GROUNDING_DEPTH`` ranked ones plus the
 cited ones, not all matches in the corpus.
 """
@@ -23,8 +28,6 @@ from harness_config import settings
 from harness_extraction import model_purpose, using_prompt
 from harness_prompts import render
 
-MIN_CONCEPTS = 3
-MAX_CONCEPTS = 4
 EVIDENCE_SHOWN = 8          # passages shown to the model before it proposes readings
 KEYPHRASES_SHOWN = 12
 GROUNDING_DEPTH = 50        # ranked passages inspected per reading
@@ -39,6 +42,15 @@ STOP_WORDS = {
 
 class ConceptProposalError(RuntimeError):
     """The agent could not produce a valid set of concept readings."""
+
+
+def reading_bounds() -> tuple[int, int]:
+    """(READINGS_MIN, READINGS_MAX) as configured; a minimum above the maximum is an error, not clamped."""
+    config = settings()
+    if config.readings_min > config.readings_max:
+        raise ConceptProposalError(
+            f"READINGS_MIN ({config.readings_min}) is greater than READINGS_MAX ({config.readings_max})")
+    return config.readings_min, config.readings_max
 
 
 @dataclass
@@ -203,13 +215,12 @@ def propose_grounded(
     corpus: object | None = None,
     attempts: int = 2,
 ) -> ConceptProposal:
-    """Ask the model for 3-4 concept readings and ground them in the corpus (see module doc)."""
+    """Ask the model for ``READINGS_MIN``-``READINGS_MAX`` concept readings and ground them in the corpus
+    (see module doc)."""
     complete = getattr(model, "complete_json", None)
     if complete is None:
         raise ConceptProposalError("agent model cannot produce structured output")
-    config = settings()
-    minimum = max(MIN_CONCEPTS, config.readings_min)
-    maximum = min(MAX_CONCEPTS, max(config.readings_max, MIN_CONCEPTS))
+    minimum, maximum = reading_bounds()
     retrieve_first = hasattr(corpus, "hybrid_rank")
     evidence, phrases = gather_evidence(corpus, question) if retrieve_first else ([], [])
     shown = {row["passage_id"] for row in evidence}
@@ -241,7 +252,7 @@ def propose_grounded(
         concepts.sort(key=lambda item: item.evidence_hits == 0)
         hidden: list[str] = []
         # Hiding needs ranked grounding.
-        if retrieve_first and config.hide_ungrounded_readings and any(item.evidence_hits for item in concepts):
+        if retrieve_first and settings().hide_ungrounded_readings and any(item.evidence_hits for item in concepts):
             hidden = [item.label for item in concepts if not item.evidence_hits]
             concepts = [item for item in concepts if item.evidence_hits]
         return ConceptProposal(concepts[:maximum], evidence, phrases, hidden)
@@ -260,4 +271,4 @@ def propose_concepts(
 
 
 __all__ = ["Concept", "ConceptProposal", "ConceptProposalError", "gather_evidence", "propose_concepts",
-           "propose_grounded"]
+           "propose_grounded", "reading_bounds"]

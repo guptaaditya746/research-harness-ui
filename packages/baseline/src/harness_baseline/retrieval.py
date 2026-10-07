@@ -1,14 +1,23 @@
-"""Retrieval step: choose the passages a research run reads (BM25, seeds, coverage).
+"""Retrieval step: choose the passages a research run reads (BM25, dense, seeds, coverage).
 
 A mixin of ``Baseline20``: methods use the pipeline's state (``self``).
 
-``HARNESS_RETRIEVAL_MODE``:
+One code path for both values of ``HARNESS_RETRIEVAL_MODE``; the setting only decides, inside
+``CorpusStore.hybrid_rank``, whether the dense ranking takes part in the fusion (``lexical``: BM25
+alone, and reciprocal rank fusion of one list is that list's order; ``hybrid``: BM25 + dense when the
+corpus has a current dense index). So without a dense index both modes select the same passages.
 
-- ``lexical`` (default): boolean DSL candidates, then BM25 ranking with a relative threshold.
-- ``hybrid``: the same candidates plus the top of ``CorpusStore.hybrid_rank`` (BM25 without the
-  boolean filter, fused with dense embeddings when the corpus has a dense index), ranked by the
-  fused order and cut at ``retrieve_k``. Measure it against lexical on the gold set before
-  making it the default.
+1. Candidates: the boolean DSL rounds (question terms, enhanced word pairs, the reading's search
+   terms), the reading's grounding passages, reused claims' sources and agent seeds, and the top of
+   ``hybrid_rank`` for the ranking query over the scope (no boolean filter).
+2. Ranking: ``hybrid_rank`` restricted to the candidates, by the ranking query (the question without
+   the named papers' names); by the full question when that query has no BM25 match.
+3. Cut-off: the top ``max(retrieve_k, max_passages)`` of that ranking (Fast: ``retrieve_k``), with an
+   even share for each named paper when several are named, plus passages that mention limitations
+   from the next ranks when the plan asks for limitations. A fixed rank cut-off is the same rule for
+   BM25 and fused scores; a threshold on the score itself cannot be, because RRF scores depend only
+   on ranks, not on how well a passage matches.
+4. Selection: agent seeds are kept, then the Adaptive/Agentic budget (``_apply_budget``).
 """
 
 from __future__ import annotations
@@ -27,7 +36,7 @@ from .state import (
 )
 
 LIMITATION = re.compile(r"\blimitations?\b", re.IGNORECASE)
-RELATIVE_THRESHOLD = 0.70        # lexical mode keeps passages scoring at least this share of the best
+RANK_FIELDS = {"score", "bm25_rank", "dense_rank", "rerank_rank", "rerank_score"}
 
 
 class RetrievalStep:
@@ -46,8 +55,8 @@ class RetrievalStep:
         found, rounds = self._search_rounds(queries, mentioned)
         reused_claims = self._add_known_passages(found, concept, mentioned, question)
         focus = self._focus(question, concept, mentioned)
-        hybrid = settings().retrieval_mode == "hybrid"
-        methods = self._add_hybrid_candidates(found, rounds, focus, mentioned) if hybrid else "lexical+semantic-rank"
+        mode = settings().retrieval_mode
+        methods = self._add_ranked_candidates(found, rounds, focus, mentioned)
         if not found:
             raise NoEvidenceFound("No evidence was found in the indexed full text.", {
                 "coverage_complete": False, "queries": len(queries), "passages_inspected": 0,
@@ -56,8 +65,7 @@ class RetrievalStep:
             })
         rank_started = time.monotonic()
         limitations = plan.evidence_focus == "limitations"
-        rank = self._rank_hybrid if hybrid else self._rank_lexical
-        rows, ranked, focus = rank(found, focus, question, mentioned, limitations)
+        rows, ranked, focus, ranking_method = self._rank(found, focus, question, mentioned, limitations)
         rank_duration_ms = round((time.monotonic() - rank_started) * 1000, 1)
         self._keep_seeds(rows, found)
         rows, excluded_for_budget = self._apply_budget(rows, mentioned)
@@ -72,8 +80,8 @@ class RetrievalStep:
                    f"{len(rows)} passages from {paper_count} papers across {len(rounds)} rounds")
         self._check("retrieval", "pass", f"{len(rows)} passages from {paper_count} papers")
         return {"passages": rows, "retrieval": {
-            "queries": rounds, "stop_reason": "hybrid_top_k" if hybrid else "relative_bm25_relevance",
-            "retrieval_mode": "hybrid" if hybrid else "lexical",
+            "queries": rounds, "stop_reason": "ranked_top_k",
+            "retrieval_mode": mode,
             "mentioned_paper_ids": mentioned,
             "plan": plan.model_dump(),
             "reused_claim_ids": [claim.id for claim in reused_claims],
@@ -81,9 +89,10 @@ class RetrievalStep:
             "candidates": len(found), "selected": len(rows),
             "max_passages": self.max_passages,
             "excluded_for_budget": excluded_for_budget,
-            "relative_score_threshold": RELATIVE_THRESHOLD,
+            "rank_cutoff": self._rank_cutoff(),
+            "retrieval_methods": methods,
             "ranking": {
-                "query": focus, "candidate_ids": list(found),
+                "query": focus, "retrieval": ranking_method, "candidate_ids": list(found),
                 "passage_ids": [str(row["passage_id"]) for row in ranked],
                 "duration_ms": rank_duration_ms,
             },
@@ -159,9 +168,10 @@ class RetrievalStep:
                 focus = re.sub(rf"(?i)\b{re.escape(brand)}\b", " ", focus)
         return focus if re.search(r"[A-Za-z]{3,}", focus) else question
 
-    def _add_hybrid_candidates(self, found: dict[str, dict[str, Any]], rounds: list[dict[str, Any]],
+    def _add_ranked_candidates(self, found: dict[str, dict[str, Any]], rounds: list[dict[str, Any]],
                                focus: str, mentioned: list[str]) -> str:
-        """Natural-language candidates: no boolean filter, dense embeddings when indexed."""
+        """Natural-language candidates: the top of ``hybrid_rank`` over the scope, no boolean filter
+        (BM25 alone in lexical mode, BM25 + dense in hybrid mode with a dense index)."""
         query_started = time.monotonic()
         depth = max(self.retrieve_k, 3 * (self.max_passages or self.retrieve_k))
         scope = {"paper_ids": mentioned} if mentioned else None
@@ -170,63 +180,60 @@ class RetrievalStep:
         for row in extra["items"]:
             found.setdefault(str(row["passage_id"]), self.corpus.by_passage[str(row["passage_id"])])
         rounds.append({
-            "round": len(rounds) + 1, "query": f"hybrid: {focus}", "limit": depth,
+            "round": len(rounds) + 1, "query": f"ranked: {focus}", "limit": depth,
             "returned": len(extra["items"]), "new": len(found) - before,
             "passage_ids": [str(row["passage_id"]) for row in extra["items"]],
             "retrieval": extra["retrieval"],
             "duration_ms": round((time.monotonic() - query_started) * 1000, 1),
         })
-        return f"lexical+hybrid({extra['retrieval']})"
+        return f"dsl+ranked({extra['retrieval']})"
 
-    # ─── Ranking: (selected rows, full ranking, query used) ──────────────────
+    # ─── Ranking: (selected rows, full ranking, query used, rankings used) ───
 
-    def _rank_hybrid(self, found: dict[str, dict[str, Any]], focus: str, question: str,
-                     mentioned: list[str], limitations: bool) -> tuple[list[dict], list[dict], str]:
-        def rank(query: str) -> list[dict[str, Any]]:
-            return self.corpus.hybrid_rank(query, passage_ids=list(found), limit=max(1, len(found)))["items"]
+    def _rank_cutoff(self) -> int:
+        """Ranked passages a run keeps before seeds and budget: ``retrieve_k`` (Fast), or the budget
+        when it is larger, so ``_apply_budget`` always has at least ``max_passages`` to choose from."""
+        return max(self.retrieve_k, self.max_passages or 0)
 
-        ranked = rank(focus)
-        if focus != question and not ranked:
-            # As in lexical mode: removing the paper's own name left nothing that ranks.
+    def _rank(self, found: dict[str, dict[str, Any]], focus: str, question: str,
+              mentioned: list[str], limitations: bool) -> tuple[list[dict], list[dict], str, str]:
+        def rank(query: str) -> dict[str, Any]:
+            return self.corpus.hybrid_rank(query, passage_ids=list(found), limit=max(1, len(found)))
+
+        result = rank(focus)
+        if focus != question and not any(row.get("bm25_rank") for row in result["items"]):
+            # Removing the paper's own name left nothing that BM25 matches (e.g. the question was
+            # mostly the title): rank by the full question instead. The test reads BM25 only, so it
+            # fires in the same cases in both modes.
             focus = question
-            ranked = rank(focus)
-        top = ranked[: self.retrieve_k]
-        top_ids = {str(row["passage_id"]) for row in top}
+            result = rank(focus)
+        ranked = result["items"]
+        cutoff = self._rank_cutoff()
+        top = self._top_ranked(ranked, cutoff, mentioned)
         if limitations:
-            top += [row for row in ranked[self.retrieve_k: 2 * self.retrieve_k]
+            top_ids = {str(row["passage_id"]) for row in top}
+            top += [row for row in ranked[cutoff: 2 * cutoff]
                     if str(row["passage_id"]) not in top_ids and LIMITATION.search(row["text"])]
-        rows = [{key: value for key, value in row.items()
-                 if key not in {"score", "bm25_rank", "dense_rank"}} for row in top]
-        return rows, ranked, focus
+        rows = [{key: value for key, value in row.items() if key not in RANK_FIELDS} for row in top]
+        return rows, ranked, focus, str(result.get("retrieval", ""))
 
-    def _rank_lexical(self, found: dict[str, dict[str, Any]], focus: str, question: str,
-                      mentioned: list[str], limitations: bool) -> tuple[list[dict], list[dict], str]:
-        def rank(query: str) -> list[dict[str, Any]]:
-            return self.corpus.rank_evidence(query, passage_ids=list(found), limit=max(1, len(found)))["items"]
-
-        ranked = rank(focus)
-        if focus != question and not any(float(row["score"]) > 0 for row in ranked):
-            # Removing the paper's own name left nothing that scores (e.g. the
-            # question was mostly the title): rank by the full question instead.
-            focus = question
-            ranked = rank(focus)
-
-        def group(row: dict[str, Any]) -> str:
-            return str(row["paper_id"]) if mentioned else "all"
-
-        best: dict[str, float] = {}
+    @staticmethod
+    def _top_ranked(ranked: list[dict[str, Any]], cutoff: int, mentioned: list[str]) -> list[dict[str, Any]]:
+        """The first ``cutoff`` passages of the ranking, in rank order. A question that names several
+        papers reserves each of them ``cutoff // (2 * papers)`` of its best passages first (the share
+        ``_apply_budget`` gives them), so one paper's passages cannot fill the cut-off alone."""
+        named = list(dict.fromkeys(str(paper) for paper in mentioned))
+        chosen: set[str] = set()
+        if len(named) >= 2:
+            share = max(1, cutoff // (2 * len(named)))
+            for paper_id in named:
+                own = [row for row in ranked if str(row["paper_id"]) == paper_id][:share]
+                chosen.update(str(row["passage_id"]) for row in own)
         for row in ranked:
-            best[group(row)] = max(best.get(group(row), 0.0), float(row["score"]))
-        rows = [
-            {key: value for key, value in row.items() if key != "score"}
-            for row in ranked
-            if row["score"] > 0
-            and (row["score"] >= RELATIVE_THRESHOLD * best[group(row)]
-                 or limitations and LIMITATION.search(row["text"]))
-        ]
-        if not self.enhanced:
-            rows = rows[: self.retrieve_k]
-        return rows, ranked, focus
+            if len(chosen) >= cutoff:
+                break
+            chosen.add(str(row["passage_id"]))
+        return [row for row in ranked if str(row["passage_id"]) in chosen]
 
     # ─── Selection ───────────────────────────────────────────────────────────
 

@@ -6,7 +6,7 @@ import json
 
 from harness_extraction import ExtractionEngine, SchemaInference, relation_name
 from harness_prompts import render
-from harness_semantic import TOP_ATTRIBUTE, TOP_RELATION, hand_written_subschema
+from harness_semantic import TOP_ATTRIBUTE, TOP_CLASS, TOP_RELATION, hand_written_subschema
 from rdflib import RDFS
 
 PASSAGE = {"passage_id": "p99-exp-1", "paper_id": "p99",
@@ -60,19 +60,21 @@ def test_keep_turns_an_unmapped_relation_into_a_typed_sub_property(monkeypatch) 
     # Entity-to-entity relation: object property under researchRelation, with the define step's definition.
     assert graph.value(fine_tuned, RDFS.subPropertyOf) == TOP_RELATION
     assert "trained further" in str(graph.value(fine_tuned, RDFS.comment))
-    # A value about the paper: datatype property under researchAttribute, domain Paper.
+    # A value: datatype property under researchAttribute. Kept relations always get the generic domain
+    # (not Paper, even when the first subject is the paper), so later uses keep their own subjects.
     assert graph.value(reaches, RDFS.subPropertyOf) == TOP_ATTRIBUTE
-    assert str(graph.value(reaches, RDFS.domain)).endswith("#Paper")
+    assert graph.value(reaches, RDFS.domain) == TOP_CLASS
     assert all(stage["stage"] != "unmapped_dropped" for stage in stages)
     decisions = next(stage for stage in stages if stage["stage"] == "canonicalize")["decisions"]
     assert {row["method"] for row in decisions} == {"kept_new_relation"}
 
 
 def test_mapping_thresholds_are_settings(monkeypatch) -> None:
+    # "evaluated on" against evaluatesOn scores about 0.5 (an exact wording like "uses dataset" scores 1.0).
     monkeypatch.setenv("HARNESS_MAP_LEXICAL_MIN", "0.99")
-    assert ExtractionEngine._canonical_property("uses dataset", "", ["usesDataset"])[0] is None
+    assert ExtractionEngine._canonical_property("evaluated on", "", ["evaluatesOn"])[0] is None
     monkeypatch.setenv("HARNESS_MAP_LEXICAL_MIN", "0.2")
-    assert ExtractionEngine._canonical_property("uses dataset", "", ["usesDataset"])[0] == "usesDataset"
+    assert ExtractionEngine._canonical_property("evaluated on", "", ["evaluatesOn"])[0] == "evaluatesOn"
 
 
 def test_values_and_names_get_the_right_range() -> None:

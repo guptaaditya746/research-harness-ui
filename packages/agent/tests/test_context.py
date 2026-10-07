@@ -59,9 +59,14 @@ def test_provider_length_errors_are_recognised() -> None:
     assert not is_context_error("Invalid tool schema")
 
 
-def test_tool_results_are_bounded() -> None:
+def test_tool_results_are_bounded_in_tokens_not_a_quarter_of_them() -> None:
+    # limit_tokens is a token budget: ~3 characters per token (the same unit as estimate_tokens).
     capped = cap_tool_result("y" * 100_000, limit_tokens=4000)
-    assert len(capped) < 4000 and "truncated" in capped
+    kept = capped.split(" … [result truncated")[0]
+    assert len(kept) == 12_000 and "truncated" in capped
+    assert 3_990 <= estimate_tokens(kept) <= 4_010
+    assert cap_tool_result("y" * 5_000, limit_tokens=4000) == "y" * 5_000
+    assert len(cap_tool_result("y" * 100_000, limit_tokens=100).split(" … ")[0]) == 2_000   # floor
     assert estimate_tokens("abc" * 100) == 101
 
 

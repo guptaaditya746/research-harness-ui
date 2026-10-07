@@ -89,7 +89,7 @@ from `question_matrix_20.json`: add it to `HARNESS_QUESTION_SETS` to list them, 
 | New ACL authors | Fast | *List the authors of FACT-AUDIT.* | answered from verified author facts and official 2025 ACL metadata |
 | New EMNLP authors | Fast | *List the authors of CondAmbigQA.* | answered from verified author facts and official 2025 EMNLP metadata |
 | Full-text research | Adaptive | *What improvement did Video Prediction Policy report on CALVIN ABC→D?* | 41.5 % result, cited to a passage, with the claim subgraph |
-| Agent concepts | Agentic | *Who is the best author in the corpus?* | the agent proposes 3–4 interpretations with corpus evidence counts; pick one |
+| Agent concepts | Agentic | *Who is the best author in the corpus?* | the agent proposes one interpretation per reading of the question (several here: it is ambiguous) with corpus evidence counts; pick one |
 | Agentic research | Agentic | *What limitation of learning on physical robots does the DayDreamer paper report?* | pick a concept → MCP tool calls in the trace → verified answer |
 | Side by side | Compare all | *Which paper introduced Video Prediction Policy?* | fast and adaptive finish; then you choose the agentic concept |
 

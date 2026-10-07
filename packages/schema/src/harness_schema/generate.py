@@ -141,7 +141,7 @@ def reading(label: str, gloss: str, op: str) -> Reading:
         sparql=prefix + query,
         answer=answer,
         triples=triples,
-        metrics=Metrics(disagreement=0.42, precision=precision, recall=recall),
+        metrics=Metrics(disagreement=None, precision=precision, recall=recall),
         status="answered",
         measure=measure,
         graph=fixture_graph(rows, measure),

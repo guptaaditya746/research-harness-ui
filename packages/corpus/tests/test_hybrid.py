@@ -193,3 +193,69 @@ def test_an_empty_rerank_result_keeps_the_fused_order_and_says_so(tmp_path, monk
 
     monkeypatch.setattr(store_module.httpx, "post", lambda *a, **k: Response())
     assert store.hybrid_rank("SafeRAG attack tasks silver noise", limit=2)["retrieval"] == "bm25"
+
+
+def test_a_query_without_bm25_tokens_returns_nothing_even_in_hybrid_mode(tmp_path, monkeypatch, hybrid) -> None:
+    store = _store(tmp_path, with_dense=True)
+    calls = []
+    monkeypatch.setattr(store_module, "embed_texts",
+                        lambda texts, **_: calls.append(texts) or np.asarray([[1.0, 0.0, 0.0]], dtype=np.float32))
+    for query in ("", "the of and", "a b c ?"):
+        ranked = store.hybrid_rank(query, limit=4)
+        assert ranked["items"] == [] and ranked["retrieval"] == "none", query
+    assert calls == []          # the instruction-only embedding is never requested
+    assert store.hybrid_rank("SafeRAG", limit=4)["retrieval"] == "bm25+dense"
+
+
+def _reranker(monkeypatch, results: list[dict]) -> None:
+    monkeypatch.setenv("HARNESS_MODEL_RERANK", "test-reranker")
+
+    class Response:
+        def raise_for_status(self) -> None: ...
+
+        def json(self) -> dict:
+            return {"results": results}
+
+    monkeypatch.setattr(store_module.httpx, "post", lambda *a, **k: Response())
+
+
+@pytest.mark.parametrize("mode", ["lexical", "hybrid"])
+def test_reranked_rows_carry_rerank_rank_and_score_next_to_the_fused_score(tmp_path, monkeypatch, mode) -> None:
+    monkeypatch.setenv("HARNESS_RETRIEVAL_MODE", mode)      # the reranker runs in either mode
+    store = _store(tmp_path, with_dense=False)
+    query = "SafeRAG attack tasks silver noise security"
+    fused = store.hybrid_rank(query, limit=4)["items"]
+    assert [row["rerank_rank"] for row in fused] == [None] * len(fused)
+    # The reranker puts the fused second passage first.
+    _reranker(monkeypatch, [{"index": 0, "relevance_score": 0.2}, {"index": 1, "relevance_score": 0.9}])
+    ranked = store.hybrid_rank(query, limit=4)
+    rows = ranked["items"]
+    assert ranked["retrieval"] == "bm25+rerank"
+    assert [row["passage_id"] for row in rows[:2]] == [fused[1]["passage_id"], fused[0]["passage_id"]]
+    assert [row["rerank_rank"] for row in rows[:2]] == [1, 2]
+    assert [row["rerank_score"] for row in rows[:2]] == [0.9, 0.2]
+    assert [row["score"] for row in rows[:2]] == [fused[1]["score"], fused[0]["score"]]   # fused score kept
+    assert all(row["rerank_rank"] is None for row in rows[2:])
+
+
+def test_an_order_only_reranker_leaves_rerank_score_empty(tmp_path, monkeypatch) -> None:
+    store = _store(tmp_path, with_dense=False)
+    _reranker(monkeypatch, [{"index": 1}, {"index": 0}])
+    rows = store.hybrid_rank("SafeRAG attack tasks silver noise", limit=2)["items"]
+    assert [row["rerank_rank"] for row in rows] == [1, 2]
+    assert [row["rerank_score"] for row in rows] == [None, None]
+
+
+def test_rrf_breaks_ties_by_best_single_rank_then_id() -> None:
+    # k = 0: "z" (rank 1 once) and "a" (rank 2 twice) both score 1.0; "z" reached rank 1, so it leads.
+    assert [item for item, _ in rrf([["z", "a"], ["b", "a"]], k=0)] == ["b", "z", "a"]
+    assert [item for item, _ in rrf([["c", "a", "b"]])] == ["c", "a", "b"]   # one list keeps its order
+
+
+def test_ranking_given_passages_fuses_all_of_them(tmp_path, monkeypatch) -> None:
+    store = _store(tmp_path, with_dense=False)
+    monkeypatch.setattr(store_module, "FUSION_DEPTH", 1)
+    query = "SafeRAG attack tasks"
+    assert len(store.hybrid_rank(query, limit=4)["items"]) == 1          # open search: cut at the depth
+    restricted = store.hybrid_rank(query, passage_ids=list(PASSAGES), limit=4)["items"]
+    assert {row["passage_id"] for row in restricted} == {"p1-a", "p1-b"}  # every candidate BM25 matches

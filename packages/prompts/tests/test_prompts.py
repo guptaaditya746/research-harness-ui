@@ -15,7 +15,7 @@ def _variables(name: str) -> dict:
 
     loaded = relevant(SUPERVISOR_QUESTION)
     return {
-        "agent/concept_proposal": {"minimum": 3, "maximum": 4},
+        "agent/concept_proposal": {"minimum": 1, "maximum": 4},
         "agent/research_supervisor": {
             "skills_catalog": catalog(),
             "loaded_skills": "; ".join(f"{s.name}@{s.version}: {s.instructions}" for s in loaded),
@@ -26,6 +26,7 @@ def _variables(name: str) -> dict:
         "agent/grounded_context": {"context_json": ""},
         "agent/evidence_doc_context": {"context_json": ""},
         "planning/query_plan": {"operations": {}},
+        "extraction/edc_map": {"min_confidence": 0.7},
     }.get(name, {})
 
 

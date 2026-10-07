@@ -1,4 +1,4 @@
-"""Concept proposal: the agent offers 3-4 readings of the question before research."""
+"""Concept proposal: the agent offers readings of the question before research (one unless it is ambiguous)."""
 
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ class ConceptProposalStep:
         return names or set(DEFAULT_CLASSES)
 
     def propose(self, question: str, budget: str, run_id: str) -> dict:
-        """Let the agent model propose 3-4 concept readings before research (with the evidence document as
+        """Let the agent model propose concept readings before research (with the evidence document as
         input: its interpretations, see doc_research.py)."""
         if getattr(self, "evidence_doc", None) is not None:
             return self._propose_from_doc(question, budget, run_id)

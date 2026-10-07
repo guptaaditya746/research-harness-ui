@@ -185,18 +185,21 @@ def test_cached_judge_calls_once_and_cache_only_mode_reports_pending(tmp_path) -
     assert parse_verdict({"same_fact": "no"}) is False and parse_verdict({}) is None
 
 
-def test_ambiguous_gold_uses_the_best_accepted_reading(relations) -> None:
+def test_ambiguous_gold_is_the_union_of_the_accepted_readings(relations) -> None:
+    """AmbigQA set F1 (more cases in test_readings.py): answering one of two readings recovers half."""
     reading = Reading(label="one", gloss="g", classes=[], axioms=[], sparql="", answer="a",
                       triples=[t("p1", "authoredBy", "Ada")], metrics=Metrics(), status="answered")
     run = Run(id="r", startedAt="2026-01-01T00:00:00Z", durationS=1, question="Who is the best author?",
               path="agentic", budget="fast", status="answered", readings=[reading], chosenReading=0)
-    row = {"gold_triples": [t("p1", "authoredBy", "Ada"), t("p2", "authoredBy", "Bo")],
+    row = {"gold_triples": [],
            "accepted_readings": [
                {"label": "most citations", "measure": "citations", "gold_triples": [t("p2", "authoredBy", "Bo")]},
                {"label": "most papers", "measure": "papers", "gold_triples": [t("p1", "authoredBy", "Ada")]}]}
     result = evaluate_gold_row(run, row, relations=relations)
-    assert result["accepted_reading"]["label"] == "most papers"
-    assert result["chosen_levels"]["levels"]["strict"]["f1"] == 1.0
+    strict = result["chosen_levels"]["levels"]["strict"]
+    assert (strict["precision"], strict["recall"]) == (1.0, 0.5)
+    assert result["readings_recall"] == {"most citations": 0.0, "most papers": 1.0}
+    assert result["levels_gold"] == "readings_union"
 
 
 def test_confidence_intervals() -> None:
@@ -304,7 +307,7 @@ def test_a_failing_judge_leaves_pairs_pending(tmp_path) -> None:
     assert CachedJudge(tmp_path / "cache.jsonl")(t("s", "q", "b"), t("s", "p", "a")) is None
 
 
-def test_ambiguous_row_keeps_its_own_gold_when_that_scores_best(relations) -> None:
+def test_an_ambiguous_row_s_own_gold_is_part_of_the_union(relations) -> None:
     reading = Reading(label="one", gloss="g", classes=[], axioms=[], sparql="", answer="a",
                       triples=[t("p1", "authoredBy", "Ada")], metrics=Metrics(), status="answered")
     run = Run(id="r", startedAt="2026-01-01T00:00:00Z", durationS=1, question="Who is the best author?",
@@ -312,8 +315,8 @@ def test_ambiguous_row_keeps_its_own_gold_when_that_scores_best(relations) -> No
     row = {"gold_triples": [t("p1", "authoredBy", "Ada")],
            "accepted_readings": [{"label": "other", "measure": "m", "gold_triples": [t("p2", "authoredBy", "Bo")]}]}
     result = evaluate_gold_row(run, row, relations=relations)
-    assert result["accepted_reading"] is None
-    assert result["chosen_levels"]["levels"]["strict"]["f1"] == result["chosen"]["f1"] == 1.0
+    assert result["chosen_levels"]["levels"]["strict"]["recall"] == result["chosen"]["recall"] == 0.5
+    assert (result["readings_recall"], result["readings_covered"]) == ({"other": 0.0}, 0)
 
 
 def test_the_content_core_credits_cskg_inverses_and_evaluates_on() -> None:

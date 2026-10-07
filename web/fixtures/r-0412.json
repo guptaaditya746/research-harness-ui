@@ -58,7 +58,7 @@
       "claimRelations": [],
       "answerClaimIds": [],
       "metrics": {
-        "disagreement": 0.42,
+        "disagreement": null,
         "precision": [
           2,
           3
@@ -339,7 +339,7 @@
       "claimRelations": [],
       "answerClaimIds": [],
       "metrics": {
-        "disagreement": 0.42,
+        "disagreement": null,
         "precision": [
           2,
           2
@@ -605,7 +605,7 @@
       "claimRelations": [],
       "answerClaimIds": [],
       "metrics": {
-        "disagreement": 0.42,
+        "disagreement": null,
         "precision": [
           2,
           2
@@ -886,7 +886,7 @@
       "claimRelations": [],
       "answerClaimIds": [],
       "metrics": {
-        "disagreement": 0.42,
+        "disagreement": null,
         "precision": [
           2,
           2
@@ -1154,6 +1154,7 @@
   "concept": null,
   "concepts": [],
   "parentRunId": null,
+  "attemptId": null,
   "checks": [
     {
       "name": "question understanding",

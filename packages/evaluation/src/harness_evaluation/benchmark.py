@@ -6,10 +6,17 @@ the path match, the run read the chosen input (``run_input``: "corpus", or
 "evidence_doc" when the evidence document D was its input; the two are never
 mixed) and, when the row has a snapshot, the run's evaluation snapshot is
 identical (same corpus, ontology, claim schema and index versions).
-Repetitions are averaged per question first; intervals are over questions.
 
-Every attempt counts. A repetition that ended without a scorable answer (incomplete,
-no evidence, corpus absent, degraded, or produced by another path) is scored as an
+The scored unit is an **attempt**: the runs sharing ``Run.attempt_id`` (an Agentic attempt researches
+each proposed reading of an ambiguous question in its own run) form one prediction, the union of their
+chosen readings' triples, scored with AmbigQA set F1 against the union of the row's accepted readings
+(``evaluate_attempt``); older reading runs without an attempt id are grouped by their proposal
+(``parent_run_id``), any other run is an attempt of its own (``group_attempts``). Reading runs are never
+averaged as repetitions. Repetitions (attempts) are averaged per question first; intervals are over
+questions.
+
+Every attempt counts. An attempt that ended without a scorable answer (no run of it
+answered: incomplete, no evidence, corpus absent, degraded, or produced by another path) is scored as an
 empty prediction: precision, recall and F1 0, vital recall 0. This is how WebNLG,
 Text2KGBench and TREC treat a missing output; averaging only the answered runs would
 reward a path for failing on the hard questions (and drop those questions from the
@@ -28,7 +35,7 @@ from statistics import mean
 
 from harness_schema.models import Run
 
-from . import LEVELS, evaluate_gold_row
+from . import LEVELS, accepted_readings, evaluate_attempt, reading_labels, row_gold
 from .matching import Judge
 from .relations import PredicateRelations
 from .stats import mean_ci, paired_difference_ci
@@ -60,12 +67,31 @@ def _value_aggregate(values: list[float | None]) -> dict[str, float | None]:
 
 def _empty_prediction(candidate: dict) -> dict:
     """What an attempt without a scorable answer scores: an empty triple set against the row's gold."""
-    gold = [*(candidate.get("gold_triples") or []),
-            *(item for reading in candidate.get("accepted_readings") or [] for item in reading.get("gold_triples") or [])]
+    gold = row_gold(candidate)
     vital = 0.0 if any(isinstance(item, dict) and item.get("weight") == "vital" for item in gold) else None
+    readings = accepted_readings(candidate)
     return {"chosen": dict(ZERO), "claim": dict(ZERO) if candidate.get("gold_claims") is not None else None,
             "levels": {"levels": {level: {**ZERO, "vital_recall": vital} for level in LEVELS},
-                       "judged_precision": {"value": None}, "judge": {"pending": 0}}}
+                       "judged_precision": {"value": None}, "judge": {"pending": 0}},
+            "readings_recall": {label: 0.0 for label in reading_labels(candidate)},
+            "readings_covered": 0 if readings else None}
+
+
+def group_attempts(runs: Iterable[Run]) -> list[list[Run]]:
+    """Runs grouped into attempts, in first-seen order. The key is ``attempt_id``; else ``parent_run_id``
+    (the reading runs of one proposal, as ``make run-questions`` recorded them before attempt ids existed;
+    a person's pick in the UI starts one run per proposal, so it stays alone); else the run's own id. So a
+    run without either is its own attempt, and the run whose id the others share joins them."""
+    groups: dict[str, list[Run]] = {}
+    for run in runs:
+        groups.setdefault(run.attempt_id or run.parent_run_id or run.id, []).append(run)
+    return list(groups.values())
+
+
+def _readings_recall_mean(entries: list[dict]) -> dict[str, float]:
+    labels = list(dict.fromkeys(label for entry in entries for label in entry.get("readings_recall") or {}))
+    return {label: mean(entry["readings_recall"].get(label, 0.0) for entry in entries
+                        if entry.get("readings_recall") is not None) for label in labels}
 
 
 def _level_summary(level_rows: list[dict]) -> dict:
@@ -147,24 +173,26 @@ def build_benchmark(
         path_rows = []
         for path in PATHS:
             matching = matching_runs(candidate, runs, path, run_input)
-            attempts = [run for run in matching if run.status not in NOT_ATTEMPTS]
+            attempts = group_attempts(run for run in matching if run.status not in NOT_ATTEMPTS)
             zero_fill = candidate.get("expected_status", "answered") == "answered"
             scored, counted = [], []           # answered-only; every attempt (failures as empty predictions)
-            unscorable = []
-            for run in attempts:
+            unscorable: list[str] = []
+            unscorable_attempts = 0
+            for group in attempts:
                 result = None
-                if run.status == "answered":
+                if any(run.status == "answered" for run in group):
                     try:
-                        result = evaluate_gold_row(run, candidate, relations=relations, judge=judge)
+                        result = evaluate_attempt(group, candidate, relations=relations, judge=judge)
                     except (ValueError, TypeError, KeyError) as exc:
-                        LOGGER.warning("Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc)
-                        unscorable.append(run.id)      # a scoring error is not the path's failure
+                        LOGGER.warning("Cannot score runs %s against %s: %s", [run.id for run in group],
+                                       candidate.get("id"), exc)
+                        unscorable.extend(run.id for run in group)   # a scoring error is not the path's failure
+                        unscorable_attempts += 1
                         continue
-                if result is not None and result["eligible_for_path_score"] and result["chosen"] is not None:
-                    claim = next((reading["claim_score"]["claim"] for reading in result["readings"]
-                                  if reading["index"] == result["chosen_reading"] and reading["claim_score"]), None)
-                    entry = {"chosen": result["chosen"], "claim": claim, "levels": result["chosen_levels"],
-                             "accepted_reading": result.get("accepted_reading")}
+                if result is not None and result["eligible_for_path_score"]:
+                    entry = {"chosen": result["chosen"], "claim": result["claim"], "levels": result["chosen_levels"],
+                             "readings_recall": result["readings_recall"],
+                             "readings_covered": result["readings_covered"]}
                     scored.append(entry)
                     counted.append(entry)
                 elif zero_fill:
@@ -180,11 +208,13 @@ def build_benchmark(
                 {
                     "path": "adaptive-baseline" if path == "baseline-enhanced" else path,
                     "repetitions": [run.id for run in matching],
-                    "attempted": len(attempts) - len(unscorable),
+                    # The runs of each attempt (several when an attempt researched several readings).
+                    "attempts": [[run.id for run in group] for group in attempts],
+                    "attempted": len(attempts) - unscorable_attempts,
                     "completed": len(scored),
-                    "failed": len(attempts) - len(unscorable) - len(scored),
-                    "coverage": len(scored) / (len(attempts) - len(unscorable))
-                    if len(attempts) > len(unscorable) else None,
+                    "failed": len(attempts) - unscorable_attempts - len(scored),
+                    "coverage": len(scored) / (len(attempts) - unscorable_attempts)
+                    if len(attempts) > unscorable_attempts else None,
                     "unscorable": unscorable,
                     "not_attempted": [run.id for run in matching if run.status in NOT_ATTEMPTS],
                     "precision": _score_aggregate(scores, "precision"),
@@ -199,8 +229,10 @@ def build_benchmark(
                     "judged_precision": _value_aggregate(
                         [row["judged_precision"]["value"] for row in answered_rows]),
                     "judge_pending": sum(row["judge"]["pending"] for row in answered_rows),
-                    "accepted_readings": sorted({
-                        entry["accepted_reading"]["label"] for entry in scored if entry.get("accepted_reading")}),
+                    # Ambiguous rows: mean soft recall per accepted reading and readings covered, per attempt
+                    # (failed attempts count as 0, like the main scores).
+                    "readings_recall": _readings_recall_mean(counted),
+                    "readings_covered": _value_aggregate([entry.get("readings_covered") for entry in counted]),
                     "model_calls": mean([item["model_calls"] for item in costs]) if costs else None,
                     "tool_calls": mean([item["tool_calls"] for item in costs]) if costs else None,
                     "wall_clock_s": mean([item["wall_clock_s"] for item in costs]) if costs else None,
@@ -233,4 +265,4 @@ def build_benchmark(
     }
 
 
-__all__ = ["NOT_ATTEMPTS", "PATHS", "build_benchmark", "complexity_level", "matching_runs"]
+__all__ = ["NOT_ATTEMPTS", "PATHS", "build_benchmark", "complexity_level", "group_attempts", "matching_runs"]

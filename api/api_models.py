@@ -16,6 +16,8 @@ class RunRequest(BaseModel):
     # Agent-proposed concept chosen by the user; required before agentic research.
     concept: ConceptChoice | None = None
     parent_run_id: str | None = None
+    # Evaluation: shared by the runs that research the readings of one attempt (Run.attempt_id).
+    attempt_id: str | None = None
     origin: str = "private"
     deadline_seconds: int | None = None
     # "corpus" or "evidence_doc" (docs/RUN_INPUT.md); None = the HARNESS_RUN_INPUT setting.

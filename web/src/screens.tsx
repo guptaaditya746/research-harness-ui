@@ -124,7 +124,7 @@ export function BenchmarkScreen({ rows, externalOn, refresh, run, runInput = 'co
   const columns = externalOn ? ['baseline', 'adaptive-baseline', 'agentic', 'external'] : ['baseline', 'adaptive-baseline', 'agentic'];
   return <>
     <h2>Benchmark</h2>
-    <p className="muted">Triple precision, recall and F1 against reviewed gold, averaged over repetitions. Each run’s evaluation mode records the agentic path’s top concept.</p>
+    <p className="muted">Triple precision, recall and F1 against reviewed gold, averaged over attempts. In evaluation mode an Agentic attempt researches every proposed reading (one run each) and its runs are scored together as one prediction against all accepted readings.</p>
     <p className="muted micro">Runs that read {runInput === 'evidence_doc' ? 'the evidence document D' : 'the corpus'} (the run input in Settings; the two are scored separately).</p>
     <button className="btn btn-secondary" onClick={refresh}>Refresh</button>
     {rows.length === 0 && <p className="muted" style={{ marginTop: 20 }}>No approved gold questions yet. Approve a candidate on the Gold page first.</p>}
@@ -135,7 +135,7 @@ export function BenchmarkScreen({ rows, externalOn, refresh, run, runInput = 'co
           <summary>{row.question}</summary>
           <div className="muted micro">Gold {row.gold_version}</div>
           <button className="text-button micro" onClick={() => run(row)}>Run benchmark · 3× per path</button>
-          {row.paths.map(path => <div key={path.path} className="micro">{path.path}: {path.completed}/{path.completed + path.failed} runs · triple F1 {path.f1.mean?.toFixed(2) || '—'} · model calls {path.model_calls ?? '—'} · tool calls {path.tool_calls ?? '—'} · wall {fixed(path.wall_clock_s, 1)} s · {path.repetitions.join(', ')}</div>)}
+          {row.paths.map(path => <div key={path.path} className="micro">{path.path}: {path.completed}/{path.completed + path.failed} attempts · triple F1 {path.f1.mean?.toFixed(2) || '—'} · model calls {path.model_calls ?? '—'} · tool calls {path.tool_calls ?? '—'} · wall {fixed(path.wall_clock_s, 1)} s · {path.repetitions.join(', ')}</div>)}
         </details></td>
         <td>{row.theme ?? row.category}</td>
         <td>{row.difficulty ?? '—'}</td>

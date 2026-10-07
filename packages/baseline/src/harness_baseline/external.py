@@ -8,6 +8,10 @@ path: triples whose source is a corpus passage or DBLP fact enter the answer gra
 invented get a generic parent, the DBLP backbone is added, and checks and artifacts are the usual
 ones plus ``external_result.json`` and ``external_trajectory.json``. Nothing of our pipeline
 (planner, retrieval, schema inference, extraction, review, verification) runs.
+
+The "external harness" check names the model and sandbox the run actually used, and warns when the
+sandbox was off, when ``output.max_triples`` cut triples, or (with D as input) how many answer triples
+were dropped for not being D's, so an evaluation can verify the run from its checks.
 """
 
 from __future__ import annotations
@@ -72,6 +76,15 @@ _PASS_ENV = ("PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "T
 _PASS_PREFIXES = ("UV_", "XDG_", "XH_")
 
 
+def _model_used(result: dict[str, Any]) -> str:
+    """The model the external run actually used (``model``; older results only have the configured one)."""
+    return str(result.get("model") or (result.get("config") or {}).get("model") or "")
+
+
+def _sandbox_used(result: dict[str, Any]) -> str:
+    return str(result.get("sandbox") or (result.get("config") or {}).get("sandbox") or "")
+
+
 class ExternalFailure(RuntimeError):
     """The external harness could not produce a result (not configured, crashed, no result file)."""
 
@@ -125,7 +138,7 @@ class ExternalHarness(Baseline20):
             state = self._state(question, result)
             self.stage = "triple provenance"
             run, artifacts = self._success(run_id, started_at, question, budget, state)
-            model = str(result.get("config", {}).get("model") or "")
+            model = _model_used(result)
             run = run.model_copy(update={"model_agent": model, "model_small": model})
         except NoResults as exc:
             self._check(self.stage, "fail", str(exc))
@@ -269,8 +282,11 @@ class ExternalHarness(Baseline20):
     def _state(self, question: str, result: dict[str, Any]) -> BaselineState:
         usage = result.get("usage") or {}
         harness = result.get("harness") or {}
-        summary = (f"{harness.get('name', 'external')} {harness.get('version', '')} · {usage.get('model_calls', 0)} "
-                   f"model calls · {usage.get('commands', 0)} commands · {result.get('duration_s', 0)}s").replace("  ", " ")
+        # The model and sandbox the run actually used, so an evaluation can verify them from the checks.
+        used = [f"model {_model_used(result) or 'unknown'}", f"sandbox {_sandbox_used(result) or 'unknown'}"]
+        summary = (f"{harness.get('name', 'external')} {harness.get('version', '')} · {' · '.join(used)} · "
+                   f"{usage.get('model_calls', 0)} model calls · {usage.get('commands', 0)} commands · "
+                   f"{result.get('duration_s', 0)}s").replace("  ", " ")
         status = str(result.get("status") or "")
         self._same_corpus(result.get("knowledge_base") or {})
         if status != "answered":
@@ -283,12 +299,18 @@ class ExternalHarness(Baseline20):
                                   + "".join(f"; {item}" for item in why if item) + ")")
         dropped = result.get("dropped_triples") or []
         triples, unmapped = self._triples(result.get("triples") or [])
+        not_in_doc = int(result.get("not_in_doc") or 0)
         notes = [f"{len(dropped)} dropped by the answer contract" if dropped else "",
-                 "answer taken from the agent's last reply (no answer.json)"
-                 if result.get("answer_source") == "final_message" else "",
+                 f"{not_in_doc} of them not triples of the evidence document" if not_in_doc else "",
+                 "answer taken from the final command's output (no answer.json)"
+                 if result.get("answer_source") == "submission" else "",
                  f"{unmapped} with a predicate that is not a relation (dropped)" if unmapped else ""]
+        truncated = int(result.get("truncated_triples") or 0)
         audit = [f"{result['evidence_not_in_source']} quote evidence not found in their passage"
                  if result.get("evidence_not_in_source") else "",
+                 f"{truncated} triples cut by its output.max_triples ({result.get('max_triples')})" if truncated else "",
+                 "sandbox off: commands could read the whole machine (not an evaluation run)"
+                 if _sandbox_used(result) == "none" else "",
                  f"{len(result['outside_paths'])} commands looked outside the run folder (sandbox off): "
                  f"{result['outside_paths'][0][:80]}" if result.get("outside_paths") else ""]
         self._check("external harness", "warn" if any(audit) else "pass",

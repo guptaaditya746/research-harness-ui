@@ -61,7 +61,7 @@ def test_answer_verifier_rejects_claims_not_supported_by_triples() -> None:
 class CanonicalizationModel:
     def __init__(self) -> None:
         self.replies = iter([
-            {"triples": [{"subject": "VPP", "predicate": "improves", "object": "41.5% on CALVIN ABC→D", "source_id": "p4-result", "evidence": "41.5% improvement in the Calvin ABC→D benchmark"}]},
+            {"triples": [{"subject": "p4", "predicate": "improves", "object": "41.5% on CALVIN ABC→D", "source_id": "p4-result", "evidence": "41.5% improvement in the Calvin ABC→D benchmark"}]},
             {"definitions": []},
             {"mappings": [{"id": 0, "property": "reportsMetric", "confidence": 0.91}]},
         ])
@@ -80,7 +80,7 @@ def test_ontology_review_recovers_a_supported_metric_relation() -> None:
     assert [(triple.subject, triple.predicate, triple.object, triple.source_id) for triple in result.triples] == [
         ("p4", "reportsMetric", "41.5% on CALVIN ABC→D", "p4-result")
     ]
-    assert stages[-2] == {"stage": "ontology_review", "unresolved": 1, "mapped": 1}
+    assert stages[-2] == {"stage": "ontology_review", "propositions": 1, "mapped": 1}
 
 
 class SentenceVerifier:
