@@ -176,6 +176,9 @@ compute port 8000, so no separate `ssh -L` command is needed.
 Coding agents and new contributors: read `AGENTS.md` first (repository map, layers,
 conventions), then `docs/ARCHITECTURE.md`.
 
+Thesis overview for presentations: `docs/presentation/thesis_pipeline.html` (open it in a browser, or
+`make pipeline-map` on the cluster; see `docs/presentation/README.md`).
+
 `make check` runs ruff, the package layer contracts and all Python tests; run it
 before every commit. `make runs` summarises recent runs (`show`, `compare`,
 `stats`; see `docs/RUN_ANALYSIS.md`). Prompts live in `packages/prompts`

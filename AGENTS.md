@@ -32,6 +32,7 @@ Every package has its own `AGENTS.md` (what it owns, entry points, what it may i
 | Why a run behaved as it did | `docs/RUN_ANALYSIS.md`, `make runs` |
 | Graph size settings, profiles (evidence documents are built in labelling) | `profiles/`, `docs/GRAPH_SETTINGS.md` |
 | Known problems and their causes | `docs/KNOWN_ISSUES.md` |
+| Thesis overview page (stages, LLM use, sources of ideas) | `docs/presentation/thesis_pipeline.html`, `make pipeline-map` |
 
 Every package has a short `README.md` saying what it owns and its entry points.
 

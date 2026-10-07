@@ -1,4 +1,4 @@
-.PHONY: public ontology cskg-subset benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
+.PHONY: pipeline-map public ontology cskg-subset benchmark-runs run-questions graph-shape fewshot embed fixtures up ingest grobid-native-install ingest-slurm dev demo check test eval web-build preflight eval-planner runs evaluate
 
 fixtures:
 	uv run --python 3.12 python -m harness_schema.generate
@@ -22,6 +22,13 @@ dev:
 
 demo:
 	HARNESS_DEV_RELOAD=0 ./scripts/dev.sh
+
+# The thesis pipeline map (docs/presentation/README.md): a static page, served for a browser elsewhere.
+# make pipeline-map  ·  PORT=9000 for another port; on the cluster tunnel it: ssh -L 8099:localhost:8099 <host>
+PORT ?= 8099
+pipeline-map:
+	@echo "Open http://localhost:$(PORT)/thesis_pipeline.html  (Ctrl+C to stop)"
+	python3 -m http.server $(PORT) --bind 127.0.0.1 --directory docs/presentation
 
 # Fast Python-only check for every change: lint, layer contracts, tests.
 check:

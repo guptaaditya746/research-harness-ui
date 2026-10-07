@@ -1,0 +1,409 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thesis Pipeline</title>
+<style>
+  :root {
+    --bg: #ffffff; --ink: #1d2433; --muted: #5f6b7a; --line: #9aa5b4;
+    --lane-a: #f4f6f9; --lane-b: #eef2f7;
+    --node: #ffffff; --node-line: #b8c2cf;
+    --llm: #4b3fb5;                          /* LLM badge */
+    --people: #2f7d4f;                       /* people badge */
+    --now: #d97706; --now-soft: #fff3dc;     /* "currently working here" */
+    --paper: #1f5fa8; --paper-soft: #e5eefa; /* idea taken from a paper */
+    --tool: #56606e; --tool-soft: #edf0f3;   /* tool, dataset or protocol used as is */
+    --ours: #0d7a5f; --ours-soft: #e1f3ec;   /* our own contribution */
+    color-scheme: light;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif; }
+  main { padding: 28px 28px 40px; max-width: 1720px; margin: 0 auto; }
+  header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px 32px; margin-bottom: 18px; }
+  h1 { font: 600 34px/1.15 Georgia, "Times New Roman", serif; margin: 0 0 6px; }
+  h2 { font: 600 24px/1.2 Georgia, "Times New Roman", serif; margin: 34px 0 14px; }
+  .sub { margin: 0; font-size: 18px; color: var(--muted); }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px 24px; font-size: 16px; align-items: center; max-width: 900px; }
+  .legend span { display: inline-flex; align-items: center; gap: 8px; }
+  .legend svg { width: 28px; height: 28px; }
+  .key-now { width: 26px; height: 18px; border: 3px solid var(--now); background: var(--now-soft); border-radius: 5px; display: inline-block; }
+  .key-chip { font-size: 13px; font-weight: 600; padding: 3px 9px; border-radius: 999px; border: 1.5px solid; }
+  .k-paper { color: var(--paper); background: var(--paper-soft); border-color: var(--paper); }
+  .k-tool { color: var(--tool); background: var(--tool-soft); border-color: var(--tool); }
+  .k-ours { color: var(--ours); background: var(--ours-soft); border-color: var(--ours); }
+  #diagram { width: 100%; overflow-x: auto; }
+  #diagram svg { display: block; width: 100%; min-width: 1100px; height: auto; }
+  /* SVG styling */
+  .lane-bg { fill: var(--lane-a); }
+  .lane-bg.alt { fill: var(--lane-b); }
+  .lane-bg.focus { fill: #fff8ec; }
+  .lane-name { font: 700 19px/1 "Segoe UI", system-ui, sans-serif; fill: var(--ink); }
+  .lane-sub { font-size: 14.5px; fill: var(--muted); }
+  .node { fill: var(--node); stroke: var(--node-line); stroke-width: 1.6; }
+  .node.now { fill: var(--now-soft); stroke: var(--now); stroke-width: 4; }
+  .name { font-weight: 700; fill: var(--ink); }
+  .desc { font-size: 14px; fill: var(--muted); }
+  .chip-paper { fill: var(--paper-soft); stroke: var(--paper); stroke-width: 1.2; }
+  .chip-tool { fill: var(--tool-soft); stroke: var(--tool); stroke-width: 1.2; }
+  .chip-ours { fill: var(--ours-soft); stroke: var(--ours); stroke-width: 1.2; }
+  .chip-text { font-size: 12.5px; font-weight: 600; }
+  .ct-paper { fill: var(--paper); } .ct-tool { fill: var(--tool); } .ct-ours { fill: var(--ours); }
+  .flow { stroke: var(--line); stroke-width: 2; fill: none; }
+  .cross { stroke: var(--line); stroke-width: 2; fill: none; stroke-dasharray: 6 5; }
+  .cross.now { stroke: var(--now); stroke-dasharray: none; stroke-width: 2.5; }
+  .edge-label { font-size: 13px; fill: var(--muted); paint-order: stroke; stroke: var(--bg); stroke-width: 5px; stroke-linejoin: round; }
+  .arrow { fill: var(--line); }
+  .arrow-now { fill: var(--now); }
+  .flag { fill: var(--now); }
+  .flag-text { font: 700 14px/1 "Segoe UI", system-ui, sans-serif; fill: #ffffff; letter-spacing: .06em; }
+  .pulse { fill: none; stroke: var(--now); stroke-width: 3; opacity: .55; transform-box: fill-box; transform-origin: center; animation: pulse 2.2s ease-out infinite; }
+  @keyframes pulse { 0% { transform: scale(1); opacity: .55; } 100% { transform: scale(1.12, 1.3); opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { .pulse { animation: none; opacity: .35; } }
+  .hl { filter: drop-shadow(0 0 0.35rem rgba(31, 95, 168, .55)); }
+  /* reference list */
+  .refs { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 10px 28px; }
+  .ref { display: grid; grid-template-columns: 136px minmax(0, 1fr); gap: 12px; align-items: baseline; padding: 8px 10px; border-radius: 8px; }
+  .ref:hover, .ref.hl-row { background: var(--lane-a); }
+  .ref .key-chip { justify-self: start; }
+  .ref .cite { font-size: 15px; }
+  .ref .used { font-size: 13.5px; color: var(--muted); }
+  footer { margin-top: 18px; font-size: 14px; color: var(--muted); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1 id="title"></h1>
+      <p class="sub" id="subtitle"></p>
+    </div>
+    <div class="legend" id="legend"></div>
+  </header>
+  <div id="diagram" role="img" aria-label="Thesis pipeline diagram with the source of each idea"></div>
+  <h2>Where the ideas come from</h2>
+  <div class="refs" id="refs"></div>
+  <footer id="footer"></footer>
+</main>
+
+<script>
+/* ===================================================================================
+   EDIT HERE. Everything the page shows comes from these blocks.
+   - SOURCES: every paper, tool or dataset the thesis builds on.
+       short: the chip text   kind: "paper" | "tool"   cite: full reference   url: optional
+   - LANES: one row each, top to bottom. `sources` on a lane = chips under the lane name.
+   - STAGES: boxes. `lane` = row, `col` = position in the row (0 = leftmost).
+       llm: true      -> LLM badge (the stage calls a language model)
+       people: true   -> people badge (human work)
+       current: true  -> highlighted as "currently working here"
+       sources: [...] -> keys of SOURCES whose idea this stage uses (chips under the box)
+       ours: "text"   -> an "ours" chip: what in this stage is our own contribution
+     Stages of one lane are joined left to right automatically (sorted by col).
+   - LINKS: extra arrows between lanes: [from id, to id, label].
+   - LLM_ICON_SRC: a data:image/... URI of the Qwen logo, to replace the generic LLM icon.
+   Sources marked "TODO" are the ones to double-check against your bibliography.
+   =================================================================================== */
+
+const TITLE = "Thesis pipeline";
+const SUBTITLE = "Research questions over a fixed corpus of papers, answered as a knowledge graph and checked against a gold standard";
+
+const LLM_LABEL = "LLM call (Qwen)";
+const LLM_ICON_SRC = null;   // e.g. "data:image/png;base64,...."  (null = generic LLM icon)
+
+const SOURCES = {
+  grobid:   { short: "GROBID",          kind: "tool",  cite: "GROBID: PDF to structured text (Lopez, ECDL 2009)" },
+  bm25:     { short: "BM25",            kind: "paper", cite: "Robertson & Zaragoza. The Probabilistic Relevance Framework: BM25 and Beyond. FnTIR 2009" },
+  rrf:      { short: "RRF",             kind: "paper", cite: "Cormack, Clarke & Büttcher. Reciprocal Rank Fusion. SIGIR 2009 (hybrid BM25 + dense ranking)" },
+  dblp:     { short: "DBLP",            kind: "tool",  cite: "DBLP knowledge graph and RDF schema (papers, authors, venues, citations)" },
+  cskg:     { short: "CS-KG 2.0",       kind: "tool",  cite: "CS-KG 2.0 ontology of computer-science entities and relations (KMi, The Open University)" },
+  ambigqa:  { short: "AmbigQA",         kind: "paper", cite: "Min et al. AmbigQA: Answering Ambiguous Open-domain Questions. EMNLP 2020 (one answer per interpretation)" },
+  edc:      { short: "EDC",             kind: "paper", cite: "Zhang & Soh. Extract, Define, Canonicalize: An LLM-based Framework for Knowledge Graph Construction. EMNLP 2024" },
+  mcp:      { short: "MCP",             kind: "tool",  cite: "Model Context Protocol (Anthropic, 2024): how the agent calls corpus tools" },
+  sweagent: { short: "mini-SWE-agent",  kind: "paper", cite: "Yang et al. SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering. NeurIPS 2024 (mini-SWE-agent is its minimal version)" },
+  zobel:    { short: "Zobel 1998",      kind: "paper", cite: "Zobel. How Reliable are the Results of Large-Scale Information Retrieval Experiments? SIGIR 1998 (pooled gold is biased)" },
+  argilla:  { short: "Argilla",         kind: "tool",  cite: "Argilla: open-source annotation tool" },
+  kappa:    { short: "Cohen's κ",       kind: "paper", cite: "Cohen. A Coefficient of Agreement for Nominal Scales. 1960 (agreement between reviewers)" },
+  benchie:  { short: "BenchIE",         kind: "paper", cite: "Gashteovski et al. BenchIE: Fact-Based Open Information Extraction Evaluation. ACL 2022 (accepted variants of a fact)" },
+  webnlg:   { short: "WebNLG 2020",     kind: "paper", cite: "WebNLG+ Challenge 2020 text-to-RDF evaluation (matching levels)" },
+  text2kg:  { short: "Text2KGBench",    kind: "paper", cite: "Mihindukulasooriya et al. Text2KGBench: Ontology-Driven Knowledge Graph Generation from Text. ISWC 2023" },
+  euzenat:  { short: "Euzenat 2007",    kind: "paper", cite: "Euzenat. Semantic Precision and Recall for Ontology Alignment Evaluation. IJCAI 2007 (entailed matching)" },
+  judge:    { short: "LLM judge",       kind: "paper", cite: "Zheng et al. Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena. NeurIPS 2023; Mo et al. KGGen (MINE), 2025" },
+  trec:     { short: "TREC RAG 2024",   kind: "paper", cite: "Pradeep et al. Nugget Evaluation for the TREC 2024 RAG Track. 2024 (vital nuggets → vital recall)" },
+  adaptive: { short: "Adaptive-RAG",    kind: "paper", cite: "Jeong et al. Adaptive-RAG: Adapting Retrieval-Augmented LLMs through Question Complexity. NAACL 2024" },
+  bootstrap:{ short: "Bootstrap",       kind: "paper", cite: "Efron & Tibshirani. An Introduction to the Bootstrap. 1993 (95% intervals over questions)" },
+};
+
+const LANES = [
+  { id: "corpus",  name: "Corpus",           sub: "built once" },
+  { id: "harness", name: "Research harness", sub: "per question, 4 paths",
+    sources: [{ ours: "Fast, Adaptive, Agentic" }, { key: "sweagent", label: "External: mini-SWE-agent" }] },
+  { id: "eval",    name: "Evaluation",       sub: "per run" },
+  { id: "gold",    name: "Gold standard",    sub: "per question" },
+];
+
+const STAGES = [
+  // Corpus
+  { id: "papers",  lane: "corpus",  col: 0, name: "Papers",          desc: "337 PDFs",              llm: false },
+  { id: "parse",   lane: "corpus",  col: 1, name: "Parse",           desc: "PDF to passages",       llm: false, sources: ["grobid"] },
+  { id: "index",   lane: "corpus",  col: 2, name: "Index",           desc: "BM25 + dense",          llm: false, sources: ["bm25", "rrf"] },
+  { id: "onto",    lane: "corpus",  col: 3, name: "Ontology",        desc: "DBLP + CS-KG",          llm: false, sources: ["dblp", "cskg"] },
+  // Research harness (one run)
+  { id: "question",lane: "harness", col: 0, name: "Question",        desc: "+ readings",            llm: true,  sources: ["ambigqa"], ours: "grounded readings" },
+  { id: "retrieve",lane: "harness", col: 1, name: "Retrieve",        desc: "search the corpus",     llm: false, sources: ["mcp"], ours: "agent research" },
+  { id: "schema",  lane: "harness", col: 2, name: "Schema",          desc: "terms for the answer",  llm: true,  ours: "per-question schema" },
+  { id: "edc",     lane: "harness", col: 3, name: "EDC",             desc: "extract · define · map",llm: true,  sources: ["edc"] },
+  { id: "review",  lane: "harness", col: 4, name: "Evidence review", desc: "keep or drop",          llm: true,  ours: "review" },
+  { id: "answer",  lane: "harness", col: 5, name: "Answer",          desc: "compose + verify",      llm: true,  ours: "cited answer" },
+  { id: "graph",   lane: "harness", col: 6, name: "Answer graph",    desc: "triples + passages",    llm: false, ours: "answer graph" },
+  // Evaluation
+  { id: "runs",    lane: "eval",    col: 3, name: "Runs",            desc: "A: corpus · B: D",      llm: false, ours: "mode B" },
+  { id: "match",   lane: "eval",    col: 4, name: "Matching",        desc: "strict · entailed · soft", llm: true, sources: ["webnlg", "text2kg", "euzenat", "judge"] },
+  { id: "scores",  lane: "eval",    col: 5, name: "Scores",          desc: "precision · recall",    llm: false, sources: ["trec", "bootstrap"] },
+  { id: "results", lane: "eval",    col: 6, name: "Results",         desc: "complexity × path",     llm: false, sources: ["adaptive"] },
+  // Gold standard
+  { id: "screen",  lane: "gold",    col: 0, name: "Screen papers",   desc: "every paper",           llm: true,  ours: "coverage rows" },
+  { id: "extract", lane: "gold",    col: 1, name: "Extract",         desc: "question scope",        llm: true,  sources: ["edc"] },
+  { id: "D",       lane: "gold",    col: 2, name: "Document D",      desc: "triples + passages",    llm: false, current: true, sources: ["zobel"], ours: "D: supervisor's idea" },
+  { id: "triage",  lane: "gold",    col: 3, name: "Triage",          desc: "answers / context",     llm: true,  ours: "triage + sample" },
+  { id: "human",   lane: "gold",    col: 4, name: "Human review",    desc: "two reviewers",         llm: false, people: true, sources: ["argilla", "kappa"] },
+  { id: "key",     lane: "gold",    col: 5, name: "Answer key",      desc: "gold triples",          llm: false, sources: ["benchie", "ambigqa"] },
+];
+
+const LINKS = [
+  ["index", "retrieve", "search"],
+  ["onto",  "schema",   "terms"],
+  ["graph", "runs",     "run triples"],
+  ["D",     "runs",     "input of mode B"],
+  ["key",   "match",    "gold"],
+];
+
+const FOOTER = "Blue chips: an idea taken from a paper. Grey chips: a tool, dataset or protocol used as is. Green chips: our own contribution. Hover a chip to see the full reference and its row below.";
+
+/* ============================== drawing (no edits needed below) ============================== */
+const LABEL_W = 250, COL_W = 200, NODE_W = 178, NODE_H = 86, CHIP_H = 22, CHIP_GAP = 5, TOP = 14, FLAG_H = 46;
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, attrs = {}, parent) => {
+  const node = document.createElementNS(NS, tag);
+  for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
+  if (parent) parent.appendChild(node);
+  return node;
+};
+
+// chips of a stage: its sources, then its "ours" note
+function chipsOf(s) {
+  const out = (s.sources || []).map(key => {
+    const src = SOURCES[key];
+    if (!src) { console.warn("unknown source", key); return null; }
+    return { kind: src.kind, text: src.short, title: src.cite, key };
+  }).filter(Boolean);
+  if (s.ours) out.push({ kind: "ours", text: s.ours, title: `Our contribution: ${s.ours}` });
+  return out;
+}
+const stackHeight = n => n ? 8 + n * CHIP_H + (n - 1) * CHIP_GAP : 0;
+
+function llmIcon(parent, cx, cy, r) {
+  el("circle", { cx, cy, r, fill: "var(--llm)" }, parent);
+  if (LLM_ICON_SRC) {
+    const s = r * 1.5;
+    el("image", { href: LLM_ICON_SRC, x: cx - s / 2, y: cy - s / 2, width: s, height: s }, parent);
+    return;
+  }
+  const star = (x, y, a, b) => `M${x} ${y - a} Q${x + b} ${y - b} ${x + a} ${y} Q${x + b} ${y + b} ${x} ${y + a} Q${x - b} ${y + b} ${x - a} ${y} Q${x - b} ${y - b} ${x} ${y - a} Z`;
+  el("path", { d: star(cx - r * 0.12, cy + r * 0.08, r * 0.62, r * 0.14), fill: "#fff" }, parent);
+  el("path", { d: star(cx + r * 0.45, cy - r * 0.45, r * 0.28, r * 0.07), fill: "#fff" }, parent);
+}
+
+function peopleIcon(parent, cx, cy, r) {
+  el("circle", { cx, cy, r, fill: "var(--people)" }, parent);
+  el("circle", { cx, cy: cy - r * 0.28, r: r * 0.26, fill: "#fff" }, parent);
+  el("path", { d: `M${cx - r * 0.52} ${cy + r * 0.55} Q${cx - r * 0.5} ${cy + r * 0.02} ${cx} ${cy + r * 0.02} Q${cx + r * 0.5} ${cy + r * 0.02} ${cx + r * 0.52} ${cy + r * 0.55} Z`, fill: "#fff" }, parent);
+}
+
+function fitText(text, maxWidth, size, min = 10) {
+  text.setAttribute("font-size", size);
+  while (text.getComputedTextLength() > maxWidth && size > min) {
+    size -= 0.5;
+    text.setAttribute("font-size", size);
+  }
+}
+
+function chip(parent, x, y, w, c) {
+  const g = el("g", { class: "chip", "data-key": c.key || "" }, parent);
+  el("rect", { x, y, width: w, height: CHIP_H, rx: CHIP_H / 2, class: `chip-${c.kind}` }, g);
+  const t = el("text", { x: x + w / 2, y: y + 15.5, "text-anchor": "middle", class: `chip-text ct-${c.kind}` }, g);
+  t.textContent = c.text;
+  fitText(t, w - 12, 12.5, 9);
+  el("title", {}, g).textContent = c.title;
+  return g;
+}
+
+function draw() {
+  const host = document.getElementById("diagram");
+  host.textContent = "";
+  const cols = Math.max(...STAGES.map(s => s.col)) + 1;
+  const W = LABEL_W + cols * COL_W + 10;
+  // each lane is as tall as its tallest box + chip stack (+ the flag under the current stage)
+  const laneH = LANES.map(lane => {
+    const tallest = Math.max(0, ...STAGES.filter(s => s.lane === lane.id)
+      .map(s => stackHeight(chipsOf(s).length) + (s.current ? FLAG_H : 0)));
+    const labelChips = 70 + (lane.sources || []).length * (CHIP_H + CHIP_GAP);
+    return Math.max(NODE_H + tallest + 44, labelChips + 20, 150);
+  });
+  const laneTop = laneH.map((_, i) => TOP + laneH.slice(0, i).reduce((a, b) => a + b, 0));
+  const H = TOP + laneH.reduce((a, b) => a + b, 0) + 10;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}` }, host);
+  const defs = el("defs", {}, svg);
+  for (const [id, cls] of [["arr", "arrow"], ["arr-now", "arrow-now"]]) {
+    const m = el("marker", { id, viewBox: "0 0 10 10", refX: 9, refY: 5, markerWidth: 8, markerHeight: 8, orient: "auto-start-reverse" }, defs);
+    el("path", { d: "M0 0 L10 5 L0 10 z", class: cls }, m);
+  }
+
+  const laneIndex = Object.fromEntries(LANES.map((l, i) => [l.id, i]));
+  const pos = {};
+  for (const s of STAGES) {
+    const li = laneIndex[s.lane];
+    const chips = chipsOf(s);
+    pos[s.id] = { x: LABEL_W + s.col * COL_W + (COL_W - NODE_W) / 2, y: laneTop[li] + 26, s, chips,
+                  bottom: laneTop[li] + 26 + NODE_H + stackHeight(chips.length) };
+  }
+
+  // lanes
+  LANES.forEach((lane, i) => {
+    const y = laneTop[i];
+    const focus = STAGES.some(s => s.lane === lane.id && s.current);
+    el("rect", { x: 0, y: y + 4, width: W, height: laneH[i] - 8, rx: 12, class: `lane-bg${i % 2 ? " alt" : ""}${focus ? " focus" : ""}` }, svg);
+    el("text", { x: 22, y: y + 58, class: "lane-name" }, svg).textContent = lane.name;
+    el("text", { x: 22, y: y + 82, class: "lane-sub" }, svg).textContent = lane.sub || "";
+    (lane.sources || []).forEach((src, k) => {
+      const c = src.ours
+        ? { kind: "ours", text: src.ours, title: `Our contribution: ${src.ours}` }
+        : { kind: SOURCES[src.key].kind, text: src.label || SOURCES[src.key].short, title: SOURCES[src.key].cite, key: src.key };
+      chip(svg, 22, y + 96 + k * (CHIP_H + CHIP_GAP), LABEL_W - 40, c);
+    });
+  });
+
+  const edgeLayer = el("g", {}, svg);
+  const nodeLayer = el("g", {}, svg);
+
+  // flow arrows inside each lane
+  for (const lane of LANES) {
+    const row = STAGES.filter(s => s.lane === lane.id).sort((a, b) => a.col - b.col);
+    for (let i = 0; i + 1 < row.length; i++) {
+      const a = pos[row[i].id], b = pos[row[i + 1].id];
+      el("line", { x1: a.x + NODE_W, y1: a.y + NODE_H / 2, x2: b.x - 3, y2: b.y + NODE_H / 2, class: "flow", "marker-end": "url(#arr)" }, edgeLayer);
+    }
+  }
+
+  // links between lanes (they leave below a box's chips and arrive at the top of a box, or the reverse)
+  for (const [from, to, label] of LINKS) {
+    const a = pos[from], b = pos[to];
+    if (!a || !b) { console.warn("LINKS: unknown stage", from, to); continue; }
+    const down = b.y > a.y;
+    const shift = a.s.col === b.s.col ? 0 : (b.s.col > a.s.col ? 22 : -22);
+    const sx = a.x + NODE_W / 2 + shift, tx = b.x + NODE_W / 2 - shift;
+    const flagOffset = s => (s.current ? FLAG_H : 0);
+    const sy = down ? a.bottom + 4 + flagOffset(a.s) : a.y;
+    const ty = down ? b.y - 3 : b.bottom + 6;
+    const my = (sy + ty) / 2;
+    const now = a.s.current || b.s.current;
+    let d = `M${sx} ${sy} C${sx} ${my} ${tx} ${my} ${tx} ${ty}`;
+    if (!down && a.s.current) {        // from the current stage upwards: leave from its side, clear of the flag
+      const sideX = a.x + NODE_W, sideY = a.y + NODE_H / 2 - 18;
+      d = `M${sideX} ${sideY} C${sideX + 60} ${sideY} ${tx} ${ty + 40} ${tx} ${ty}`;
+    }
+    el("path", { d, class: `cross${now ? " now" : ""}`, "marker-end": `url(#${now ? "arr-now" : "arr"})` }, edgeLayer);
+    if (label) {
+      const t = el("text", { x: (sx + tx) / 2 + 10, y: my + 4, class: "edge-label" }, edgeLayer);
+      t.textContent = label;
+    }
+  }
+
+  // stages
+  for (const s of STAGES) {
+    const { x, y, chips } = pos[s.id];
+    const g = el("g", {}, nodeLayer);
+    if (s.current) el("rect", { x, y, width: NODE_W, height: NODE_H, rx: 12, class: "pulse" }, g);
+    el("rect", { x, y, width: NODE_W, height: NODE_H, rx: 12, class: `node${s.current ? " now" : ""}` }, g);
+    const name = el("text", { x: x + NODE_W / 2, y: y + 38, "text-anchor": "middle", class: "name" }, g);
+    name.textContent = s.name;
+    const desc = el("text", { x: x + NODE_W / 2, y: y + 62, "text-anchor": "middle", class: "desc" }, g);
+    desc.textContent = s.desc || "";
+    fitText(name, NODE_W - 26, 18, 11);
+    fitText(desc, NODE_W - 16, 14, 11);
+    if (s.llm) llmIcon(g, x + NODE_W - 6, y + 6, 15);
+    if (s.people) peopleIcon(g, x + NODE_W - 6, y + 6, 15);
+    el("title", {}, g).textContent = `${s.name}: ${s.desc || ""}${s.llm ? " · LLM calls" : ""}${s.people ? " · people" : ""}`;
+    chips.forEach((c, k) => chip(nodeLayer, x + 6, y + NODE_H + 8 + k * (CHIP_H + CHIP_GAP), NODE_W - 12, c));
+    if (s.current) {
+      const fx = x + NODE_W / 2, fy = pos[s.id].bottom + 16;
+      el("path", { d: `M${fx - 8} ${fy} L${fx} ${fy - 11} L${fx + 8} ${fy} Z`, class: "flag" }, g);
+      const pill = el("rect", { y: fy, height: 30, rx: 15, class: "flag" }, g);
+      const label = el("text", { x: fx, y: fy + 20, "text-anchor": "middle", class: "flag-text" }, g);
+      label.textContent = "CURRENTLY WORKING HERE";
+      const w = label.getComputedTextLength() + 34;
+      pill.setAttribute("x", fx - w / 2);
+      pill.setAttribute("width", w);
+    }
+  }
+}
+
+function references() {
+  const box = document.getElementById("refs");
+  const usedBy = {};
+  for (const s of STAGES) for (const key of s.sources || []) (usedBy[key] ||= []).push(s.name);
+  for (const lane of LANES) for (const src of lane.sources || []) if (src.key) (usedBy[src.key] ||= []).push(lane.name);
+  const order = Object.keys(SOURCES).sort((a, b) => (SOURCES[a].kind === "paper" ? 0 : 1) - (SOURCES[b].kind === "paper" ? 0 : 1));
+  for (const key of order) {
+    const src = SOURCES[key];
+    const row = document.createElement("div");
+    row.className = "ref";
+    row.dataset.key = key;
+    row.innerHTML = `<span class="key-chip k-${src.kind}"></span><div><div class="cite"></div><div class="used"></div></div>`;
+    row.querySelector(".key-chip").textContent = src.short;
+    row.querySelector(".cite").textContent = src.cite;
+    row.querySelector(".used").textContent = usedBy[key] ? `Used in: ${usedBy[key].join(", ")}` : "Not placed on a stage yet";
+    box.appendChild(row);
+  }
+  // hovering a chip in the diagram marks its reference row, and the reverse
+  const rows = [...box.querySelectorAll(".ref")];
+  const chipsFor = key => [...document.querySelectorAll(`#diagram .chip[data-key="${key}"]`)];
+  document.querySelectorAll("#diagram .chip").forEach(c => {
+    const key = c.dataset.key;
+    if (!key) return;
+    c.addEventListener("mouseenter", () => rows.forEach(r => r.classList.toggle("hl-row", r.dataset.key === key)));
+    c.addEventListener("mouseleave", () => rows.forEach(r => r.classList.remove("hl-row")));
+  });
+  rows.forEach(r => {
+    r.addEventListener("mouseenter", () => chipsFor(r.dataset.key).forEach(c => c.classList.add("hl")));
+    r.addEventListener("mouseleave", () => chipsFor(r.dataset.key).forEach(c => c.classList.remove("hl")));
+  });
+}
+
+function legend() {
+  const box = document.getElementById("legend");
+  const item = (drawIcon, label) => {
+    const span = document.createElement("span");
+    const svg = el("svg", { viewBox: "0 0 30 30" }, span);
+    drawIcon(svg);
+    span.append(label);
+    box.appendChild(span);
+  };
+  item(svg => llmIcon(svg, 15, 15, 13), LLM_LABEL);
+  item(svg => peopleIcon(svg, 15, 15, 13), "People");
+  const add = html => { const s = document.createElement("span"); s.innerHTML = html; box.appendChild(s); };
+  add('<i class="key-now"></i>Currently working here');
+  add('<b class="key-chip k-paper">EDC</b>Idea from a paper');
+  add('<b class="key-chip k-tool">GROBID</b>Tool or data');
+  add('<b class="key-chip k-ours">review</b>Our contribution');
+}
+
+document.getElementById("title").textContent = TITLE;
+document.getElementById("subtitle").textContent = SUBTITLE;
+document.getElementById("footer").textContent = FOOTER;
+legend();
+draw();
+references();
+</script>
+</body>
+</html>
