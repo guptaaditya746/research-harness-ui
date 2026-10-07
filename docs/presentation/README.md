@@ -25,6 +25,10 @@ ssh -L 8099:localhost:8099 <user>@<cluster-host>    # on your laptop, in a secon
 
 `make pipeline-map PORT=9000` uses another port. Press F11 in the browser for full screen when presenting.
 
+Click any box, chip or reference to open its details panel (Back returns to the previous one, Esc closes;
+boxes and chips can also be reached with Tab and opened with Enter). A link ending in `#stage=edc` or
+`#source=euzenat` opens that panel directly, which is handy for jumping to a step during a talk.
+
 ## Change it
 
 Everything shown comes from the blocks at the top of the `<script>`:
@@ -36,5 +40,9 @@ Everything shown comes from the blocks at the top of the `<script>`:
   is built from it.
 - `LANES`: the rows, top to bottom. `LINKS`: the arrows between rows.
 - `LLM_ICON_SRC`: a `data:image/...` URI of the Qwen logo replaces the generic LLM icon.
+- `STAGE_DETAILS` / `SOURCE_DETAILS`: the text of the panel that opens when a box, chip or reference is
+  clicked (what it is, how it works here, input → output, an example, our contribution, known limits or
+  where we differ from the paper, settings, and where it is in the code). One entry per `STAGES` id and per
+  `SOURCES` key; every field is optional.
 
 Save and reload the page; there is nothing to build.

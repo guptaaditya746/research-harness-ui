@@ -70,6 +70,53 @@
   .ref .cite { font-size: 15px; }
   .ref .used { font-size: 13.5px; color: var(--muted); }
   footer { margin-top: 18px; font-size: 14px; color: var(--muted); }
+  /* details panel */
+  #diagram .stage, #diagram .chip { cursor: pointer; }
+  #diagram .stage:hover .node, #diagram .stage:focus-visible .node { stroke: var(--paper); stroke-width: 2.6; }
+  #diagram .stage:focus, #diagram .chip:focus { outline: none; }
+  #diagram .chip:hover rect, #diagram .chip:focus-visible rect { stroke-width: 2.4; }
+  #diagram .stage.selected .node { stroke: var(--paper); stroke-width: 4; }
+  .ref { cursor: pointer; }
+  .hint { font-size: 15px; color: var(--muted); margin: 10px 0 0; }
+  .scrim { position: fixed; inset: 0; background: rgba(29, 36, 51, .28); opacity: 0; pointer-events: none; transition: opacity .18s; z-index: 10; }
+  .scrim.open { opacity: 1; pointer-events: auto; }
+  .panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(600px, 100vw); background: #fff; z-index: 11;
+    box-shadow: -12px 0 32px rgba(29, 36, 51, .18); transform: translateX(102%); transition: transform .22s ease;
+    display: flex; flex-direction: column; }
+  .panel.open { transform: none; }
+  @media (prefers-reduced-motion: reduce) { .panel, .scrim { transition: none; } }
+  .panel-top { display: flex; align-items: center; gap: 8px; padding: 14px 18px; border-bottom: 1px solid #e3e7ed; }
+  .panel-top button { font: inherit; font-size: 14px; border: 1px solid var(--node-line); background: #fff; color: var(--ink);
+    border-radius: 8px; padding: 6px 12px; cursor: pointer; }
+  .panel-top button:hover { background: var(--lane-a); }
+  .panel-top button:focus-visible { outline: 2px solid var(--paper); outline-offset: 2px; }
+  .panel-top .spacer { flex: 1; }
+  .panel-body { overflow-y: auto; padding: 20px 24px 32px; }
+  .panel-kind { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 10px; }
+  .badge { font-size: 12.5px; font-weight: 700; padding: 3px 9px; border-radius: 999px; color: #fff; }
+  .b-llm { background: var(--llm); } .b-people { background: var(--people); } .b-now { background: var(--now); }
+  .panel h3 { font: 600 28px/1.2 Georgia, "Times New Roman", serif; margin: 0 0 4px; }
+  .panel .lead { margin: 0 0 6px; color: var(--muted); font-size: 16px; }
+  .panel section { margin-top: 20px; }
+  .panel section h4 { margin: 0 0 8px; font-size: 13px; letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .panel p, .panel li { font-size: 16px; line-height: 1.5; }
+  .panel p { margin: 0; }
+  .panel ul { margin: 0; padding-left: 20px; }
+  .panel li + li { margin-top: 6px; }
+  .panel code { font: 13.5px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background: var(--lane-a); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
+  .io { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); gap: 10px; align-items: center; }
+  .io div { background: var(--lane-a); border-radius: 8px; padding: 10px 12px; font-size: 15px; line-height: 1.4; }
+  .io span { color: var(--muted); font-size: 20px; }
+  .example { border-left: 4px solid var(--paper); background: var(--paper-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; }
+  .ours-box { border-left: 4px solid var(--ours); background: var(--ours-soft); padding: 10px 14px; border-radius: 0 8px 8px 0; }
+  .ours-box.flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { 0% { box-shadow: 0 0 0 4px rgba(13, 122, 95, .45); } 100% { box-shadow: 0 0 0 0 rgba(13, 122, 95, 0); } }
+  .differs { border-left: 4px solid var(--now); background: var(--now-soft); padding: 10px 14px 10px 32px; border-radius: 0 8px 8px 0; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px; }
+  .links button { font: inherit; font-size: 13.5px; font-weight: 600; padding: 4px 11px; border-radius: 999px; border: 1.5px solid; cursor: pointer; }
+  .links button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  .links .l-stage { color: var(--ink); background: #fff; border-color: var(--node-line); }
+  .cite-text { font-size: 15px; color: var(--ink); }
 </style>
 </head>
 <body>
@@ -81,7 +128,8 @@
     </div>
     <div class="legend" id="legend"></div>
   </header>
-  <div id="diagram" role="img" aria-label="Thesis pipeline diagram with the source of each idea"></div>
+  <div id="diagram" aria-label="Thesis pipeline diagram with the source of each idea"></div>
+  <p class="hint">Click any box, chip or reference for what it is, how it works here, and where it comes from.</p>
   <h2>Where the ideas come from</h2>
   <div class="refs" id="refs"></div>
   <footer id="footer"></footer>
@@ -102,6 +150,7 @@
      Stages of one lane are joined left to right automatically (sorted by col).
    - LINKS: extra arrows between lanes: [from id, to id, label].
    - LLM_ICON_SRC: a data:image/... URI of the Qwen logo, to replace the generic LLM icon.
+   - STAGE_DETAILS / SOURCE_DETAILS (below FOOTER): the text of the panel that opens on a click.
    Sources marked "TODO" are the ones to double-check against your bibliography.
    =================================================================================== */
 
@@ -149,7 +198,7 @@ const STAGES = [
   { id: "index",   lane: "corpus",  col: 2, name: "Index",           desc: "BM25 + dense",          llm: false, sources: ["bm25", "rrf"] },
   { id: "onto",    lane: "corpus",  col: 3, name: "Ontology",        desc: "DBLP + CS-KG",          llm: false, sources: ["dblp", "cskg"] },
   // Research harness (one run)
-  { id: "question",lane: "harness", col: 0, name: "Question",        desc: "+ readings",            llm: true,  sources: ["ambigqa"], ours: "one reading per interpretation", oursTitle: "AmbigQA-style: one grounded reading per interpretation, scored as a set" },
+  { id: "question",lane: "harness", col: 0, name: "Question",        desc: "+ readings",            llm: true,  sources: ["ambigqa"], ours: "grounded readings", oursTitle: "AmbigQA-style: one grounded reading per interpretation, scored as a set" },
   { id: "retrieve",lane: "harness", col: 1, name: "Retrieve",        desc: "search the corpus",     llm: false, sources: ["mcp"], ours: "agent research" },
   { id: "schema",  lane: "harness", col: 2, name: "Schema",          desc: "terms for the answer",  llm: true,  ours: "per-question schema" },
   { id: "edc",     lane: "harness", col: 3, name: "EDC",             desc: "extract · define · map",llm: true,  sources: ["edc"] },
@@ -178,7 +227,409 @@ const LINKS = [
   ["key",   "match",    "gold"],
 ];
 
-const FOOTER = "Blue chips: an idea taken from a paper. Grey chips: a tool, dataset or protocol used as is. Green chips: our own contribution. Hover a chip to see the full reference and its row below.";
+const FOOTER = "Blue chips: an idea taken from a paper. Grey chips: a tool, dataset or protocol used as is. Green chips: our own contribution. Click a box, chip or reference for details (Esc closes); a link ending in #stage=edc or #source=edc opens that panel directly.";
+
+/* ---- STAGE_DETAILS / SOURCE_DETAILS: what the panel shows when a box, chip or lane is clicked -------------------------
+   STAGE_DETAILS: one entry per STAGES id (plus "paths" for the lane chip). SOURCE_DETAILS: one per SOURCES key. Every field is optional:
+     what      one or two sentences: what this is
+     how       bullet list: how it works in our system
+     io        [input, output]
+     example   a short worked example
+     ours      what in this step is our own contribution
+     differs   (sources) where we deviate from the paper; (stages) known limits
+     settings  settings that change it (name: what it does)
+     code      files where it lives
+   ---------------------------------------------------------------------------------------------- */
+const STAGE_DETAILS = {
+  // ---------------------------------------------------------------- Corpus
+  papers: {
+    what: "The fixed set of research papers every question is answered from. The corpus never changes during an experiment, so every path and every repetition sees exactly the same papers.",
+    how: [
+      "337 papers, all verified against DBLP: 37 original papers, 150 ACL 2025 long papers and 150 EMNLP 2025 main papers.",
+      "Each paper also brings its DBLP facts (title, authors, venue, year) and its reference list (about 18,000 references).",
+      "Corpus-wide questions (\"which benchmarks do the RAG papers use?\") need many papers at once; that is the hard case the thesis is about.",
+    ],
+    io: ["PDF files + DBLP records", "the paper set the rest of the pipeline reads"],
+    code: ["corpus_data/ (papers.jsonl, passages.jsonl, facts.jsonl, references.jsonl)", "packages/corpus/src/harness_corpus/ingest.py"],
+  },
+  parse: {
+    what: "Turns each PDF into clean, addressable text: passages with their section, plus the reference list.",
+    how: [
+      "GROBID converts the PDF to TEI XML: title, sections, paragraphs, references.",
+      "Every paragraph becomes a passage with a stable id (e.g. p97-12) and its section path, so every later fact can cite the exact passage it came from.",
+      "References are resolved against the corpus where possible, giving citation links between papers.",
+    ],
+    io: ["PDF", "passages (id, paper, section, text) + references"],
+    ours: "Stable passage ids are the backbone of provenance: every triple, answer sentence and gold fact points to one.",
+    code: ["packages/corpus/src/harness_corpus/ingest.py", "make ingest / make ingest-slurm"],
+  },
+  index: {
+    what: "Search indexes over all passages, so a question can find the passages that talk about it.",
+    how: [
+      "BM25 (bm25s, Lucene variant, k1 = 1.5, b = 0.75, lowercase words, English stopwords, no stemming).",
+      "Optional dense index: passage embeddings from Qwen3-Embedding, L2-normalised; queries get the model's instruction prefix.",
+      "Hybrid ranking fuses the BM25 list and the dense list with Reciprocal Rank Fusion (k = 60, lists 1000 deep).",
+      "Lexical and hybrid mode use the same candidates and the same top-k cut-off; the mode only decides whether the dense list joins the fusion, so the two can be compared cleanly.",
+      "An optional reranker reorders the top 30 in either mode.",
+    ],
+    io: ["passages", "ranked passages for any query"],
+    settings: ["HARNESS_RETRIEVAL_MODE: lexical (BM25) or hybrid (BM25 + dense)", "HARNESS_MODEL_EMBEDDING: the embedding model (make embed builds the dense index)", "HARNESS_MODEL_RERANK: a served reranker, empty = none"],
+    code: ["packages/corpus/src/harness_corpus/store.py (hybrid_rank)", "packages/corpus/src/harness_corpus/dense.py (rrf)"],
+  },
+  onto: {
+    what: "The vocabulary facts are written in: which kinds of things exist (classes) and which relations may link them (properties).",
+    how: [
+      "DBLP schema for bibliographic facts: authoredBy, publishedIn, yearOfPublication, cites, …",
+      "A subset of CS-KG 2.0 for research content: uses / usedBy, evaluatesOn, … (hrn:uses is declared equivalent to cskg:uses).",
+      "Our own hrn: terms for what neither covers (e.g. addressesProblem, evaluatesAttack).",
+      "Written in OWL 2 (domains, ranges, sub-properties, inverses). The scorer closes it with an OWL 2 RL reasoner (owlrl) so it knows, e.g., that \"X uses Y\" states the same fact as \"Y usedBy X\".",
+    ],
+    io: ["DBLP schema + CS-KG subset + harness terms", "one ontology used by extraction, the answer graph and scoring"],
+    code: ["packages/semantic (hand_written_subschema)", "seed/cskg_ontology_2.0_subset.ttl", "datasets/ontology/predicate_relations.ttl (extra rules)"],
+  },
+
+  // ---------------------------------------------------------------- Research harness
+  question: {
+    what: "Understanding the question before any search: what kind of question is it, which papers does it name, and (Agentic) which readings could it have.",
+    how: [
+      "Fast and Adaptive: a query planner (one LLM call) turns the question into a typed plan: an operation such as paper_authors, citing_papers or author_paper_counts that is answered from verified DBLP facts, or \"research\" (full-text research); plus the papers it names, resolved to corpus ids. `make eval-planner` checks it on 32 phrasings.",
+      "Agentic: concept readings. The model first decides whether the question is ambiguous: one reading if not, up to 4 if it is (\"best author\" = most papers? most cited?). Each reading has a label, a gloss, classes and search terms, and is checked against the corpus: readings with no supporting passage are hidden.",
+      "In the UI the person picks a reading. In evaluation runs every grounded reading is researched (one run each) and the runs are scored together as one answer.",
+    ],
+    io: ["question text", "a typed plan, or 1–4 grounded readings"],
+    example: "\"Who is the best author in the corpus?\" → readings \"most papers in the corpus\" and \"most cited by corpus papers\"; \"Which benchmarks do the RAG papers evaluate on?\" → one reading.",
+    ours: "Readings are grounded in the corpus before research starts, and the answer states the measure it used, so an ambiguous question is never silently answered under one interpretation.",
+    settings: ["READINGS_MIN / READINGS_MAX (default 1 / 4)", "HARNESS_HIDE_UNGROUNDED_READINGS"],
+    code: ["packages/baseline/src/harness_baseline/planner.py", "packages/agent/src/harness_agent/concepts.py"],
+  },
+  retrieve: {
+    what: "Finding the passages that can answer the question. This is where the four paths differ most.",
+    how: [
+      "Fast: boolean word search rounds plus BM25 / hybrid ranking; reads the top 20 passages.",
+      "Adaptive: the same, plus phrase queries; then a paper-diverse budget of 16 passages.",
+      "Agentic: an LLM agent researches first. It calls corpus tools over MCP (search, grep, BM25 rank, DBLP facts, citations, tables, aggregate counts, read passages), records findings, and hands its passages to the pipeline (up to 24).",
+      "Agent guards: a hard budget of 12 tool calls, a cap on turns, repeated calls answered from a ledger, old tool results compacted into a digest that keeps every id, one correction if its final decision cites ids no tool returned.",
+      "External: mini-SWE-agent with a bash shell and read-only corpus commands (its own SQLite FTS5 search).",
+      "Mode B (input = D): no search at all; the path picks from the evidence document's triples instead.",
+    ],
+    io: ["question + plan or reading", "a ranked set of passages (with ids)"],
+    ours: "The agentic research loop: its tools, budget, ledger and the hand-off of grounded passage ids to the extraction pipeline.",
+    settings: ["BASELINE_RETRIEVE_K (20)", "HARNESS_ADAPTIVE_MAX_PASSAGES (16) / HARNESS_AGENTIC_MAX_PASSAGES (24)", "HARNESS_AGENT_MAX_TOOL_CALLS (12)"],
+    code: ["packages/baseline/src/harness_baseline/retrieval.py", "packages/agent/src/harness_agent/tool_loop.py", "packages/mcp_corpus (the MCP server)"],
+  },
+  schema: {
+    what: "Choosing the vocabulary for this question's answer: which classes and relations of the ontology the facts should use.",
+    how: [
+      "One LLM call reads the question and the retrieved passages and selects the classes and properties the answer needs (focused), or the whole topic (broad).",
+      "It may add a new class as a subclass of an existing one, so the graph stays valid OWL.",
+      "Extraction (next step) maps every fact onto this schema.",
+    ],
+    io: ["question + passages + full ontology", "a per-question subschema"],
+    ours: "A schema chosen per question instead of one fixed schema for the whole corpus.",
+    settings: ["HARNESS_SCHEMA_SCOPE: focused or broad", "HARNESS_SCHEMA_NEW_CLASSES"],
+    code: ["packages/extraction/src/harness_extraction/stage_schema.py"],
+  },
+  edc: {
+    what: "Turning passage text into knowledge-graph triples (subject, relation, object), each tied to the passage it came from. Follows the three steps of EDC: Extract, Define, Canonicalize.",
+    how: [
+      "Extract: the LLM writes open triples from a batch of 2 passages, in its own words, each with its passage id and an evidence quote.",
+      "Define: the LLM writes a one-line definition for each relation phrase it used.",
+      "Canonicalize (map): for every triple, word similarity proposes the 3 closest schema relations; one LLM call per batch then chooses a relation or \"none\", seeing the subject, object, each candidate's domain and range, and the whole catalog. Direction and meaning must match (\"underperforms\" is not \"outperforms\").",
+      "A relation about papers is used only when the subject really is the paper; otherwise the triple is rejected rather than rewritten.",
+      "A triple whose relation fits nothing is dropped, or kept as a new relation (a typed sub-property), depending on the setting.",
+    ],
+    io: ["passages + subschema", "canonical triples with source ids"],
+    example: "Passage: \"MethodX is evaluated on BenchY.\" → open (MethodX, evaluated on, BenchY) → definition \"tests a method on a dataset\" → mapped to evaluatesOn → MethodX evaluatesOn BenchY [p97-3].",
+    differs: [
+      "Candidates come from word similarity, not from embeddings of the definitions; the LLM then chooses over the full catalog.",
+      "Define sees only the relation phrases, not their passages.",
+      "New relations are merged only when their names are identical (no self-canonicalization merging), and there is no EDC+R refinement loop.",
+      "Batches of 1–2 passages instead of single sentences; Extract is zero-shot by default.",
+    ],
+    settings: ["HARNESS_EDC_BATCH_PASSAGES (2)", "HARNESS_MAP_LEXICAL_MIN (0.42) / HARNESS_MAP_MODEL_MIN (0.7)", "HARNESS_UNMAPPED_RELATIONS: drop or keep"],
+    code: ["packages/extraction/src/harness_extraction/stage_extract.py (extract_edc)", "prompts: extraction/edc_extract, edc_define, edc_map"],
+  },
+  review: {
+    what: "A second LLM reads each extracted triple next to its passage and decides: keep or drop.",
+    how: [
+      "Keeps a triple only if its passage supports it and it helps answer the question; every drop gets a reason.",
+      "Batches of 24 triples per call, sized to fit the model's context window.",
+      "Runs on Adaptive and Agentic; with D as input it also runs on Fast (otherwise every triple of D would be its answer).",
+    ],
+    io: ["candidate triples + their passages", "kept triples (+ drop reasons)"],
+    ours: "Evidence review as a separate, cheaper check between extraction and answering.",
+    settings: ["HARNESS_MODEL_JUDGE (the reviewer model)", "HARNESS_EVIDENCE_DOC_BATCH (24)"],
+    code: ["packages/extraction/src/harness_extraction/stage_review.py"],
+  },
+  answer: {
+    what: "Writing the answer from the kept triples only, with every sentence citing its source passages, then checking it.",
+    how: [
+      "SPARQL over the run's own graph collects the answering facts; the LLM composes the text from them, citing passage ids.",
+      "Verification (Adaptive, Agentic): a verifier keeps only sentences supported by the cited triples; if none survive, one bounded repair, else the run reports no supported answer.",
+      "Large evidence is split into batches that fit the context window and the batch answers are joined, each sentence with its own sources.",
+      "Agentic adds an independent verifier: a fresh context (by default a different model) that judges each cited item; advisory only.",
+    ],
+    io: ["kept triples + passages", "a cited answer"],
+    ours: "Answers built only from verified triples, sentence-level citations, and the batch answering that keeps large evidence within the window.",
+    settings: ["HARNESS_MODEL_CONTEXT_TOKENS (32,768)", "HARNESS_ANSWER_BATCH_CONCURRENCY / HARNESS_ANSWER_MAX_BATCHES"],
+    code: ["packages/extraction/src/harness_extraction/stage_answer.py", "packages/agent/src/harness_agent/verification.py"],
+  },
+  graph: {
+    what: "The run's result as one connected graph: the answer plus exactly the facts and passages it rests on.",
+    how: [
+      "One node per paper, author or value, so three papers by the same author meet at one author node.",
+      "Solid edges are source facts (click: source id and evidence), dotted edges lead to passages, dashed boxes are values the harness computed (\"3 distinct papers\") and point to the facts they were computed from.",
+      "The DBLP backbone adds authors, venue and citations of the answer's papers.",
+      "These triples are what evaluation scores.",
+    ],
+    io: ["answer + kept triples", "answer graph (run.json → readings[].triples)"],
+    ours: "A provenance-complete answer graph: every edge traceable to a passage or a verified DBLP fact.",
+    settings: ["HARNESS_GRAPH_LINKING", "HARNESS_DBLP_BACKBONE"],
+    code: ["packages/baseline/src/harness_baseline/outcomes.py", "packages/baseline/src/harness_baseline/backbone.py"],
+  },
+
+  // ---------------------------------------------------------------- Evaluation
+  runs: {
+    what: "Every path answers every gold question several times, in one of two modes, and each run is stored with everything needed to score it.",
+    how: [
+      "Mode A (input = corpus): the normal way; the path searches the papers itself. Measures finding + extracting + choosing + answering.",
+      "Mode B (input = D): the path gets the question's evidence document D and only has to pick and answer. Measures choosing + answering, from the same triples for every path.",
+      "Comparing A and B separates \"did not find it\" from \"found it but did not choose it\".",
+      "Runs are stamped with an evaluation snapshot (corpus, ontology and index versions) so they are only compared with matching gold.",
+      "A failed or degraded attempt scores 0, it is not dropped; coverage (answered / attempted) is reported next to it.",
+    ],
+    io: ["gold questions × 4 paths × repetitions", "runs (artifacts/<run id>/run.json)"],
+    ours: "Mode B: the evidence document as a run input.",
+    settings: ["HARNESS_RUN_INPUT: corpus or evidence_doc", "make benchmark-runs ARGS=\"--ids nlp33 --input evidence_doc\""],
+    code: ["scripts/run_benchmark.py", "docs/RUN_INPUT.md"],
+  },
+  match: {
+    what: "Deciding which of a run's triples state a gold fact. Done at three levels, from strict to lenient, all reported.",
+    how: [
+      "Strict: identical after normalising case, spacing, DBLP links, author names and relation aliases.",
+      "Entailed: one triple logically implies the other under the ontology's rules (sub-relations, inverses, symmetric relations, class hierarchy, same-as, domains and ranges). Direction matters: a more specific run triple recovers the gold fact (recall) but the gold does not vouch for its extra detail (precision).",
+      "Soft: also accepts reviewers' alternative wordings (variants) and, for what the rules leave unmatched, an LLM judge asked \"do these two triples state the same fact?\". Verdicts are cached per judge model and prompt version.",
+      "Counting is one-to-one over facts: triples that say the same thing (\"X uses Y\" / \"Y usedBy X\") count once, and one gold fact is never credited twice.",
+      "DBLP triples the question did not ask about (e.g. extra authors) are not scored (locally closed).",
+    ],
+    io: ["run triples + gold triples", "matched / missed / extra triples per level"],
+    example: "Gold: \"MethodX evaluatesOn BenchY\". Run: \"BenchY usedBy MethodX\" → not strict, but entailed if evaluatesOn ⊑ uses (inverse of usedBy).",
+    differs: ["One-to-one matching is stricter than Euzenat's set-based definition: one run triple that implies two gold facts recovers one.", "The judge only compares triples about the same subject."],
+    code: ["packages/evaluation/src/harness_evaluation/matching.py", "relations.py (the rules)", "judge.py (cached judge)"],
+  },
+  scores: {
+    what: "The numbers per run: precision, recall and F1 at each matching level, plus measures that say what kind of answer it is.",
+    how: [
+      "Precision = run facts credited ÷ run facts; recall = gold facts recovered ÷ gold facts; F1 combines them.",
+      "Vital recall: recall over the gold facts reviewers marked vital (\"without this, the answer misses the point\").",
+      "Judged precision: share of run triples known to be correct (matched, or rejected by reviewers), with its coverage; the gold is incomplete, so unmatched is not always wrong.",
+      "DBLP part and invented part reported separately.",
+      "Ambiguous questions: scored against all accepted readings together (set F1), with recall per reading.",
+    ],
+    io: ["matches", "P / R / F1 (strict, entailed, soft), vital recall, judged precision"],
+    code: ["packages/evaluation/src/harness_evaluation/matching.py (score_levels)", "__init__.py (evaluate_gold_row)"],
+  },
+  results: {
+    what: "The final comparison: how well each path does, split by how complex the questions are, with honest uncertainty.",
+    how: [
+      "Repetitions are averaged per question first; every question then counts once (macro average).",
+      "95% intervals by BCa bootstrap over questions; differences between paths are paired on the same questions, with a sign-flip permutation p-value.",
+      "Complexity levels (simple / compound / complex) come from a fixed rule on the gold answer: how many papers it needs, how many operations, and whether the question is ambiguous.",
+      "Shown on the Benchmark page and by `make evaluate`.",
+    ],
+    io: ["per-run scores", "complexity × path table with intervals"],
+    ours: "The complexity rule and the path comparison (Fast vs Adaptive vs Agentic vs External, corpus vs D).",
+    code: ["packages/evaluation/src/harness_evaluation/benchmark.py", "stats.py", "scripts/evaluate.py"],
+  },
+
+  // ---------------------------------------------------------------- Gold standard
+  screen: {
+    what: "For each question, decide which papers are relevant at all, before any facts are extracted.",
+    how: [
+      "A reader (one LLM call per paper) sees the paper's 10 best-matching passages and says relevant or not, with findings.",
+      "Every paper gets a coverage row: relevant, not relevant, or error, so it is visible what was looked at.",
+      "A trial build (--max-papers N) screens only the N papers our search ranks highest for the question; the real build screens all 337.",
+      "Screening check: a random sample of papers marked not relevant (5 per question) goes to people, giving the miss rate of screening with an interval.",
+    ],
+    io: ["question + every paper", "coverage rows (relevant / not relevant)"],
+    settings: ["HARNESS_DOC_SCREEN_PASSAGES (10)", "HARNESS_DOC_MAX_PAPERS (0 = all)", "HARNESS_DOC_SCREENING_SAMPLE (5)"],
+    code: ["labelling: src/labelling/evidence_doc.py", "labelling screening-sample / screening-report"],
+  },
+  extract: {
+    what: "Extract the facts of every relevant paper for the question, with the same EDC extraction the harness uses.",
+    how: [
+      "Per relevant paper: the passages the reader cited plus the 12 passages our ranker scores highest for the question (or every passage).",
+      "EDC with the exhaustive profile: one passage per batch, unmapped relations kept as new relations.",
+      "Run once per interpretation for ambiguous questions.",
+    ],
+    io: ["relevant papers", "triples with source passages"],
+    differs: ["Which passages are read is decided by our own ranker, so D can share the harness's retrieval bias; HARNESS_DOC_EXTRACT_PASSAGES=0 extracts every passage to avoid that."],
+    settings: ["HARNESS_DOC_EXTRACT_PASSAGES (12; 0 = every passage)"],
+    code: ["labelling: src/labelling/evidence_doc.py"],
+  },
+  D: {
+    what: "The evidence document D: for one question, everything the corpus says that could answer it, built once, offline, and independent of the runs it later scores.",
+    how: [
+      "Contents: the question's interpretations, the schema, a coverage row per paper, every extracted triple with its passage and evidence, and claims.",
+      "Two uses: (1) reviewed, its triples become the answer key; (2) as the input of run mode B.",
+      "Stored as evidence_docs/<question id>/doc.json, with a readable doc.md.",
+      "Builder settings and versions are recorded in it, so a D can be reproduced.",
+    ],
+    io: ["screening + extraction", "doc.json / doc.md per question"],
+    example: "nlp33 \"Which benchmarks and datasets do the indexed RAG papers evaluate on?\" → D lists, per relevant paper, triples such as (paper, evaluatesOn, BenchY) with the passage they come from.",
+    ours: "The supervisor's idea: one exhaustive document per question instead of pooling the compared systems' outputs.",
+    settings: ["make evidence-docs ARGS=\"--only nlp33\"", "HARNESS_EVIDENCE_DOC_ROOT (where the harness finds D)"],
+    code: ["labelling: src/labelling/evidence_doc.py, docs/EVIDENCE_DOCS.md"],
+  },
+  triage: {
+    what: "A model sorts every triple of D into answers / context / irrelevant, so people review the right ones first. Triage orders the review; it never decides the gold.",
+    how: [
+      "People review every \"answers\" and \"context\" triple, plus 50 random others per question.",
+      "From that random sample, the number of answering triples triage missed is estimated with a 95% Wilson interval, and so is the recall of the reviewed tiers.",
+      "Before the review is done, a draft answer key can be made from triage alone (marked draft; not reported).",
+    ],
+    io: ["D's triples", "tiers + a random sample for review"],
+    ours: "Stratified review with a measured miss rate instead of reviewing thousands of triples.",
+    code: ["labelling: src/labelling/triage.py", "make triage / make draft"],
+  },
+  human: {
+    what: "People decide what the gold is, in Argilla.",
+    how: [
+      "Each record: keep, drop, or partly right with a fix; mark vital facts; type other correct wordings (variants); add missing facts.",
+      "20% of questions are reviewed by two people independently; their agreement is Cohen's κ, taken from a snapshot before any discussion.",
+      "Disagreements are settled by a third person.",
+      "The LLM judge is checked the same way: people label a sample of its decisions; the judge is used for soft scores only if the (population-weighted) κ ≥ 0.61.",
+    ],
+    io: ["triaged triples", "reviewed triples"],
+    code: ["labelling: src/labelling/argilla_io.py, gold.py", "guidelines/annotation.md"],
+  },
+  key: {
+    what: "The answer key: per question, the gold triples a run is scored against.",
+    how: [
+      "Each gold triple: weight (vital or okay), its passages, accepted variants, and reviewer-rejected alternatives (used for judged precision).",
+      "Ambiguous questions: one set of gold triples per accepted reading.",
+      "The same fact found in two passages is one gold triple listing both passages.",
+      "Installed into the harness (datasets/gold/candidates.jsonl) and frozen; later harness changes only rerun the evaluation.",
+    ],
+    io: ["reviewed triples", "gold rows (gold-v1.jsonl)"],
+    code: ["labelling: src/labelling/gold.py", "make export / make install"],
+  },
+
+  // ---------------------------------------------------------------- Lane chips
+  paths: {
+    title: "The four paths",
+    what: "Four ways to answer the same question, compared on the same gold.",
+    how: [
+      "Fast: plan → search → extract → answer. One pass, no review.",
+      "Adaptive: Fast plus phrase queries, evidence review, answer verification and a paper-diverse passage budget. (The name does not mean the Adaptive-RAG method.)",
+      "Agentic: concept readings, then an LLM agent researches with corpus tools (MCP) and hands its passages to the same extraction and answer pipeline; an independent verifier checks the result.",
+      "External: an independent baseline, mini-SWE-agent with a bash shell and corpus commands; it writes its answer triples directly.",
+    ],
+    ours: "Fast, Adaptive and Agentic are ours; External is the outside reference point.",
+  },
+
+};
+
+const SOURCE_DETAILS = {
+  grobid: {
+    what: "A machine-learning tool that turns scientific PDFs into structured XML (header, sections, paragraphs, references).",
+    how: ["Used as is to parse every corpus PDF into passages and references."],
+  },
+  bm25: {
+    what: "The classic probabilistic ranking function: a passage scores higher the more often it contains rare query words, normalised by its length.",
+    how: ["All lexical search in the harness: ranking passages, the agent's BM25 tool, and the BM25 half of hybrid ranking."],
+    differs: ["Standard parameters (Lucene variant, k1 = 1.5, b = 0.75), no stemming. The External baseline uses SQLite FTS5 with Porter stemming, so their search differs by design."],
+  },
+  rrf: {
+    what: "Reciprocal Rank Fusion: combine several rankings by summing 1 / (60 + rank) for each document; robust and needs no score calibration.",
+    how: ["Fuses the BM25 and dense rankings in hybrid mode (k = 60, ranks from 1, lists 1000 deep as in the paper)."],
+  },
+  dblp: {
+    what: "The computer-science bibliography as a knowledge graph: papers, authors, venues, years and citations, with an RDF schema.",
+    how: ["Verified metadata facts for every corpus paper, the bibliographic part of the ontology, and the backbone of each answer graph."],
+  },
+  cskg: {
+    what: "CS-KG 2.0: a large knowledge graph of computer-science research entities (methods, tasks, datasets, metrics) and their relations, with an ontology.",
+    how: ["A subset of its ontology is the content core of our schema (uses / usedBy, …); its inverses are used by the scorer."],
+  },
+  ambigqa: {
+    what: "Many questions have several valid interpretations. AmbigQA first decides whether a question is ambiguous, then answers each interpretation; an answer is a set of (interpretation, answer) pairs scored by F1 against all interpretations.",
+    how: [
+      "Agentic readings: one reading for an unambiguous question, several for an ambiguous one.",
+      "Evaluation: an ambiguous question is scored against all accepted readings at once (set F1), so answering more valid readings scores higher; recall per reading is reported.",
+      "Gold: one answer key per accepted reading.",
+    ],
+    differs: ["A reading is a grounded concept (label, gloss, search terms), not a rewritten question; each reading is researched in its own run and the runs are scored together."],
+  },
+  edc: {
+    what: "Extract, Define, Canonicalize: LLM-based knowledge-graph construction in three steps: extract open triples, define each relation in natural language, canonicalize relations onto a schema (retrieve similar schema relations by embedding the definitions, the LLM verifies).",
+    how: ["The harness's extraction step and the extraction of the evidence document D."],
+    differs: [
+      "Candidate relations come from word similarity; the LLM chooses over the whole catalog (no definition embeddings, no trained retriever).",
+      "Define sees relation phrases without their passages; no EDC+R refinement; new relations merge only by identical name.",
+    ],
+  },
+  mcp: {
+    what: "Model Context Protocol: a standard way for an LLM agent to call tools served by a separate server.",
+    how: ["The Agentic path's corpus tools (search, read, facts, citations, aggregates, …) are served over MCP, and every call is logged."],
+  },
+  sweagent: {
+    what: "SWE-agent showed that the interface an agent uses (its commands and their output) shapes how well it works; mini-SWE-agent is its minimal version: one bash tool, a plain linear history, nothing else.",
+    how: ["The External baseline: mini-SWE-agent 2.4.6's agent loop, unchanged, with read-only corpus commands (kbsearch, kbdoc, kbcheck). Because the scaffold is minimal, differences come from the method, not from engineering."],
+    differs: ["Our own prompts, environment (optional bubblewrap sandbox) and limits (30 model calls, 900 s), not the SWE-bench leaderboard configuration."],
+  },
+  zobel: {
+    what: "Gold built by pooling the outputs of the compared systems is biased towards those systems; systems outside the pool look worse.",
+    how: ["Why the gold is built from an evidence document D made before and independently of the runs, instead of from the runs' outputs."],
+    differs: ["D is built with the harness's own extraction and ranker, so some bias remains; the screening check and the option to extract every passage limit it."],
+  },
+  argilla: {
+    what: "An open-source annotation tool.",
+    how: ["All human review: D's triples, the overlap set for agreement, missing facts, the screening check and the judge check."],
+  },
+  kappa: {
+    what: "Cohen's κ: agreement between two raters corrected for the agreement expected by chance. 0.61–0.80 is \"substantial\" (Landis & Koch).",
+    how: ["Agreement between the two reviewers on the overlap set; agreement between people and the LLM judge (weighted back to the real yes/no mix, because the judge sample is balanced)."],
+  },
+  benchie: {
+    what: "Facts can be worded in many correct ways; BenchIE groups all acceptable wordings of a fact (a fact synset) so a correct extraction is not counted wrong.",
+    how: ["Reviewers type accepted variants for gold triples; a run triple equal to a variant matches at the soft level."],
+    differs: ["Variants are partial (two or three typical wordings), not exhaustive synsets."],
+  },
+  webnlg: {
+    what: "The WebNLG+ 2020 text-to-RDF challenge evaluated generated triples at several matching levels (exact, partial, strict, type) side by side.",
+    how: ["The idea of reporting several matching levels (strict, entailed, soft) together, so the reader sees how much is wording."],
+  },
+  text2kg: {
+    what: "A benchmark for ontology-driven knowledge-graph generation. Its gold is \"locally closed\": a generated triple is only judged if its relation appears in the gold for that sentence.",
+    how: ["Locally closed scoring of DBLP triples: true but unrequested metadata (e.g. extra authors) is not counted as an error."],
+    differs: ["Applied to DBLP relations only; invented relations are always scored, because they carry the system's real claims."],
+  },
+  euzenat: {
+    what: "Semantic precision and recall: compare two sets of statements by what they logically imply, not by their wording. Recall counts gold facts implied by the output; precision counts output facts implied by the gold.",
+    how: ["The entailed level, using the ontology's RDFS/OWL rules; triples that imply each other count as one fact."],
+    differs: ["Credit is one-to-one (one run fact recovers at most one gold fact); Euzenat's definition is set-based."],
+  },
+  judge: {
+    what: "Using a strong LLM to judge outputs; it agrees with people on many tasks but must be validated per task and can favour its own style.",
+    how: ["The soft level asks an LLM \"do these two triples state the same fact?\" for pairs the rules leave unmatched; answers are cached, and the judge is checked against people (κ ≥ 0.61) before its verdicts are reported."],
+  },
+  trec: {
+    what: "The TREC 2024 RAG track scores answers by \"nuggets\" (atomic facts), with vital nuggets weighted as essential.",
+    how: ["Vital recall: recall over the gold facts reviewers marked vital."],
+    differs: ["Binary match, i.e. the track's strict vital score (partial support earns nothing)."],
+  },
+  adaptive: {
+    what: "Adaptive-RAG: questions differ in complexity; a small trained classifier routes each question to no retrieval, single-step or multi-step retrieval.",
+    how: ["The idea that results should be broken down by question complexity: the results table is complexity × path."],
+    differs: ["We use a fixed, explainable complexity rule on the gold answer instead of a trained classifier, and the harness does not route questions by complexity (the Adaptive path is a different design despite its name)."],
+  },
+  bootstrap: {
+    what: "Resampling the questions many times to estimate how much a mean could vary: an honest confidence interval with few questions.",
+    how: ["95% BCa intervals over questions for every reported mean, and for paired differences between paths (with a sign-flip permutation p-value)."],
+  },
+};
+
 
 /* ============================== drawing (no edits needed below) ============================== */
 const LABEL_W = 250, COL_W = 200, NODE_W = 178, NODE_H = 86, CHIP_H = 22, CHIP_GAP = 5, TOP = 14, FLAG_H = 46;
@@ -197,7 +648,7 @@ function chipsOf(s) {
     if (!src) { console.warn("unknown source", key); return null; }
     return { kind: src.kind, text: src.short, title: src.cite, key };
   }).filter(Boolean);
-  if (s.ours) out.push({ kind: "ours", text: s.ours, title: `Our contribution: ${s.oursTitle || s.ours}` });
+  if (s.ours) out.push({ kind: "ours", text: s.ours, title: `Our contribution: ${s.oursTitle || s.ours}`, ours: s.id });
   return out;
 }
 const stackHeight = n => n ? 8 + n * CHIP_H + (n - 1) * CHIP_GAP : 0;
@@ -229,12 +680,13 @@ function fitText(text, maxWidth, size, min = 10) {
 }
 
 function chip(parent, x, y, w, c) {
-  const g = el("g", { class: "chip", "data-key": c.key || "" }, parent);
+  const g = el("g", { class: "chip", "data-key": c.key || "", "data-ours": c.ours || "", tabindex: 0, role: "button",
+                      "aria-label": `${c.text}: details` }, parent);
   el("rect", { x, y, width: w, height: CHIP_H, rx: CHIP_H / 2, class: `chip-${c.kind}` }, g);
   const t = el("text", { x: x + w / 2, y: y + 15.5, "text-anchor": "middle", class: `chip-text ct-${c.kind}` }, g);
   t.textContent = c.text;
   fitText(t, w - 12, 12.5, 9);
-  el("title", {}, g).textContent = c.title;
+  el("title", {}, g).textContent = `${c.title} (click for details)`;
   return g;
 }
 
@@ -277,7 +729,7 @@ function draw() {
     el("text", { x: 22, y: y + 82, class: "lane-sub" }, svg).textContent = lane.sub || "";
     (lane.sources || []).forEach((src, k) => {
       const c = src.ours
-        ? { kind: "ours", text: src.ours, title: `Our contribution: ${src.ours}` }
+        ? { kind: "ours", text: src.ours, title: `Our contribution: ${src.ours}`, ours: "paths" }
         : { kind: SOURCES[src.key].kind, text: src.label || SOURCES[src.key].short, title: SOURCES[src.key].cite, key: src.key };
       chip(svg, 22, y + 96 + k * (CHIP_H + CHIP_GAP), LABEL_W - 40, c);
     });
@@ -322,7 +774,7 @@ function draw() {
   // stages
   for (const s of STAGES) {
     const { x, y, chips } = pos[s.id];
-    const g = el("g", {}, nodeLayer);
+    const g = el("g", { class: "stage", "data-stage": s.id, tabindex: 0, role: "button", "aria-label": `${s.name}: details` }, nodeLayer);
     if (s.current) el("rect", { x, y, width: NODE_W, height: NODE_H, rx: 12, class: "pulse" }, g);
     el("rect", { x, y, width: NODE_W, height: NODE_H, rx: 12, class: `node${s.current ? " now" : ""}` }, g);
     const name = el("text", { x: x + NODE_W / 2, y: y + 38, "text-anchor": "middle", class: "name" }, g);
@@ -333,7 +785,7 @@ function draw() {
     fitText(desc, NODE_W - 16, 14, 11);
     if (s.llm) llmIcon(g, x + NODE_W - 6, y + 6, 15);
     if (s.people) peopleIcon(g, x + NODE_W - 6, y + 6, 15);
-    el("title", {}, g).textContent = `${s.name}: ${s.desc || ""}${s.llm ? " · LLM calls" : ""}${s.people ? " · people" : ""}`;
+    el("title", {}, g).textContent = `${s.name}: ${s.desc || ""}${s.llm ? " · LLM calls" : ""}${s.people ? " · people" : ""} (click for details)`;
     chips.forEach((c, k) => chip(nodeLayer, x + 6, y + NODE_H + 8 + k * (CHIP_H + CHIP_GAP), NODE_W - 12, c));
     if (s.current) {
       const fx = x + NODE_W / 2, fy = pos[s.id].bottom + 16;
@@ -380,6 +832,161 @@ function references() {
   });
 }
 
+/* ============================== details panel (no edits needed) ============================== */
+const LANE_NAME = Object.fromEntries(LANES.map(l => [l.id, l.name]));
+const KIND_LABEL = { paper: "Idea from a paper", tool: "Tool or data", ours: "Our contribution" };
+const STAGE_BY_ID = Object.fromEntries(STAGES.map(s => [s.id, s]));
+const panelHistory = [];
+let lastFocus = null;
+
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v; else if (k.startsWith("on")) node.addEventListener(k.slice(2), v); else node.setAttribute(k, v);
+  }
+  for (const c of children.flat()) if (c != null && c !== false) node.append(c);
+  return node;
+}
+// `code like this` inside the text becomes <code>
+function rich(text) {
+  return String(text).split(/(`[^`]+`)/).map(part => part.startsWith("`") && part.endsWith("`") ? h("code", {}, part.slice(1, -1)) : part);
+}
+const section = (title, ...body) => h("section", {}, h("h4", {}, title), ...body);
+const list = (items, cls) => h("ul", cls ? { class: cls } : {}, (items || []).map(i => h("li", {}, rich(i))));
+const sourceButton = key => h("button", { class: `k-${SOURCES[key].kind}`, type: "button", onclick: () => openDetails("source", key) }, SOURCES[key].short);
+const stageButton = id => h("button", { class: "l-stage", type: "button", onclick: () => openDetails("stage", id) }, STAGE_BY_ID[id] ? STAGE_BY_ID[id].name : id);
+
+function stageNeighbours(id) {
+  const s = STAGE_BY_ID[id];
+  if (!s) return { before: [], after: [] };
+  const row = STAGES.filter(x => x.lane === s.lane).sort((a, b) => a.col - b.col);
+  const i = row.indexOf(s);
+  const before = [...(i > 0 ? [row[i - 1].id] : []), ...LINKS.filter(l => l[1] === id).map(l => l[0])];
+  const after = [...(i + 1 < row.length ? [row[i + 1].id] : []), ...LINKS.filter(l => l[0] === id).map(l => l[1])];
+  return { before, after };
+}
+
+function renderStage(id) {
+  const s = STAGE_BY_ID[id];
+  const d = STAGE_DETAILS[id] || {};
+  const body = [];
+  const kind = h("div", { class: "panel-kind" },
+    h("b", { class: "key-chip k-tool" }, s ? `${LANE_NAME[s.lane]} · step ${STAGES.filter(x => x.lane === s.lane && x.col <= s.col).length}` : "Research harness"),
+    s && s.llm ? h("span", { class: "badge b-llm" }, "LLM calls") : null,
+    s && s.people ? h("span", { class: "badge b-people" }, "People") : null,
+    s && s.current ? h("span", { class: "badge b-now" }, "Currently working here") : null);
+  body.push(kind, h("h3", {}, d.title || (s ? s.name : id)));
+  if (s && s.desc) body.push(h("p", { class: "lead" }, s.desc));
+  if (d.what) body.push(section("What it is", h("p", {}, rich(d.what))));
+  if (d.how) body.push(section("How it works here", list(d.how)));
+  if (d.io) body.push(section("Input → output", h("div", { class: "io" }, h("div", {}, rich(d.io[0])), h("span", { "aria-hidden": "true" }, "→"), h("div", {}, rich(d.io[1])))));
+  if (d.example) body.push(section("Example", h("p", { class: "example" }, rich(d.example))));
+  const ours = d.ours || (s && (s.oursTitle || s.ours));
+  if (ours) body.push(section("Our contribution", h("p", { class: "ours-box", id: "panel-ours" }, rich(ours))));
+  if (d.differs) body.push(section("Known limits", list(d.differs, "differs")));
+  if (s && s.sources && s.sources.length) body.push(section("Ideas used (click for details)", h("div", { class: "links" }, s.sources.map(sourceButton))));
+  const { before, after } = stageNeighbours(id);
+  if (before.length || after.length) body.push(section("Connected steps",
+    h("div", { class: "links" }, ...before.map(x => h("span", {}, stageButton(x))), before.length ? h("span", { "aria-hidden": "true" }, "→ this step →") : null, ...after.map(stageButton))));
+  if (d.settings) body.push(section("Settings", list(d.settings)));
+  if (d.code) body.push(section("Where in the code", list(d.code.map(c => "`" + c + "`"))));
+  return body;
+}
+
+function renderSource(key) {
+  const src = SOURCES[key];
+  const d = SOURCE_DETAILS[key] || {};
+  const usedBy = STAGES.filter(s => (s.sources || []).includes(key)).map(s => s.id);
+  const lanes = LANES.filter(l => (l.sources || []).some(x => x.key === key)).map(l => l.name);
+  const body = [
+    h("div", { class: "panel-kind" }, h("b", { class: `key-chip k-${src.kind}` }, KIND_LABEL[src.kind])),
+    h("h3", {}, src.short),
+  ];
+  if (d.what) body.push(section(src.kind === "paper" ? "The idea" : "What it is", h("p", {}, rich(d.what))));
+  if (d.how) body.push(section("How we use it", list(d.how)));
+  if (d.differs) body.push(section("Where we differ", list(d.differs, "differs")));
+  if (usedBy.length || lanes.length) body.push(section("Used in (click for details)",
+    h("div", { class: "links" }, usedBy.map(stageButton), lanes.map(n => h("button", { class: "l-stage", type: "button", onclick: () => openDetails("stage", "paths") }, n)))));
+  body.push(section("Reference", h("p", { class: "cite-text" }, src.cite), src.url ? h("p", {}, h("a", { href: src.url, target: "_blank", rel: "noopener" }, src.url)) : null));
+  return body;
+}
+
+function openDetails(kind, key, { focusOurs = false, fromHistory = false } = {}) {
+  const panel = document.getElementById("panel");
+  if (!panel.classList.contains("open")) { lastFocus = document.activeElement; panelHistory.length = 0; }
+  else if (!fromHistory && panel.dataset.current) panelHistory.push(panel.dataset.current);
+  panel.dataset.current = `${kind}:${key}`;
+  const body = panel.querySelector(".panel-body");
+  body.replaceChildren(...(kind === "source" ? renderSource(key) : renderStage(key)));
+  body.scrollTop = 0;
+  panel.querySelector(".back").hidden = panelHistory.length === 0;
+  panel.classList.add("open");
+  panel.setAttribute("aria-hidden", "false");
+  document.getElementById("scrim").classList.add("open");
+  document.querySelectorAll("#diagram .stage").forEach(g => g.classList.toggle("selected", kind === "stage" && g.dataset.stage === key));
+  history.replaceState(null, "", `#${kind}=${encodeURIComponent(key)}`);
+  if (focusOurs) {
+    const box = document.getElementById("panel-ours");
+    if (box) { box.scrollIntoView({ block: "center" }); box.classList.add("flash"); }
+  }
+  panel.querySelector(".close").focus({ preventScroll: true });
+}
+
+function closeDetails() {
+  const panel = document.getElementById("panel");
+  panel.classList.remove("open");
+  panel.setAttribute("aria-hidden", "true");
+  panel.dataset.current = "";
+  document.getElementById("scrim").classList.remove("open");
+  document.querySelectorAll("#diagram .stage").forEach(g => g.classList.remove("selected"));
+  history.replaceState(null, "", location.pathname + location.search);
+  if (lastFocus && lastFocus.focus) lastFocus.focus();
+}
+
+function detailsTarget(node) {
+  if (node.dataset.stage) return ["stage", node.dataset.stage, {}];
+  if (node.dataset.key) return ["source", node.dataset.key, {}];
+  if (node.dataset.ours) return ["stage", node.dataset.ours, { focusOurs: true }];
+  return null;
+}
+
+function wireDetails() {
+  const panel = h("aside", { id: "panel", class: "panel", role: "dialog", "aria-modal": "true", "aria-hidden": "true", "aria-label": "Details" },
+    h("div", { class: "panel-top" },
+      h("button", { class: "back", type: "button", onclick: () => { const prev = panelHistory.pop(); if (prev) { const [k, v] = prev.split(/:(.*)/s); openDetails(k, v, { fromHistory: true }); } } }, "← Back"),
+      h("span", { class: "spacer" }),
+      h("button", { class: "close", type: "button", onclick: closeDetails, "aria-label": "Close details" }, "Close ✕")),
+    h("div", { class: "panel-body" }));
+  document.body.append(h("div", { id: "scrim", class: "scrim", onclick: closeDetails }), panel);
+  const diagram = document.getElementById("diagram");
+  const activate = event => {
+    const node = event.target.closest(".stage, .chip");
+    if (!node) return;
+    const target = detailsTarget(node);
+    if (target) openDetails(target[0], target[1], target[2]);
+  };
+  diagram.addEventListener("click", activate);
+  diagram.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activate(event); }
+  });
+  document.querySelectorAll(".ref").forEach(row => {
+    row.tabIndex = 0;
+    row.setAttribute("role", "button");
+    row.addEventListener("click", () => openDetails("source", row.dataset.key));
+    row.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); openDetails("source", row.dataset.key); } });
+  });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && panel.classList.contains("open")) closeDetails(); });
+  // a link like thesis_pipeline.html#stage=edc opens that panel
+  const fromHash = () => {
+    const m = location.hash.match(/^#(stage|source)=(.+)$/);
+    if (!m) return;
+    const key = decodeURIComponent(m[2]);
+    if (m[1] === "source" ? SOURCES[key] : (STAGE_BY_ID[key] || STAGE_DETAILS[key])) openDetails(m[1], key);
+  };
+  window.addEventListener("hashchange", fromHash);
+  fromHash();
+}
+
 function legend() {
   const box = document.getElementById("legend");
   const item = (drawIcon, label) => {
@@ -404,6 +1011,7 @@ document.getElementById("footer").textContent = FOOTER;
 legend();
 draw();
 references();
+wireDetails();
 </script>
 </body>
 </html>
