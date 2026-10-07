@@ -8,9 +8,12 @@ cache and returns ``None`` for pairs it has not seen, which the scorer reports
 as ``judge.pending``. The Benchmark page uses the cache-only mode, so opening
 it never starts model calls; ``make evaluate ARGS="--judge"`` fills the cache.
 
-Every decision is stored with the prompt reference (``name@set:hash``), so a
-changed prompt never reuses old answers, and re-scoring a run gives the same
-number.
+Every decision is stored with the judge model alias and the prompt reference
+(``name@set:hash``), and both are part of the cache key: a changed prompt or a
+different judge model (``HARNESS_MODEL_JUDGE``) never reuses old answers, the
+cache-only mode reads only the current model's verdicts, and re-scoring a run
+with the same settings gives the same number. Verdicts written before the model
+was part of the key are not read (rerun ``make evaluate ARGS="--judge"``).
 """
 
 from __future__ import annotations
@@ -58,10 +61,12 @@ class CachedJudge:
 
     def __init__(self, cache_path: Path | None = None,
                  complete: Callable[[Prompt], Mapping[str, Any]] | None = None,
-                 *, prompt_set: str | None = None) -> None:
+                 *, prompt_set: str | None = None, model: str | None = None) -> None:
         self.cache_path = cache_path or default_cache_path()
         self.complete = complete
         self.prompt_set = prompt_set
+        # The judge model whose verdicts this judge reads and writes (default: HARNESS_MODEL_JUDGE).
+        self.model = model if model is not None else settings().model_judge
         self.lock = threading.Lock()
         self.calls = 0
         self._cache: dict[str, bool] = {}
@@ -81,7 +86,7 @@ class CachedJudge:
 
     def __call__(self, gold: Mapping[str, Any], run: Mapping[str, Any]) -> bool | None:
         prompt = self.prompt(gold, run)
-        key = hashlib.sha256(f"{prompt.ref}\x00{prompt.user}".encode()).hexdigest()
+        key = hashlib.sha256(f"{self.model}\x00{prompt.ref}\x00{prompt.user}".encode()).hexdigest()
         with self.lock:
             if key in self._cache:
                 return self._cache[key]
@@ -95,7 +100,7 @@ class CachedJudge:
         verdict = parse_verdict(answer)
         if verdict is None:
             return None
-        row = {"key": key, "same_fact": verdict, "prompt": prompt.ref, "gold": _fact(gold), "run": _fact(run),
+        row = {"key": key, "same_fact": verdict, "model": self.model, "prompt": prompt.ref, "gold": _fact(gold), "run": _fact(run),
                "reason": str((answer or {}).get("reason", ""))[:300]}
         with self.lock:
             self.calls += 1

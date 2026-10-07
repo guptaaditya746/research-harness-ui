@@ -14,23 +14,36 @@ level before it):
   more general than the gold counts for precision only.
 - **soft**: a rule links the pair in either direction, the run triple equals
   one of the gold triple's accepted variants (typed by reviewers), or a judge
-  says both state the same fact. Soft is symmetric. The judge is only asked
-  about pairs with the same subject where neither triple has any rule or
-  variant edge.
+  says both state the same fact. Soft is symmetric. The rule edges are matched
+  first; the judge is then asked about same-subject pairs that can still add
+  credit (a leftover run triple against any gold triple, and a matched run
+  triple against a leftover gold triple when its partner can move; see
+  ``_ask_judge``).
 
-Credit is one-to-one: a maximum matching over the edges, so one gold triple is
-never credited twice and one run triple never recovers two facts. Among equally
-large matchings the one covering more vital gold triples, then the one with
-stricter pairs, is chosen (weighted assignment).
+What is counted is a fact, not a spelling: triples that entail each other under
+the rules (an inverse restatement, a symmetric relation read backwards, a
+same-as name) form one fact on each side, at every level. Euzenat's ratios are
+taken over these facts, so restating a fact is neither an error nor a second
+fact to recover, and stating everything twice cannot raise a score.
+
+Credit is one-to-one: a maximum matching over the edges, so one gold fact is
+never credited twice and one run fact never recovers two facts. This is
+stricter than Euzenat's set-based Cn(R), where one run triple that implies two
+gold triples (a relation and the type its domain gives) recovers both; here it
+recovers one. Among equally large matchings the one covering more vital gold
+triples, then the one with stricter pairs, is chosen (weighted assignment).
 
 Other rules:
 
 - **Locally closed DBLP scoring** (Text2KGBench): a run triple with a DBLP
   predicate the gold never uses for this question (nor a related one) is not
   scored. The gold lists only what the question needs, so an extra correct
-  authorship triple is not an error.
+  authorship triple is not an error. Text2KGBench closes every ground-truth
+  relation this way; here only DBLP predicates are, because the invented
+  relations are what the evaluation is about.
 - **Vital recall**: recall over gold triples marked ``"weight": "vital"``
-  (TREC 2024 RAG nugget evaluation).
+  (TREC 2024 RAG nugget evaluation). A fact is matched or not, so this is the
+  track's strict variant (partial support earns nothing, not 0.5).
 - **Judged precision**: the share of run triples known to be correct, where
   correct means a strict, precision-side rule, variant or judge match to gold,
   and wrong means reviewers rejected it as wrong (``forbidden_alternatives``
@@ -129,17 +142,47 @@ def _matching(ranks: dict[tuple[int, int], int], rows: int, cols: int, vital: se
     (1) more pairs, (2) more vital gold triples and (3) stricter edges always win. So the number of
     pairs equals a maximum bipartite matching, vital recall never drops at a looser level, and each
     pair is reported at the strictest level available.
+
+    The objective is a sum over edges, so it is solved per connected component of the edge graph:
+    the same optimum, without a dense |run| x |gold| matrix (D-sized inputs have thousands per side).
     """
     if not ranks or not rows or not cols:
         return {}
-    size = min(rows, cols)
-    vital_bonus = max(RANK.values()) * size + 1
-    base = size * (vital_bonus + max(RANK.values())) + 1
-    weights = np.zeros((rows, cols))
-    for (i, j), rank in ranks.items():
-        weights[i, j] = base + (vital_bonus if j in vital else 0) + rank
-    row_ind, col_ind = linear_sum_assignment(weights, maximize=True)
-    return {int(i): int(j) for i, j in zip(row_ind, col_ind, strict=True) if (int(i), int(j)) in ranks}
+    parent: dict[tuple[str, int], tuple[str, int]] = {}
+
+    def find(node: tuple[str, int]) -> tuple[str, int]:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for i, j in ranks:
+        left, right = find(("r", i)), find(("g", j))
+        if left != right:
+            parent[right] = left
+    components: dict[tuple[str, int], list[tuple[int, int]]] = {}
+    for edge in ranks:
+        components.setdefault(find(("r", edge[0])), []).append(edge)
+    top = max(RANK.values())
+    out: dict[int, int] = {}
+    for edges in components.values():
+        run_ids = sorted({i for i, _ in edges})
+        gold_ids = sorted({j for _, j in edges})
+        size = min(len(run_ids), len(gold_ids))
+        vital_bonus = top * size + 1
+        base = size * (vital_bonus + top) + 1
+        row_of = {i: n for n, i in enumerate(run_ids)}
+        col_of = {j: n for n, j in enumerate(gold_ids)}
+        weights = np.zeros((len(run_ids), len(gold_ids)))
+        for i, j in edges:
+            weights[row_of[i], col_of[j]] = base + (vital_bonus if j in vital else 0) + ranks[(i, j)]
+        row_ind, col_ind = linear_sum_assignment(weights, maximize=True)
+        for r, c in zip(row_ind, col_ind, strict=True):
+            i, j = run_ids[int(r)], gold_ids[int(c)]
+            if (i, j) in ranks:
+                out[i] = j
+    return dict(sorted(out.items()))
 
 
 def _ranked(*groups: tuple[set[tuple[int, int]], str]) -> dict[tuple[int, int], int]:
@@ -171,7 +214,12 @@ def _merge_gold(gold: Iterable[Triple | Mapping[str, Any]], key: Callable[[Mappi
 
 @dataclass
 class _Pairs:
-    """The run and gold triples of one scoring, indexed, with the rule edges between them."""
+    """The run and gold facts of one scoring, indexed, with the rule edges between them.
+
+    A fact is a class of triples that entail each other under the rules (an inverse restatement, a
+    same-as name, a symmetric relation read backwards); ``run_keys``/``gold_keys`` hold one
+    representative per class and ``run_members``/``gold_members`` every key in it.
+    """
 
     run_by_key: dict[Key, dict[str, Any]]
     gold_by_key: dict[Key, dict[str, Any]]
@@ -184,71 +232,198 @@ class _Pairs:
     variants: set[tuple[int, int]]
     normal_run: list[Key]
     normal_gold: list[Key]
+    run_members: list[list[Key]]
+    gold_members: list[list[Key]]
+    # Per fact: normalised subject -> the member stated from that subject (an inverse gives two).
+    run_subjects: list[dict[str, Key]]
+    gold_subjects: list[dict[str, Key]]
 
     @property
     def ruled(self) -> set[tuple[int, int]]:
         return self.strict | self.entailed_recall | self.entailed_precision | self.variants
 
 
+def _equivalence_classes(keys: list[Key], closures: dict[Key, frozenset[Key]],
+                         normal: dict[Key, Key]) -> list[list[Key]]:
+    """Group keys whose triples entail each other (a ⊨ b and b ⊨ a), in first-seen order.
+
+    With single-premise rules, mutual entailment is an equivalence and the members of a class have the
+    same consequences, so one representative stands for the class at every level.
+    """
+    by_normal: dict[Key, list[Key]] = {}
+    for item in keys:
+        by_normal.setdefault(normal[item], []).append(item)
+    parent = {item: item for item in keys}
+
+    def find(item: Key) -> Key:
+        while parent[item] != item:
+            parent[item] = parent[parent[item]]
+            item = parent[item]
+        return item
+
+    order = {item: index for index, item in enumerate(keys)}
+    for item in keys:
+        for consequence in closures[item]:
+            for other in by_normal.get(consequence, ()):
+                if other != item and normal[item] in closures[other]:
+                    left, right = find(item), find(other)
+                    if left != right:
+                        first, second = sorted((left, right), key=order.__getitem__)
+                        parent[second] = first
+    groups: dict[Key, list[Key]] = {}
+    for item in keys:
+        groups.setdefault(find(item), []).append(item)
+    return list(groups.values())
+
+
+def _merge_members(members: list[Key], items: Mapping[Key, Mapping[str, Any]]) -> dict[str, Any]:
+    """One gold fact from its equivalent triples: vital if any is vital; every variant, as full triples."""
+    merged = dict(items[members[0]])
+    variants: list[dict[str, str]] = []
+    for member in members:
+        for variant in _variant_triples(items[member]):
+            if variant not in variants:
+                variants.append(variant)
+    if variants:
+        merged["variants"] = variants
+    if any(items[member].get("weight") == "vital" for member in members):
+        merged["weight"] = "vital"
+    return merged
+
+
 def _pairs(predicted: Iterable[Triple | Mapping[str, Any]], gold: Iterable[Triple | Mapping[str, Any]],
            key: Callable[[Mapping[str, Any]], Key], relations: PredicateRelations) -> _Pairs:
-    gold_by_key = _merge_gold(gold, key)
-    run_by_key: dict[Key, dict[str, Any]] = {}
+    merged_gold = _merge_gold(gold, key)
+    run_items: dict[Key, dict[str, Any]] = {}
     for item in map(_as_dict, predicted):
-        run_by_key.setdefault(key(item), item)
+        run_items.setdefault(key(item), item)
 
-    gold_keys = list(gold_by_key)
-    variant_triples = [_variant_triples(gold_by_key[g]) for g in gold_keys]
+    gold_variants = {g: _variant_triples(item) for g, item in merged_gold.items()}
     # Locally closed: a DBLP-predicate run triple is scored only if the gold (or a variant) uses that
     # predicate or one related to it by a rule (parent, child, inverse).
     # A triple whose consequences reach such a predicate counts too (an inverse of a parent, say).
-    gold_predicates = {g[1] for g in gold_keys} | {key(v)[1] for group in variant_triples for v in group}
+    gold_predicates = {g[1] for g in merged_gold} | {key(v)[1] for group in gold_variants.values() for v in group}
     allowed = relations.related_predicates(gold_predicates)
-    closure_by_key = {r: relations.consequences(item, key) for r, item in run_by_key.items()}
-    excluded = [r for r in run_by_key if r[1].startswith(DBLP_NS) and r[1] not in allowed
-                and not {derived[1] for derived in closure_by_key[r]} & allowed]
+    excluded = [r for r, item in run_items.items() if r[1].startswith(DBLP_NS) and r[1] not in allowed
+                and not {derived[1] for derived in relations.consequences(item, key, typing=False)} & allowed]
     excluded_set = set(excluded)
-    run_keys = [r for r in run_by_key if r not in excluded_set]
+    kept = [r for r in run_items if r not in excluded_set]
 
-    run_closure = [closure_by_key[r] for r in run_keys]
-    gold_closure = [relations.consequences(gold_by_key[g], key) for g in gold_keys]
-    normal_run = [relations.normalise(r) for r in run_keys]
-    normal_gold = [relations.normalise(g) for g in gold_keys]
-    variant_keys = [{key(item) for item in group} for group in variant_triples]
-    every = [(i, j) for i in range(len(run_keys)) for j in range(len(gold_keys))]
+    run_closure = {r: relations.consequences(run_items[r], key) for r in kept}
+    gold_closure = {g: relations.consequences(item, key) for g, item in merged_gold.items()}
+    run_normal = {r: relations.normalise(r) for r in kept}
+    gold_normal = {g: relations.normalise(g) for g in merged_gold}
+    run_members = _equivalence_classes(kept, run_closure, run_normal)
+    gold_members = _equivalence_classes(list(merged_gold), gold_closure, gold_normal)
+    run_keys = [members[0] for members in run_members]
+    gold_keys = [members[0] for members in gold_members]
+    # Every triple stays reachable by its key (members and excluded ones, for the report); the scored
+    # facts are run_keys / gold_keys, and a gold representative carries its class's weight and variants.
+    run_by_key = dict(run_items)
+    gold_by_key = {**merged_gold, **{members[0]: _merge_members(members, merged_gold) for members in gold_members}}
+
+    # Edges by index lookups (no |run| x |gold| scan): D can hold thousands of triples on each side.
+    run_of = {member: i for i, members in enumerate(run_members) for member in members}
+    run_of_normal: dict[Key, set[int]] = {}
+    for i, r in enumerate(run_keys):
+        run_of_normal.setdefault(run_normal[r], set()).add(i)
+    gold_of_normal: dict[Key, set[int]] = {}
+    for j, g in enumerate(gold_keys):
+        gold_of_normal.setdefault(gold_normal[g], set()).add(j)
+    strict = {(run_of[member], j) for j, members in enumerate(gold_members) for member in members
+              if member in run_of}
+    entailed_recall = {(i, j) for i, r in enumerate(run_keys) for c in run_closure[r]
+                       for j in gold_of_normal.get(c, ())}
+    entailed_precision = {(i, j) for j, g in enumerate(gold_keys) for c in gold_closure[g]
+                          for i in run_of_normal.get(c, ())}
+    variants = {(run_of[key(v)], j) for j, g in enumerate(gold_keys)
+                for v in _variant_triples(gold_by_key[g]) if key(v) in run_of}
     return _Pairs(
         run_by_key, gold_by_key, run_keys, gold_keys, excluded,
-        strict={(i, j) for i, j in every if run_keys[i] == gold_keys[j]},
-        entailed_recall={(i, j) for i, j in every if normal_gold[j] in run_closure[i]},
-        entailed_precision={(i, j) for i, j in every if normal_run[i] in gold_closure[j]},
-        variants={(i, j) for i, j in every if run_keys[i] in variant_keys[j]},
-        normal_run=normal_run, normal_gold=normal_gold,
+        strict=strict, entailed_recall=entailed_recall, entailed_precision=entailed_precision, variants=variants,
+        normal_run=[run_normal[r] for r in run_keys], normal_gold=[gold_normal[g] for g in gold_keys],
+        run_members=run_members, gold_members=gold_members,
+        run_subjects=[_by_subject(members, run_normal) for members in run_members],
+        gold_subjects=[_by_subject(members, gold_normal) for members in gold_members],
     )
 
 
-def _ask_judge(pairs: _Pairs, judge: Judge | None) -> tuple[set[tuple[int, int]], int, int]:
-    """Pairs with the same subject where neither triple has a rule or variant edge.
-    Returns the judged matches and how many pairs were asked and are still pending."""
+def _by_subject(members: list[Key], normal: Mapping[Key, Key]) -> dict[str, Key]:
+    out: dict[str, Key] = {}
+    for member in members:
+        out.setdefault(normal[member][0], member)
+    return out
+
+
+def _rule_soft(pairs: _Pairs) -> dict[tuple[int, int], int]:
+    return _ranked((pairs.variants, "variant"), (pairs.entailed_precision | pairs.entailed_recall, "entailed"),
+                   (pairs.strict, "strict"))
+
+
+def _vital(pairs: _Pairs) -> set[int]:
+    return {j for j, g in enumerate(pairs.gold_keys) if pairs.gold_by_key[g].get("weight") == "vital"}
+
+
+def _ask_judge(pairs: _Pairs, judge: Judge | None, vital: set[int] | None = None
+               ) -> tuple[set[tuple[int, int]], int, int]:
+    """Ask the judge about the pairs that can still add credit once the rules have matched what they can.
+
+    The rule edges (strict, entailed, variant) are matched first. A judged edge can then add a pair in
+    two ways: it joins a leftover run triple to a gold triple (a leftover, or one whose run partner can
+    move), or it is the far end of an augmenting path of length three, ``r' - g0 = r0 - g1``: a leftover
+    run triple ``r'`` takes ``g0`` and its partner ``r0`` takes the leftover ``g1``. So the judge is asked
+    (1) every same-subject pair of a leftover run triple and any gold triple, then (2) the pairs of a
+    matched run triple and a leftover gold triple, but only when the run triple's partner has a rule or
+    judged edge to a leftover run triple. Longer augmenting paths (a judged edge between two matched
+    triples) are not searched. Pairs with a rule edge are never asked.
+
+    "Same subject" holds when any triple of the run fact and any triple of the gold fact share their
+    normalised subject, so an inverse restatement is compared from the side the gold states it.
+    Returns the judged matches and how many pairs were asked and are still pending.
+    """
     judged: set[tuple[int, int]] = set()
-    asked = pending = 0
+    counts = {"asked": 0, "pending": 0}
     if judge is None:
-        return judged, asked, pending
+        return judged, 0, 0
     ruled = pairs.ruled
-    linked_runs = {i for i, _ in ruled}
-    linked_gold = {j for _, j in ruled}
-    for i, r in enumerate(pairs.run_keys):
-        if i in linked_runs:
-            continue
-        for j, g in enumerate(pairs.gold_keys):
-            if j in linked_gold or pairs.normal_run[i][0] != pairs.normal_gold[j][0]:
-                continue
-            asked += 1
-            verdict = judge(_plain(pairs.gold_by_key[g]), _plain(pairs.run_by_key[r]))
-            if verdict is None:
-                pending += 1
-            elif verdict:
-                judged.add((i, j))
-    return judged, asked, pending
+    first = _matching(_rule_soft(pairs), len(pairs.run_keys), len(pairs.gold_keys),
+                      _vital(pairs) if vital is None else vital)
+    partner = {j: i for i, j in first.items()}
+    leftover_runs = [i for i in range(len(pairs.run_keys)) if i not in first]
+    leftover_gold = {j for j in range(len(pairs.gold_keys)) if j not in partner}
+    gold_by_subject: dict[str, list[int]] = {}
+    for j, subjects in enumerate(pairs.gold_subjects):
+        for subject in subjects:
+            gold_by_subject.setdefault(subject, []).append(j)
+
+    def candidates(i: int, wanted: Callable[[int], bool]) -> list[tuple[int, Key, Key]]:
+        out, seen = [], set()
+        for subject, run_member in pairs.run_subjects[i].items():
+            for j in gold_by_subject.get(subject, ()):
+                if j not in seen and (i, j) not in ruled and wanted(j):
+                    seen.add(j)
+                    out.append((j, pairs.gold_subjects[j][subject], run_member))
+        return out
+
+    def ask(i: int, j: int, gold_member: Key, run_member: Key) -> None:
+        counts["asked"] += 1
+        # Both sides as stated from the shared subject (an inverse restatement is shown that way).
+        verdict = judge(_plain(pairs.gold_by_key[gold_member]), _plain(pairs.run_by_key[run_member]))
+        if verdict is None:
+            counts["pending"] += 1
+        elif verdict:
+            judged.add((i, j))
+
+    for i in leftover_runs:
+        for j, gold_member, run_member in candidates(i, lambda _j: True):
+            ask(i, j, gold_member, run_member)
+    leftover_set = set(leftover_runs)
+    movable = {j for i, j in ruled | judged if i in leftover_set and j in partner}
+    for j0 in sorted(movable):
+        i = partner[j0]
+        for j, gold_member, run_member in candidates(i, leftover_gold.__contains__):
+            ask(i, j, gold_member, run_member)
+    return judged, counts["asked"], counts["pending"]
 
 
 def _level_edges(pairs: _Pairs, judged: set[tuple[int, int]]
@@ -301,7 +476,7 @@ def _judged_precision(pairs: _Pairs, judged: set[tuple[int, int]], rejected: Ite
     correct = {i for i, _ in pairs.strict | pairs.entailed_precision | pairs.variants | judged}
     wrong_keys = {key(item) for item in map(_as_dict, rejected)
                   if str(item.get("verdict", "")).casefold() == "wrong"}
-    wrong = {i for i, r in enumerate(pairs.run_keys) if r in wrong_keys and i not in correct}
+    wrong = {i for i, members in enumerate(pairs.run_members) if wrong_keys & set(members) and i not in correct}
     total = len(correct) + len(wrong)
     rows = len(pairs.run_keys)
     return {
@@ -332,8 +507,8 @@ def score_levels(
 ) -> dict[str, Any]:
     """Score one reading's triples against one gold set at every level."""
     pairs = _pairs(predicted, gold, key, relations or PredicateRelations())
-    judged, judge_asked, judge_pending = _ask_judge(pairs, judge)
-    vital = {j for j, g in enumerate(pairs.gold_keys) if pairs.gold_by_key[g].get("weight") == "vital"}
+    vital = _vital(pairs)
+    judged, judge_asked, judge_pending = _ask_judge(pairs, judge, vital)
     levels, matchings = _level_scores(pairs, _level_edges(pairs, judged), vital)
     judged_precision, wrong_runs = _judged_precision(pairs, judged, rejected, key)
 
@@ -355,6 +530,13 @@ def score_levels(
         "judged_precision": judged_precision,
         "judge": {"asked": judge_asked, "pending": judge_pending, "matched": len(judged)},
         "excluded_dblp": [_plain(run[r]) for r in pairs.excluded],
+        # Triples that restate another one (inverse, same-as, symmetric): counted once, as one fact.
+        "equivalent": {
+            "run": [[_plain(run[member]) for member in members] for members in pairs.run_members
+                    if len(members) > 1],
+            "gold": [[_plain(gold_of[member]) for member in members] for members in pairs.gold_members
+                     if len(members) > 1],
+        },
         "matched": matched,
         "missed": missed,
         "extra": extra,

@@ -7,6 +7,9 @@ The rules are ordinary RDFS/OWL statements (W3C standards):
 - ``owl:inverseOf``: the same relation read in the other direction
 - ``rdfs:subClassOf`` / ``owl:equivalentClass``: class hierarchy for ``rdf:type`` triples
 - ``owl:sameAs``: two names for the same entity
+- ``owl:SymmetricProperty``: a relation that is its own inverse
+- ``rdfs:domain`` / ``rdfs:range``: ``s p o`` implies ``s rdf:type D`` and, for an object
+  property, ``o rdf:type R`` (RDFS entailment rules rdfs2 and rdfs3)
 
 They come from three places, merged into one graph:
 
@@ -21,8 +24,15 @@ The graph is closed once with the OWL 2 RL reasoner (``owlrl``), so chains
 (``a ⊑ b ⊑ c``) and equivalences are resolved by a standard reasoner, not by
 hand-written logic. The closed rules are then applied to scored triples one
 triple at a time. Every rule here has a single premise, so the consequences of
-a set of triples are the union of the consequences of each triple. That is what
-lets the scorer draw an edge between one run triple and one gold triple.
+a set of triples are the union of the consequences of each triple (Cn(R) in
+Euzenat's semantic precision and recall). That is what lets the scorer draw an
+edge between one run triple and one gold triple. Multi-premise rules break
+this: a property chain is refused (:class:`MultiPremiseRule`), and transitive
+properties are listed in ``PredicateRelations.transitive`` and closed per triple
+only, so ``a p b`` and ``b p c`` in a run do not recover a gold ``a p c``. The
+DBLP seed declares two (``dblp:isVersionOf``, ``dblp:publishedAsPartOf``);
+bibliographic chains are not what the gold asks for, and a test fails if a
+content predicate becomes transitive.
 
 Direction matters: a triple implies its generalisations, never its
 specialisations. ``SafeRAG hasAttackTask "silver noise"`` implies
@@ -48,10 +58,17 @@ DBLP_NS = "https://dblp.org/rdf/schema#"
 CSKG_NS = "https://w3id.org/cskg/ontology#"
 LOCAL_NAMESPACES = (HRN_NS, CSKG_NS)
 RDF_TYPE = str(RDF.type)
+XSD_NS = "http://www.w3.org/2001/XMLSchema#"
 # Spellings of rdf:type that runs and people use; all mean the same predicate.
 TYPE_SPELLINGS = {"type", "rdf:type", "a", "instanceof", "isa", RDF_TYPE.casefold()}
 
 Key = tuple[str, str, str]
+# Classes every resource belongs to: a type triple naming one says nothing.
+TRIVIAL_CLASSES = {str(OWL.Thing), str(RDFS.Resource), str(RDFS.Class), str(RDFS.Literal), str(OWL.Class)}
+
+
+class MultiPremiseRule(ValueError):
+    """The schema declares a property chain: its consequences need two premises, which per-triple closure misses."""
 
 
 def _local(iri: str) -> str:
@@ -66,6 +83,9 @@ class PredicateRelations:
     inverses: dict[str, frozenset[str]] = field(default_factory=dict)
     super_classes: dict[str, frozenset[str]] = field(default_factory=dict)
     same_as: dict[str, str] = field(default_factory=dict)
+    domains: dict[str, frozenset[str]] = field(default_factory=dict)
+    ranges: dict[str, frozenset[str]] = field(default_factory=dict)
+    transitive: frozenset[str] = frozenset()
     source_files: tuple[str, ...] = ()
 
     # ─── applying the rules ──────────────────────────────────────────────────
@@ -91,12 +111,15 @@ class PredicateRelations:
             object_ = self.lookup(object_)
         return self.canonical_entity(subject), predicate, self.canonical_entity(object_)
 
-    def consequences(self, item: Mapping[str, Any], key: Callable[[Mapping[str, Any]], Key]) -> frozenset[Key]:
+    def consequences(self, item: Mapping[str, Any], key: Callable[[Mapping[str, Any]], Key], *,
+                     typing: bool = True) -> frozenset[Key]:
         """Every triple one triple implies under the rules, including itself, as normalised keys.
 
         Rules are applied to the raw subject and object and every derived triple is keyed again with
         the scorer's ``key``, because entity keys depend on the predicate (an author name is
-        normalised differently as the object of ``dblp:authoredBy``).
+        normalised differently as the object of ``dblp:authoredBy``). ``typing=False`` leaves out the
+        ``rdf:type`` triples that domains and ranges add (the locally closed check asks which
+        relations a triple states, not which classes it implies).
         """
         predicate = key(item)[1]
         if predicate.casefold() in TYPE_SPELLINGS:
@@ -111,6 +134,11 @@ class PredicateRelations:
                 derived.add((subject, parent, object_))
             for inverse in self.inverses.get(predicate, ()):
                 derived.add((object_, inverse, subject))
+            if typing:
+                for domain in self.domains.get(predicate, ()):
+                    derived.add((subject, RDF_TYPE, domain))
+                for range_ in self.ranges.get(predicate, ()):
+                    derived.add((object_, RDF_TYPE, range_))
             if predicate == RDF_TYPE:
                 for parent in self.super_classes.get(self.lookup(object_), ()):
                     derived.add((subject, predicate, parent))
@@ -200,6 +228,27 @@ def build_relations(graph: Graph, *, predicate_key, entity_key, sources: tuple[s
         if left and right and left != right:
             classes.setdefault(left, set()).add(right)
             classes.setdefault(right, set()).add(left)
+    for node in graph.subjects(RDF.type, OWL.SymmetricProperty):
+        own = property_key(node)
+        if own:
+            inverses.setdefault(own, set()).add(own)
+    chains = sorted(str(node) for node in graph.subjects(OWL.propertyChainAxiom, None))
+    if chains:
+        raise MultiPremiseRule(f"property chains need multi-premise closure: {', '.join(chains)}")
+    transitive = {name for node in graph.subjects(RDF.type, OWL.TransitiveProperty)
+                  if (name := property_key(node))}
+    domains: dict[str, set[str]] = {}
+    ranges: dict[str, set[str]] = {}
+    for table, axiom in ((domains, RDFS.domain), (ranges, RDFS.range)):
+        for prop, cls in graph.subject_objects(axiom):
+            name = property_key(prop)
+            if name is None or name == RDF_TYPE or not isinstance(cls, URIRef) or str(cls) in TRIVIAL_CLASSES:
+                continue
+            if axiom == RDFS.range and (str(cls).startswith(XSD_NS) or cls == RDFS.Literal):
+                continue                                   # a literal is not given a class
+            target = class_key(cls)
+            if target:
+                table.setdefault(name, set()).add(target)
     groups: list[set[str]] = []
     for left_node, right_node in graph.subject_objects(OWL.sameAs):
         left, right = class_key(left_node), class_key(right_node)
@@ -216,6 +265,9 @@ def build_relations(graph: Graph, *, predicate_key, entity_key, sources: tuple[s
         inverses={key: frozenset(value) for key, value in inverses.items()},
         super_classes={key: frozenset(value) for key, value in classes.items()},
         same_as=same_as,
+        domains={key: frozenset(value) for key, value in domains.items()},
+        ranges={key: frozenset(value) for key, value in ranges.items()},
+        transitive=frozenset(transitive),
         source_files=sources,
     )
 
@@ -255,5 +307,5 @@ def _schema_key() -> tuple[object, ...]:
     return ("cskg", str(subset), subset.stat().st_mtime if subset.exists() else None)
 
 
-__all__ = ["CSKG_NS", "DBLP_NS", "HRN_NS", "PredicateRelations", "build_relations", "default_relations_path",
+__all__ = ["CSKG_NS", "DBLP_NS", "HRN_NS", "MultiPremiseRule", "PredicateRelations", "build_relations", "default_relations_path",
            "load_relations"]

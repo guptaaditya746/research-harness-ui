@@ -106,8 +106,10 @@ def test_nlp27_reproduces_the_documented_numbers(relations) -> None:
     assert sorted(row["o"] for row in result["missed"] if row["weight"] == "vital") == ["Benchmark", "Method"]
     assert {row["o"]: row["verdict"] for row in result["extra"]} == {
         "14 RAG components": "unjudged", "defending RAG against prompt injection": "wrong"}
-    # The judge is only asked about same-subject pairs with no rule or variant edge.
-    assert result["judge"] == {"asked": 2 * 3 + 3, "pending": 0, "matched": 1}
+    # The judge is asked about same-subject pairs without a rule edge whose run triple the rules left
+    # unmatched: S8 against the 7 SAFE gold triples, S7 and S9 against the 4 HydraRAG ones. No leftover
+    # run triple has a rule edge to a matched gold triple, so no partner is asked to move.
+    assert result["judge"] == {"asked": 7 + 2 * 4, "pending": 0, "matched": 1}
 
 
 def test_levels_are_cumulative_and_soft_without_judge_uses_variants_only(relations) -> None:
@@ -177,6 +179,9 @@ def test_cached_judge_calls_once_and_cache_only_mode_reports_pending(tmp_path) -
     offline = CachedJudge(cache)
     assert offline(t("s", "p", "a"), t("s", "p", "b")) is True
     assert offline(t("s", "p", "a"), t("s", "p", "c")) is None
+    # Verdicts belong to the model that gave them: another judge model does not reuse them.
+    assert CachedJudge(cache, model="another-judge")(t("s", "p", "a"), t("s", "p", "b")) is None
+    assert json.loads(cache.read_text().splitlines()[0])["model"] == live.model
     assert parse_verdict({"same_fact": "no"}) is False and parse_verdict({}) is None
 
 
@@ -195,11 +200,17 @@ def test_ambiguous_gold_uses_the_best_accepted_reading(relations) -> None:
 
 
 def test_confidence_intervals() -> None:
-    assert mean_ci([]) == {"mean": None, "low": None, "high": None, "n": 0}
-    assert mean_ci([0.5, 0.5]) == {"mean": 0.5, "low": 0.5, "high": 0.5, "n": 2}
+    assert mean_ci([]) == {"mean": None, "low": None, "high": None, "n": 0, "method": None}
+    assert mean_ci([0.4]) == {"mean": 0.4, "low": None, "high": None, "n": 1, "method": None}
+    assert mean_ci([0.5, 0.5]) == {"mean": 0.5, "low": 0.5, "high": 0.5, "n": 2, "method": "constant"}
     interval = mean_ci([0.1, 0.4, 0.6, 0.9, 0.5, 0.3])
-    assert interval["low"] < interval["mean"] < interval["high"]
-    assert paired_difference_ci([0.6, 0.7], [0.5, 0.5])["mean"] == pytest.approx(0.15)
+    assert interval["low"] < interval["mean"] < interval["high"] and interval["method"] == "BCa"
+    difference = paired_difference_ci([0.6, 0.7], [0.5, 0.5])
+    assert difference["mean"] == pytest.approx(0.15)
+    # Two positive differences: 1 of the 4 sign patterns is as extreme on each side, so p = 2/4.
+    assert difference["p"] == pytest.approx(0.5)
+    assert paired_difference_ci([0.5] * 3, [0.5] * 3)["p"] == 1.0
+    assert paired_difference_ci([1.0] * 12, [0.0] * 12)["p"] == pytest.approx(2 / 2 ** 12)
 
 
 def test_build_benchmark_groups_by_complexity_and_pairs_paths(relations) -> None:
@@ -316,3 +327,145 @@ def test_the_content_core_credits_cskg_inverses_and_evaluates_on() -> None:
                           relations=relations)["levels"]
     assert (levels["entailed"]["matched_gold"], levels["entailed"]["matched_predicted"]) == (1, 0)
 
+
+
+def test_restatements_are_one_fact_on_both_sides() -> None:
+    """Euzenat's ratios over facts: triples that entail each other (an inverse, a symmetric relation read
+    backwards) are one fact, so a restatement is neither an error nor a second gold fact to recover."""
+    relations = load_relations()
+    gold = [t("MethodX", "uses", "ToolQ")]
+    both = [t("MethodX", "uses", "ToolQ"), t("ToolQ", "usedBy", "MethodX")]
+    for run, reference in ((both, gold), (gold, both)):
+        result = score_levels(run, reference, key=key, relations=relations)
+        assert all((level["precision"], level["recall"]) == (1.0, 1.0) for level in result["levels"].values())
+    result = score_levels(both, gold, key=key, relations=relations)
+    assert result["levels"]["soft"]["predicted"] == 1 and len(result["equivalent"]["run"]) == 1
+    # A symmetric DBLP relation stated from either side is the same fact.
+    a, b = "https://dblp.org/pid/1/1", "https://dblp.org/pid/2/2"
+    levels = score_levels([t(b, "https://dblp.org/rdf/schema#coAuthorWith", a)],
+                          [t(a, "https://dblp.org/rdf/schema#coAuthorWith", b)], key=key, relations=relations)["levels"]
+    assert levels["entailed"]["f1"] == 1.0 and levels["strict"]["f1"] == 0.0
+    # A vital member makes the fact vital.
+    vital = score_levels(gold, [t("MethodX", "uses", "ToolQ"), t("ToolQ", "usedBy", "MethodX", weight="vital")],
+                         key=key, relations=relations)
+    assert vital["levels"]["strict"]["vital_recall"] == 1.0
+
+
+def test_the_judge_is_asked_about_what_the_rules_leave_over(relations) -> None:
+    gold = [t(SAFE, "evaluatesAttack", "silver noise"), t(SAFE, "evaluatesAttack", "white DoS")]
+    # r1 is more specific than gold 0, but gold 0 is taken by the strict r0; the judge says r1 states gold 1.
+    run = [t(SAFE, "evaluatesAttack", "silver noise"), t(SAFE, "hasAttackTask", "white denial of service")]
+    asked = []
+
+    def stub(g, r):
+        asked.append((g["o"], r["o"]))
+        return (g["o"], r["o"]) == ("white DoS", "white denial of service")
+
+    result = score_levels(run, gold, key=key, relations=relations, judge=stub)
+    assert result["levels"]["soft"]["recall"] == 1.0
+    assert ("white DoS", "white denial of service") in asked and ("silver noise", "silver noise") not in asked
+
+
+def test_a_matched_run_triple_moves_when_its_gold_has_another_taker(relations) -> None:
+    """Augmenting path r' - g0 = r0 - g1: the leftover r' (rule edge to g0 only) takes g0 and r0 takes g1."""
+    gold = [t(SAFE, "evaluatesAttack", "silver noise"), t(SAFE, "evaluatesAttack", "noise injection")]
+    run = [t(SAFE, "evaluatesAttack", "silver noise"), t(SAFE, "hasAttackTask", "silver noise")]
+
+    def stub(g, r):
+        return (g["o"], r["p"]) == ("noise injection", "evaluatesAttack")
+
+    result = score_levels(run, gold, key=key, relations=relations, judge=stub)
+    assert result["levels"]["soft"]["recall"] == 1.0 and result["levels"]["soft"]["precision"] == 1.0
+    assert {(row["run"]["p"], row["how"]) for row in result["matched"]} == {
+        ("hasAttackTask", "rule"), ("evaluatesAttack", "judge")}
+
+
+def test_domain_and_range_give_type_triples() -> None:
+    relations = load_relations()
+    gold = [t("p99", "rdf:type", "ResearchEntity"), t("ToolQ", "rdf:type", "ResearchEntity")]
+    levels = score_levels([t("p99", "uses", "ToolQ"), t("p98", "uses", "ToolZ")], gold, key=key,
+                          relations=relations)["levels"]
+    # One-to-one: the one triple about p99 recovers one of the two type facts it implies.
+    assert levels["entailed"]["matched_gold"] == 1
+
+
+def test_only_bibliographic_properties_are_transitive() -> None:
+    """Transitive properties are closed per triple only (a chain over two run triples is not credited);
+    that is acceptable for DBLP's bibliographic ones, not for a content predicate."""
+    relations = load_relations()
+    assert relations.transitive <= {"https://dblp.org/rdf/schema#isVersionOf",
+                                    "https://dblp.org/rdf/schema#publishedAsPartOf"}
+
+
+def test_a_property_chain_is_refused() -> None:
+    from harness_evaluation import _entity_key, _predicate_key
+    from harness_evaluation.relations import MultiPremiseRule
+    from rdflib import BNode
+    from rdflib.collection import Collection
+
+    hrn = Namespace("https://harness.local/schema#")
+    graph = Graph()
+    chain = BNode()
+    Collection(graph, chain, [hrn.uses, hrn.uses])
+    graph.add((hrn.usesIndirectly, OWL.propertyChainAxiom, chain))
+    with pytest.raises(MultiPremiseRule):
+        build_relations(graph, predicate_key=_predicate_key,
+                        entity_key=lambda v: _entity_key(v, predicate="", position="object"))
+
+
+def test_a_failed_attempt_scores_zero_and_the_answered_only_view_is_kept(relations) -> None:
+    from harness_evaluation.benchmark import build_benchmark
+
+    gold = [t(SAFE, "evaluatesAttack", "soft ad", weight="vital")]
+
+    def run(run_id: str, path: str, status: str, triples: list[dict]) -> Run:
+        reading = Reading(label="one", gloss="g", classes=[], axioms=[], sparql="", answer="a",
+                          triples=triples, metrics=Metrics(), status="answered")
+        extra = {} if status == "answered" else {"reason": "no_results"}
+        return Run(id=run_id, startedAt="2026-01-01T00:00:00Z", durationS=1, question="Q", path=path,
+                   budget="fast", status=status, readings=[reading], chosenReading=0, **extra)
+
+    candidates = [{"id": "g", "question": "Q", "gold_triples": gold, "complexity": {"level": "simple"}}]
+    found = [t(SAFE, "evaluatesAttack", "soft ad")]
+    runs = [run("a1", "agentic", "answered", found), run("a2", "agentic", "incomplete", []),
+            run("a3", "agentic", "stopped", []), run("b1", "baseline", "answered", found)]
+    result = build_benchmark(candidates, runs, relations=relations)
+    agentic = next(row for row in result["questions"][0]["paths"] if row["path"] == "agentic")
+    assert (agentic["attempted"], agentic["completed"], agentic["failed"], agentic["coverage"]) == (2, 1, 1, 0.5)
+    assert agentic["not_attempted"] == ["a3"]
+    assert agentic["levels"]["soft"]["f1"]["mean"] == 0.5 and agentic["vital_recall"]["mean"] == 0.5
+    assert agentic["answered_only"]["levels"]["soft"]["f1"]["mean"] == 1.0
+    everything = next(row for row in result["by_complexity"]["rows"] if row["complexity"] == "all")
+    assert everything["paths"]["agentic"]["soft"]["mean"] == 0.5
+    assert everything["paths"]["agentic"]["coverage"]["mean"] == 0.5
+    assert everything["soft_f1_differences"]["agentic - baseline"]["mean"] == -0.5
+
+
+def test_matching_per_component_equals_one_dense_assignment() -> None:
+    """Solving each connected component alone gives the optimum of the whole assignment."""
+    import random
+
+    import numpy as np
+    from harness_evaluation.matching import RANK, _matching
+    from scipy.optimize import linear_sum_assignment
+
+    rng = random.Random(0)
+    for _ in range(200):
+        rows, cols = rng.randint(1, 7), rng.randint(1, 7)
+        ranks = {(i, j): rng.choice(list(RANK.values())) for i in range(rows) for j in range(cols)
+                 if rng.random() < 0.35}
+        vital = {j for j in range(cols) if rng.random() < 0.3}
+        size = min(rows, cols)
+        bonus = max(RANK.values()) * size + 1
+        base = size * (bonus + max(RANK.values())) + 1
+        weights = np.zeros((rows, cols))
+        for (i, j), rank in ranks.items():
+            weights[i, j] = base + (bonus if j in vital else 0) + rank
+
+        def value(matching: dict[int, int], ranks=ranks, vital=vital) -> tuple[int, int, int]:
+            return (len(matching), sum(j in vital for j in matching.values()),
+                    sum(ranks[(i, j)] for i, j in matching.items()))
+
+        r, c = linear_sum_assignment(weights, maximize=True)
+        dense = {int(i): int(j) for i, j in zip(r, c, strict=True) if (int(i), int(j)) in ranks}
+        assert value(_matching(ranks, rows, cols, vital)) == value(dense)

@@ -22,8 +22,10 @@ from functools import lru_cache
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
+import numpy as np
 from harness_config import settings
 from harness_schema.models import ClaimSubgraph, Run, Triple
+from scipy.optimize import linear_sum_assignment
 
 from .matching import LEVELS, Judge, LevelScore, score_levels
 from .relations import PredicateRelations, load_relations
@@ -167,24 +169,24 @@ def score_claims(
                    for item in predicted]
     targets = [item if isinstance(item, ClaimSubgraph) else ClaimSubgraph.model_validate(item)
                for item in gold]
-    candidate_pairs = []
+    # Optimal alignment (as for triples): the one-to-one pairing with the most equal fields in total,
+    # then the most claims equal in every field. A greedy pass can lose fields: it may give a claim to a
+    # slightly better partner that another claim needed.
+    common = np.zeros((len(predictions), len(targets)))
+    exact = np.zeros_like(common)
     for pi, prediction in enumerate(predictions):
         for gi, target in enumerate(targets):
             if prediction.kind != target.kind or prediction.paper_id != target.paper_id:
                 continue
             predicted_fields, gold_fields = _claim_fields(prediction), _claim_fields(target)
-            common = sum(predicted_fields.get(key) == value for key, value in gold_fields.items()
-                         if key in predicted_fields)
-            if common:
-                candidate_pairs.append((common, pi, gi))
+            common[pi, gi] = sum(predicted_fields.get(key) == value for key, value in gold_fields.items()
+                                 if key in predicted_fields)
+            exact[pi, gi] = float(predicted_fields == gold_fields)
     matches: list[tuple[int, int]] = []
-    used_predictions: set[int] = set()
-    used_targets: set[int] = set()
-    for _common, pi, gi in sorted(candidate_pairs, key=lambda row: (-row[0], row[1], row[2])):
-        if pi not in used_predictions and gi not in used_targets:
-            matches.append((pi, gi))
-            used_predictions.add(pi)
-            used_targets.add(gi)
+    if common.size and common.any():
+        size = min(common.shape) + 1                   # the exact-claim bonus never outweighs one field
+        rows, cols = linear_sum_assignment(common * size + exact * (common > 0), maximize=True)
+        matches = sorted((int(pi), int(gi)) for pi, gi in zip(rows, cols, strict=True) if common[pi, gi] > 0)
     correct_claims = 0
     correct_fields = 0
     details = []
@@ -246,7 +248,9 @@ def evaluate_run(
                 "label": reading.label,
                 "score": score.as_dict(),
                 "provenance_coverage": supported / len(reading.triples) if reading.triples else 0.0,
-                "unsupported_ratio": 1 - (score.correct / score.predicted if score.predicted else 0.0),
+                # Share of the reading's triples that are not in the gold (1 - exact precision). Not a
+                # provenance measure: provenance_coverage says how many carry a source and evidence.
+                "not_in_gold_ratio": 1 - (score.correct / score.predicted if score.predicted else 0.0),
                 # New runs declare exactly which accepted/partial source claims feed
                 # the prose. Older artifacts retain the citation-only fallback.
                 "answer_supported": claim_grounded and (
@@ -292,6 +296,7 @@ def evaluate_gold_row(
     base = evaluate_run(run, row.get("gold_triples") or [], row.get("gold_claims"), question_id=question_id,
                         relations=relations, judge=judge, rejected=rejected)
     base["accepted_reading"] = None
+    base["levels_gold"] = "row"            # which gold the levels used; ``chosen`` always uses the row's
     readings = [item for item in row.get("accepted_readings") or [] if item.get("gold_triples")]
     if not readings:
         return base
@@ -311,6 +316,7 @@ def evaluate_gold_row(
     base["chosen_levels"] = best["chosen_levels"]
     for mine, theirs in zip(base["readings"], best["readings"], strict=True):
         mine["levels"] = theirs["levels"]
+    base["levels_gold"] = "accepted_reading"
     base["accepted_reading"] = {"index": best_index, "label": readings[best_index].get("label"),
                                 "measure": readings[best_index].get("measure"), "gold": best["gold"]}
     return base

@@ -39,6 +39,8 @@ def evaluate_directory(artifacts: Path, dataset: Path, path: str | None = None) 
             continue
         score = evaluate_run(run, gold[run.question])
         chosen = score["chosen"] or {}
+        # provenance and answer support live on the reading row, not in the triple score.
+        reading = next((row for row in score["readings"] if row["index"] == score["chosen_reading"]), {})
         results.append(
             {
                 "run_id": run.id,
@@ -49,9 +51,9 @@ def evaluate_directory(artifacts: Path, dataset: Path, path: str | None = None) 
                 "precision": chosen.get("precision", 0.0),
                 "recall": chosen.get("recall", 0.0),
                 "f1": chosen.get("f1", 0.0),
-                "provenance_coverage": chosen.get("provenance_coverage", 0.0),
-                "unsupported_ratio": chosen.get("unsupported_ratio", 0.0),
-                "answer_supported": chosen.get("answer_supported", False),
+                "provenance_coverage": reading.get("provenance_coverage", 0.0),
+                "not_in_gold_ratio": reading.get("not_in_gold_ratio", 1.0),
+                "answer_supported": reading.get("answer_supported", False),
             }
         )
     return results

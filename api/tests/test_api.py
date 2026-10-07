@@ -259,7 +259,9 @@ def test_benchmark_endpoint_aggregates_approved_question(tmp_path: Path, monkeyp
     path_row = response.json()["questions"][0]["paths"][0]
     assert path_row["completed"] == 0
     assert path_row["failed"] == 1
-    assert path_row["f1"]["mean"] is None
+    # A degraded attempt is scored as an empty prediction; the answered-only view has nothing.
+    assert path_row["f1"]["mean"] == 0.0 and path_row["levels"]["soft"]["f1"]["mean"] == 0.0
+    assert path_row["answered_only"]["f1"]["mean"] is None and path_row["coverage"] == 0.0
 
 
 def test_benchmark_execute_validates_and_launches_repetitions(tmp_path: Path, monkeypatch) -> None:

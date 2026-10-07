@@ -37,9 +37,15 @@ PATH_LABELS = {"baseline": "Fast", "adaptive-baseline": "Adaptive", "agentic": "
 def _interval(value: dict | None) -> str:
     if not value or value.get("mean") is None:
         return "–"
-    if value["low"] == value["high"]:
-        return f"{value['mean']:.2f}"
-    return f"{value['mean']:.2f} [{value['low']:.2f}–{value['high']:.2f}]"
+    if value.get("low") is None:
+        text = f"{value['mean']:.2f} (n={value.get('n')})"      # one question: no interval
+    elif value["low"] == value["high"]:
+        text = f"{value['mean']:.2f}"
+    else:
+        text = f"{value['mean']:.2f} [{value['low']:.2f}–{value['high']:.2f}]"
+    if value.get("p") is not None:
+        text += f" p={value['p']:.3f}"
+    return text
 
 
 def _judge(live: bool, off: bool) -> CachedJudge | None:
@@ -50,7 +56,7 @@ def _judge(live: bool, off: bool) -> CachedJudge | None:
     from harness_extraction import OpenAICompatibleModel, complete
 
     model = OpenAICompatibleModel(model=settings().model_judge, timeout_s=120)
-    return CachedJudge(complete=lambda prompt: complete(model, prompt))
+    return CachedJudge(complete=lambda prompt: complete(model, prompt), model=settings().model_judge)
 
 
 def main(
@@ -104,18 +110,19 @@ def main(
     if not any(row["paths"] for row in result["questions"]):
         console.print("[bold red]No run is paired with any gold row, so every cell is empty: "
                       "`make evaluate ARGS=--explain` says why.[/]")
-    table = Table(title="Triple F1 by complexity and path (mean [95% CI] over questions)")
+    table = Table(title="Triple F1 by complexity and path (mean [95% BCa CI] over questions; a failed attempt "
+                        "scores 0; coverage = answered / attempted; soft_answered_only = soft F1 of answered runs)")
     table.add_column("Complexity")
     table.add_column("Level")
     for label in PATH_LABELS.values():
         table.add_column(label)
     for row in result["by_complexity"]["rows"]:
-        for index, level in enumerate((*LEVELS, "vital_recall")):
+        for index, level in enumerate((*LEVELS, "vital_recall", "coverage", "soft_answered_only")):
             first = f"{row['complexity']} ({row['questions']})" if index == 0 else ""
             table.add_row(first, level, *(_interval(row["paths"][path][level]) for path in PATH_LABELS))
         table.add_section()
     console.print(table)
-    differences = Table(title="Soft F1 differences, paired over questions (mean [95% bootstrap CI])")
+    differences = Table(title="Soft F1 differences, paired over questions (mean [95% BCa CI], sign-flip p)")
     differences.add_column("Complexity")
     everything = result["by_complexity"]["rows"]
     names = list(everything[0]["soft_f1_differences"]) if everything else []

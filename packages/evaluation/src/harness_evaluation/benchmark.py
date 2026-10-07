@@ -7,6 +7,17 @@ the path match, the run read the chosen input (``run_input``: "corpus", or
 mixed) and, when the row has a snapshot, the run's evaluation snapshot is
 identical (same corpus, ontology, claim schema and index versions).
 Repetitions are averaged per question first; intervals are over questions.
+
+Every attempt counts. A repetition that ended without a scorable answer (incomplete,
+no evidence, corpus absent, degraded, or produced by another path) is scored as an
+empty prediction: precision, recall and F1 0, vital recall 0. This is how WebNLG,
+Text2KGBench and TREC treat a missing output; averaging only the answered runs would
+reward a path for failing on the hard questions (and drop those questions from the
+paired comparison). The answered-only means are kept as a secondary view
+(``answered_only``) with their ``coverage`` (answered / attempted). Runs waiting for
+a reading choice or stopped by a person are not attempts (``not_attempted``). Rows
+whose ``expected_status`` is not "answered" keep the answered-only scoring: an
+unanswerable question has no gold to miss.
 """
 
 from __future__ import annotations
@@ -24,6 +35,9 @@ from .stats import mean_ci, paired_difference_ci
 
 LOGGER = logging.getLogger(__name__)
 PATHS = ("baseline", "baseline-enhanced", "agentic", "external")
+# Unfinished (waiting for a person to pick a reading) or stopped by a person: not an attempt.
+NOT_ATTEMPTS = {"awaiting_reading", "stopped"}
+ZERO = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
 
 
 def _score_aggregate(scores: list[dict], metric: str) -> dict[str, float | None]:
@@ -41,6 +55,24 @@ def _value_aggregate(values: list[float | None]) -> dict[str, float | None]:
         "mean": mean(present) if present else None,
         "min": min(present) if present else None,
         "max": max(present) if present else None,
+    }
+
+
+def _empty_prediction(candidate: dict) -> dict:
+    """What an attempt without a scorable answer scores: an empty triple set against the row's gold."""
+    gold = [*(candidate.get("gold_triples") or []),
+            *(item for reading in candidate.get("accepted_readings") or [] for item in reading.get("gold_triples") or [])]
+    vital = 0.0 if any(isinstance(item, dict) and item.get("weight") == "vital" for item in gold) else None
+    return {"chosen": dict(ZERO), "claim": dict(ZERO) if candidate.get("gold_claims") is not None else None,
+            "levels": {"levels": {level: {**ZERO, "vital_recall": vital} for level in LEVELS},
+                       "judged_precision": {"value": None}, "judge": {"pending": 0}}}
+
+
+def _level_summary(level_rows: list[dict]) -> dict:
+    return {
+        "levels": {level: {metric: _score_aggregate([row["levels"][level] for row in level_rows], metric)
+                           for metric in ("precision", "recall", "f1")} for level in LEVELS},
+        "vital_recall": _value_aggregate([row["levels"]["soft"]["vital_recall"] for row in level_rows]),
     }
 
 
@@ -62,6 +94,8 @@ def _by_complexity(question_rows: list[dict]) -> dict:
         for path in paths:
             scores: dict[str, list[float]] = {level: [] for level in LEVELS}
             vital: list[float] = []
+            coverage: list[float] = []
+            answered_only: list[float] = []
             for row in members:
                 entry = next((item for item in row["paths"] if item["path"] == path), None)
                 if not entry or entry["levels"]["soft"]["f1"]["mean"] is None:
@@ -70,8 +104,14 @@ def _by_complexity(question_rows: list[dict]) -> dict:
                     scores[level].append(entry["levels"][level]["f1"]["mean"])
                 if entry["vital_recall"]["mean"] is not None:
                     vital.append(entry["vital_recall"]["mean"])
+                if entry.get("coverage") is not None:
+                    coverage.append(entry["coverage"])
+                only = entry.get("answered_only", {}).get("levels", {}).get("soft", {}).get("f1", {}).get("mean")
+                if only is not None:
+                    answered_only.append(only)
                 values.setdefault(path, {})[row["id"]] = entry["levels"]["soft"]["f1"]["mean"]
-            per_path[path] = {**{level: mean_ci(scores[level]) for level in LEVELS}, "vital_recall": mean_ci(vital)}
+            per_path[path] = {**{level: mean_ci(scores[level]) for level in LEVELS}, "vital_recall": mean_ci(vital),
+                              "coverage": mean_ci(coverage), "soft_answered_only": mean_ci(answered_only)}
         differences = {}
         # Each path against Fast, and ours against the external baseline (paired over shared questions).
         for path, other in [*((path, "baseline") for path in paths[1:]), ("agentic", "external")]:
@@ -80,7 +120,9 @@ def _by_complexity(question_rows: list[dict]) -> dict:
                 [values[path][qid] for qid in shared], [values[other][qid] for qid in shared])
         rows.append({"complexity": group, "questions": len(members), "paths": per_path,
                      "soft_f1_differences": differences})
-    return {"metric": "triple F1 per question, mean and 95% bootstrap interval over questions", "rows": rows}
+    return {"metric": ("triple F1 per question (a failed attempt scores 0), mean and 95% BCa bootstrap interval "
+                       "over questions; differences paired over shared questions with a sign-flip permutation "
+                       "p-value"), "rows": rows}
 
 
 def matching_runs(candidate: dict, runs: Iterable[Run], path: str, run_input: str = "corpus") -> list[Run]:
@@ -105,26 +147,32 @@ def build_benchmark(
         path_rows = []
         for path in PATHS:
             matching = matching_runs(candidate, runs, path, run_input)
-            evaluations = []
-            for run in matching:
-                if run.status != "answered":
-                    continue
-                try:
-                    evaluations.append(evaluate_gold_row(run, candidate, relations=relations, judge=judge))
-                except (ValueError, TypeError, KeyError) as exc:
-                    LOGGER.warning(
-                        "Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc
-                    )
-            eligible = [result for result in evaluations if result["eligible_for_path_score"]]
-            scores = [result["chosen"] for result in eligible if result["chosen"] is not None]
-            claim_scores = [
-                reading["claim_score"]["claim"]
-                for result in eligible
-                for reading in result["readings"]
-                if reading["index"] == result["chosen_reading"]
-                and reading["claim_score"] is not None
-            ]
-            level_rows = [result["chosen_levels"] for result in eligible if result["chosen_levels"]]
+            attempts = [run for run in matching if run.status not in NOT_ATTEMPTS]
+            zero_fill = candidate.get("expected_status", "answered") == "answered"
+            scored, counted = [], []           # answered-only; every attempt (failures as empty predictions)
+            unscorable = []
+            for run in attempts:
+                result = None
+                if run.status == "answered":
+                    try:
+                        result = evaluate_gold_row(run, candidate, relations=relations, judge=judge)
+                    except (ValueError, TypeError, KeyError) as exc:
+                        LOGGER.warning("Cannot score run %s against %s: %s", run.id, candidate.get("id"), exc)
+                        unscorable.append(run.id)      # a scoring error is not the path's failure
+                        continue
+                if result is not None and result["eligible_for_path_score"] and result["chosen"] is not None:
+                    claim = next((reading["claim_score"]["claim"] for reading in result["readings"]
+                                  if reading["index"] == result["chosen_reading"] and reading["claim_score"]), None)
+                    entry = {"chosen": result["chosen"], "claim": claim, "levels": result["chosen_levels"],
+                             "accepted_reading": result.get("accepted_reading")}
+                    scored.append(entry)
+                    counted.append(entry)
+                elif zero_fill:
+                    counted.append(_empty_prediction(candidate))
+            scores = [entry["chosen"] for entry in counted]
+            claim_scores = [entry["claim"] for entry in counted if entry["claim"] is not None]
+            level_rows = [entry["levels"] for entry in counted if entry["levels"]]
+            answered_rows = [entry["levels"] for entry in scored if entry["levels"]]
             costs = [cost(run) for run in matching] if cost else []
             if not matching:
                 continue
@@ -132,29 +180,27 @@ def build_benchmark(
                 {
                     "path": "adaptive-baseline" if path == "baseline-enhanced" else path,
                     "repetitions": [run.id for run in matching],
-                    "completed": len(scores),
-                    "failed": len(matching) - len(scores),
+                    "attempted": len(attempts) - len(unscorable),
+                    "completed": len(scored),
+                    "failed": len(attempts) - len(unscorable) - len(scored),
+                    "coverage": len(scored) / (len(attempts) - len(unscorable))
+                    if len(attempts) > len(unscorable) else None,
+                    "unscorable": unscorable,
+                    "not_attempted": [run.id for run in matching if run.status in NOT_ATTEMPTS],
                     "precision": _score_aggregate(scores, "precision"),
                     "recall": _score_aggregate(scores, "recall"),
                     "f1": _score_aggregate(scores, "f1"),
                     "claim_precision": _score_aggregate(claim_scores, "precision"),
                     "claim_recall": _score_aggregate(claim_scores, "recall"),
                     "claim_f1": _score_aggregate(claim_scores, "f1"),
-                    "levels": {
-                        level: {
-                            metric: _score_aggregate([row["levels"][level] for row in level_rows], metric)
-                            for metric in ("precision", "recall", "f1")
-                        }
-                        for level in LEVELS
-                    },
-                    "vital_recall": _value_aggregate(
-                        [row["levels"]["soft"]["vital_recall"] for row in level_rows]),
+                    **_level_summary(level_rows),
+                    "answered_only": {**_level_summary(answered_rows),
+                                      "f1": _score_aggregate([entry["chosen"] for entry in scored], "f1")},
                     "judged_precision": _value_aggregate(
-                        [row["judged_precision"]["value"] for row in level_rows]),
-                    "judge_pending": sum(row["judge"]["pending"] for row in level_rows),
+                        [row["judged_precision"]["value"] for row in answered_rows]),
+                    "judge_pending": sum(row["judge"]["pending"] for row in answered_rows),
                     "accepted_readings": sorted({
-                        result["accepted_reading"]["label"] for result in eligible
-                        if result.get("accepted_reading")}),
+                        entry["accepted_reading"]["label"] for entry in scored if entry.get("accepted_reading")}),
                     "model_calls": mean([item["model_calls"] for item in costs]) if costs else None,
                     "tool_calls": mean([item["tool_calls"] for item in costs]) if costs else None,
                     "wall_clock_s": mean([item["wall_clock_s"] for item in costs]) if costs else None,
@@ -187,4 +233,4 @@ def build_benchmark(
     }
 
 
-__all__ = ["PATHS", "build_benchmark", "complexity_level", "matching_runs"]
+__all__ = ["NOT_ATTEMPTS", "PATHS", "build_benchmark", "complexity_level", "matching_runs"]
