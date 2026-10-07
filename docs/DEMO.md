@@ -143,8 +143,9 @@ Gold and benchmark flow:
 2. On **Gold**, open the candidate, review the claims JSON and press **Save and approve**.
    Invalid JSON or a malformed claim is refused with the exact field.
 3. On **Benchmark**, press **Run benchmark · 3× per path** for that question, then
-   **Refresh** once the runs finish. Agentic repetitions research the agent's
-   top-ranked concept and record it as automatically selected.
+   **Refresh** once the runs finish. An Agentic repetition researches every grounded reading the
+   agent proposes (one for an unambiguous question; one run per reading, all automatically
+   selected) and the benchmark scores those runs together as one attempt.
 
 ## 3. If something goes wrong
 

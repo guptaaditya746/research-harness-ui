@@ -8,7 +8,8 @@
 
 Runs go through POST /benchmark/execute, exactly like "Run benchmark" on the Benchmark page: they are
 stamped with the evaluation snapshot (which `make evaluate` matches against the gold rows), and an
-Agentic run researches its top-ranked reading automatically. The question text is taken from the
+Agentic run researches its first grounded reading and starts one run per further reading (one attempt,
+scored together as a set). The question text is taken from the
 gold row, so runs and gold always match. Repetitions start one after the other and at most as many
 groups run at once as the API has run slots, so no run waits in the queue while its deadline runs.
 Afterwards: make evaluate (gold from labelling: evidence documents, reviewed; see its README).
