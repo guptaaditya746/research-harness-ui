@@ -95,7 +95,7 @@ class AnswerStage:
         """The triples in consecutive batches whose prompts fit the context window: composition gets the
         batch, verification the batch plus a draft of up to one reply."""
         config = settings()
-        models = [self.model, *([verifier] if verify and verifier is not None else [])]
+        models = [self.answer_model, *([verifier] if verify and verifier is not None else [])]
         context = min(config.context_tokens(str(getattr(model, "model", "") or "")) for model in models)
         reply = config.max_output_tokens
         empty = render("extraction/answer_composition", {
@@ -108,7 +108,7 @@ class AnswerStage:
         used = 0
         for triple in triples:
             cost = estimate_tokens(json.dumps(triple.model_dump()))
-            if batches[-1] and used + cost > budget:
+            if batches[-1] and (used + cost > budget or len(batches[-1]) >= config.answer_batch_max_triples):
                 batches.append([])
                 used = 0
             batches[-1].append(triple)
@@ -191,13 +191,13 @@ class AnswerStage:
         if bad_sources:
             extra["bad_sources"] = [str(item)[:80] for item in bad_sources[:8]]
         try:
-            reply = complete(self.model, render("extraction/answer_composition", payload, **extra))
+            reply = complete(self.answer_model, render("extraction/answer_composition", payload, **extra))
         except ModelFailure as exc:
             if "output limit" not in str(exc):
                 raise
             # Cut off (a very long answer or a repetition loop): once more with explicit limits.
             emit_model_event("Answer too long", "retrying answer composition with a shorter format")
-            reply = complete(self.model, render("extraction/answer_composition", payload, brief=True, **extra))
+            reply = complete(self.answer_model, render("extraction/answer_composition", payload, brief=True, **extra))
         if isinstance(reply, dict):
             reply = {key: value for key, value in reply.items() if key != "sentences"}   # set only by verification
         result = AnswerResult.model_validate(reply)

@@ -24,10 +24,11 @@ demo:
 	HARNESS_DEV_RELOAD=0 ./scripts/dev.sh
 
 # The thesis pipeline map (docs/presentation/README.md): a static page, served for a browser elsewhere.
-# make pipeline-map  ·  PORT=9000 for another port; on the cluster tunnel it: ssh -L 8099:localhost:8099 <host>
+# make pipeline-map · omen-tunnels pipeline-map route uses compute port 8099.
 PORT ?= 8099
 pipeline-map:
 	@echo "Open http://localhost:$(PORT)/thesis_pipeline.html  (Ctrl+C to stop)"
+	@echo "Laptop via omen-tunnels (default port 8099): http://127.0.0.1:28099/thesis_pipeline.html"
 	python3 -m http.server $(PORT) --bind 127.0.0.1 --directory docs/presentation
 
 # Fast Python-only check for every change: lint, layer contracts, tests.

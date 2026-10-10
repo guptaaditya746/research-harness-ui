@@ -123,6 +123,14 @@ launch models, or start Docker. The `harness-ui` route forwards laptop port
 services are not needed, use `harness-ui` instead of `all` in both start
 commands.
 
+The `pipeline-map` route forwards laptop port 28099 through gateway port 48099
+to compute port 8099. `omen-tunnels-external` also exposes gateway port 49099
+for laptops using an older offset configuration.
+It is included in `all`. After updating the helper on both machines, restart the
+tunnels to include the new route, keep `make pipeline-map` running on compute,
+and open `http://127.0.0.1:28099/thesis_pipeline.html` on the laptop. See [the
+pipeline map guide](docs/presentation/README.md) for commands.
+
 ### Terminal 4 on gammaweb08: corpus MCP, API, and UI
 
 Run from the harness repository. `make demo` starts all three services in this

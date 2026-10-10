@@ -43,12 +43,14 @@ SERVICES = {
     "argilla": (6900, 26900, 46900, 36900),
     # Reverse service: laptop browser -> gateway -> Slurm compute node.
     "harness-ui": (0, 25173, 45173, 5173),
+    "pipeline-map": (0, 28099, 48099, 8099),
 }
 
 DEFAULT_SERVICES = ("tracing", "postgres")
 GATEWAY = f"{os.environ.get('WEBIS_USER', 'xepi3167')}@ssh.webis.de"
 OMEN = f"{os.environ.get('OMEN_USER', 'omen-server')}@{os.environ.get('OMEN_HOST', '192.168.0.107')}"
 SSH = os.environ.get("OMEN_TUNNELS_SSH", "ssh")
+GATEWAY_PORT_OFFSET = int(os.environ.get("OMEN_TUNNELS_GATEWAY_PORT_OFFSET", "0"))
 
 
 def runtime_dir() -> Path:
@@ -78,11 +80,13 @@ def forward_args(role: str, names: list[str]) -> list[str]:
     args = []
     for name in names:
         omen, laptop, gateway, compute = SERVICES[name]
-        if name == "harness-ui":
+        if omen == 0:
             if role == "gateway":
                 args += ["-L", f"127.0.0.1:{laptop}:127.0.0.1:{gateway}"]
             elif role == "compute":
                 args += ["-R", f"127.0.0.1:{gateway}:127.0.0.1:{compute}"]
+                if GATEWAY_PORT_OFFSET:
+                    args += ["-R", f"127.0.0.1:{gateway + GATEWAY_PORT_OFFSET}:127.0.0.1:{compute}"]
             continue
         if role == "omen":
             args += ["-L", f"127.0.0.1:{laptop}:127.0.0.1:{omen}"]
@@ -208,9 +212,10 @@ def main() -> int:
             raise
         print("Ready. On the compute node use the same service names.")
         for name in names:
-            if name == "harness-ui":
+            if SERVICES[name][0] == 0:
                 if args.machine == "laptop":
-                    print(f"  {name}: http://127.0.0.1:{SERVICES[name][1]} in the laptop browser")
+                    path = "/thesis_pipeline.html" if name == "pipeline-map" else ""
+                    print(f"  {name}: http://127.0.0.1:{SERVICES[name][1]}{path} in the laptop browser")
                 else:
                     print(f"  {name}: serves 127.0.0.1:{SERVICES[name][3]} from compute")
             else:

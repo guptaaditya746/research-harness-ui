@@ -1,0 +1,248 @@
+[
+  {
+    "sequence": 0,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline",
+    "repetition": 1,
+    "id": "r-ff4a9f71",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 22.305,
+    "elapsed_s": 178.317,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 1,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline",
+    "repetition": 2,
+    "id": "r-606104f8",
+    "status": "harness_error",
+    "reason": "run r-606104f8 exceeded 180.0s",
+    "elapsed_s": 180.4
+  },
+  {
+    "sequence": 2,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline",
+    "repetition": 3,
+    "id": "r-d6061ae4",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 18.011,
+    "elapsed_s": 39.993,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 3,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline",
+    "repetition": 4,
+    "id": "r-2f1e28de",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 17.925,
+    "elapsed_s": 56.145,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 4,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline-enhanced",
+    "repetition": 1,
+    "id": "r-4b0166ec",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 23.728,
+    "elapsed_s": 41.545,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 5,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline-enhanced",
+    "repetition": 2,
+    "id": "r-453ede48",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 22.296,
+    "elapsed_s": 46.125,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 6,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline-enhanced",
+    "repetition": 3,
+    "id": "r-3332e3ef",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 15.441,
+    "elapsed_s": 38.371,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 7,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "baseline-enhanced",
+    "repetition": 4,
+    "id": "r-f478713d",
+    "status": "answered",
+    "reason": null,
+    "duration_s": 18.26,
+    "elapsed_s": 33.803,
+    "triple_count": 1,
+    "answer": "Video Prediction Policy: A Generalist Robot Policy with Predictive Visual Representations (https://dblp.org/rec/journals/corr/abs-2412-14803) [p4-metadata].",
+    "reading_labels": [
+      "Corpus facts"
+    ]
+  },
+  {
+    "sequence": 8,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "agentic",
+    "repetition": 1,
+    "id": "r-28e278e7",
+    "status": "awaiting_reading",
+    "reason": null,
+    "duration_s": 7.479,
+    "elapsed_s": 8.063,
+    "triple_count": 0,
+    "answer": null,
+    "reading_labels": [
+      "Introduction of Video Prediction Policy",
+      "Video Prediction Policy Origin",
+      "Video Prediction Policy Proposal",
+      "Video Prediction Policy Innovation"
+    ]
+  },
+  {
+    "sequence": 9,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "agentic",
+    "repetition": 2,
+    "id": "r-5aeec185",
+    "status": "awaiting_reading",
+    "reason": null,
+    "duration_s": 7.464,
+    "elapsed_s": 8.064,
+    "triple_count": 0,
+    "answer": null,
+    "reading_labels": [
+      "Introduction of Video Prediction Policy",
+      "Video Prediction Policy Origin",
+      "Video Prediction Policy Innovation",
+      "Video Prediction Policy Proposal"
+    ]
+  },
+  {
+    "sequence": 10,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "agentic",
+    "repetition": 3,
+    "id": "r-28479b54",
+    "status": "awaiting_reading",
+    "reason": null,
+    "duration_s": 8.5,
+    "elapsed_s": 9.089,
+    "triple_count": 0,
+    "answer": null,
+    "reading_labels": [
+      "Introduction of Video Prediction Policy",
+      "Video Prediction Policy Origin",
+      "Video Prediction Policy Innovation",
+      "Video Prediction Policy Proposal"
+    ]
+  },
+  {
+    "sequence": 11,
+    "question_id": "q01",
+    "type": "paper_identification",
+    "category": "metadata",
+    "expected": "answer",
+    "question": "Which paper introduced Video Prediction Policy?",
+    "path": "agentic",
+    "repetition": 4,
+    "id": "r-170735be",
+    "status": "awaiting_reading",
+    "reason": null,
+    "duration_s": 8.068,
+    "elapsed_s": 8.992,
+    "triple_count": 0,
+    "answer": null,
+    "reading_labels": [
+      "Introduction of Video Prediction Policy",
+      "Video Prediction Policy Origin",
+      "Video Prediction Policy Proposal",
+      "Video Prediction Policy First Use"
+    ]
+  }
+]

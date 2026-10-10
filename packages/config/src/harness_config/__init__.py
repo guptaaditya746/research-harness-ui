@@ -81,6 +81,7 @@ class Settings(BaseSettings):
 
     # ─── Models (aliases served by LiteLLM, see thesis-llm-setup) ────────────
     model_small: str = Field("heavy-model", validation_alias=_env("HARNESS_MODEL_SMALL"))
+    model_answer: str | None = Field(None, validation_alias=_env("HARNESS_MODEL_ANSWER"))
     model_edc: str | None = Field(None, validation_alias=_env("HARNESS_MODEL_EDC"))
     model_agent: str = Field("lite-model", validation_alias=_env("HARNESS_MODEL_AGENT"))
     model_high: str = Field("heavy-model", validation_alias=_env("HARNESS_MODEL_HIGH"))
@@ -98,6 +99,7 @@ class Settings(BaseSettings):
     # Answer composition over many triples: batches composed at the same time, and at most this many
     # batches (0 = all; the answer graph keeps every triple either way, only the answer text is shorter).
     answer_batch_concurrency: int = Field(3, ge=1, le=16, validation_alias=_env("HARNESS_ANSWER_BATCH_CONCURRENCY"))
+    answer_batch_max_triples: int = Field(64, ge=1, le=500, validation_alias=_env("HARNESS_ANSWER_BATCH_MAX_TRIPLES"))
     answer_max_batches: int = Field(0, ge=0, validation_alias=_env("HARNESS_ANSWER_MAX_BATCHES"))
     model_call_threads: int = Field(16, validation_alias=_env("HARNESS_MODEL_CALL_THREADS"))
     model_stream: bool = Field(False, validation_alias=_env("HARNESS_MODEL_STREAM"))

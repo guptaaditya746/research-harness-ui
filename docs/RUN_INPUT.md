@@ -41,7 +41,9 @@ A D of 10,000 triples can leave thousands after review, far more than one prompt
 now fits `HARNESS_MODEL_CONTEXT_TOKENS` (default 32,768, per alias via `HARNESS_MODEL_OPTIONS`
 `context_tokens`): the reply never reserves more tokens than the prompt leaves, and a prompt that cannot fit
 fails as `context_window_exceeded` (not `provider_error`). The evidence review and the answer split their
-input into calls that fit; the answer is composed (and verified) per batch, `HARNESS_ANSWER_BATCH_CONCURRENCY`
+input into calls that fit; each answer call is also capped at `HARNESS_ANSWER_BATCH_MAX_TRIPLES` triples.
+`HARNESS_MODEL_ANSWER` can select a separate composition model while review and verification keep their
+configured models. The answer is composed (and verified) per batch, `HARNESS_ANSWER_BATCH_CONCURRENCY`
 at a time, and the batch answers are joined, each sentence with its own source ids. A batch without a
 supported answer is left out (the run's "answer composition" check says how many). `HARNESS_ANSWER_MAX_BATCHES`
 limits the answer text to N batches spread over the evidence; every reviewed triple stays in the answer graph

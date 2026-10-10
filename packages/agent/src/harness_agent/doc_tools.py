@@ -25,15 +25,17 @@ _SPECS: dict[str, tuple[str, dict[str, Any]]] = {
          "papers with their triple counts. Call it first."), {"type": "object", "properties": {}}),
     "doc_search": (
         ("Rank the document's triples by the words of a query (subject, relation, object and passage text), "
-         "a page at a time: the result gives the total matches and the next_offset of the next page."),
+         "a page at a time: the result gives the total matches and the next_offset of the next page. "
+         "Pages list triples without full passage text; use doc_read for passages."),
         {"type": "object", "properties": {
             "query": {"type": "string", "description": "Words to look for."},
             "offset": {"type": "integer", "description": "Rank to start from (default 0; use next_offset)."},
-            "limit": {"type": "integer", "description": "How many triples (default: one page; at most four)."}},
+            "limit": {"type": "integer", "description": "Triples per call (default: one page; up to four pages)."}},
          "required": ["query"]}),
     "doc_triples": (
         ("List the document's triples, optionally only one relation, subject, paper or interpretation, a "
-         "page at a time: the result gives the total matches and the next_offset of the next page."),
+         "page at a time: the result gives the total matches and the next_offset of the next page. "
+         "Pages omit full passage text; use doc_read for passages."),
         {"type": "object", "properties": {
             "predicate": {"type": "string"}, "subject": {"type": "string"}, "paper_id": {"type": "string"},
             "interpretation": {"type": "string", "description": "An interpretation id from doc_overview."},
@@ -55,6 +57,8 @@ def _row(triple: DocTriple, *, full: bool = False) -> dict[str, Any]:
     row["interpretation"] = triple.reading
     if full:
         row["evidence"] = triple.evidence
+    else:
+        row.pop("evidence", None)
     return row
 
 

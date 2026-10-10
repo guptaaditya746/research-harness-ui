@@ -49,10 +49,12 @@ class ExtractionEngine(SchemaStage, ExtractionStage, ReviewStage, AnswerStage):
         schema: Subschema,
         schema_model: ModelClient | None = None,
         edc_model: ModelClient | None = None,
+        answer_model: ModelClient | None = None,
     ) -> None:
         self.model = model
         self.schema_model = schema_model or model
         self.edc_model = edc_model or model
+        self.answer_model = answer_model or model
         self.schema = schema
         self.class_names = {local_name(iri): iri for iri in schema.classes}
         self.property_names = {local_name(iri): iri for iri in schema.properties}

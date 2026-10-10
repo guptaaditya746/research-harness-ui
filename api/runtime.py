@@ -13,6 +13,7 @@ import asyncio
 import json
 import logging
 import re
+import sqlite3
 import threading
 import uuid
 from collections.abc import Callable
@@ -139,10 +140,15 @@ class RunRuntime:
             model=config.model_edc or model_name or config.model_small,
             timeout_s=timeout_s or budget_timeout,
         )
+        answer_model = OpenAICompatibleModel(
+            model=config.model_answer or model_name or config.model_small,
+            timeout_s=timeout_s or budget_timeout,
+        )
         corpus = CorpusStore(corpus_root())
         return Baseline20(
             corpus,
-            ExtractionEngine(model, schema, schema_model=schema_model, edc_model=edc_model),
+            ExtractionEngine(model, schema, schema_model=schema_model, edc_model=edc_model,
+                             answer_model=answer_model),
             planner=QueryPlanner(model, profile=corpus_profile(corpus)),
             retrieve_k=config.baseline_retrieve_k,
             max_passages=(
@@ -335,7 +341,12 @@ class RunRuntime:
                     result["run"] = run
                 self.artifacts.finalize(run, result["artifacts"])
                 if run.status == "answered" and run.chosen_reading is not None:
-                    self.claims.upsert(run.readings[run.chosen_reading].claims)
+                    try:
+                        self.claims.upsert(run.readings[run.chosen_reading].claims)
+                    except sqlite3.Error:
+                        # Claim reuse is auxiliary. A cache write failure must not
+                        # replace an already persisted answer with internal_error.
+                        LOGGER.exception("Could not update claim cache for run %s", run_id)
             except RunCancelled as cancelled:
                 stopped = cancelled.reason == "stopped"
                 with self.lock:

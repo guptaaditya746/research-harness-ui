@@ -1,7 +1,7 @@
 # Subset of the Computer Science Knowledge Graph (CS-KG) Ontology 2.0: the harness content core.
 #
 # Source:  https://scholkg.kmi.open.ac.uk/cskg/ontology  (namespace https://w3id.org/cskg/ontology#)
-#          read from seed/cskg_ontology_2.0.ttl, SHA-256 261cbca47bb17271f2326a70c4ba35fcc1fef819f3b64a91a62868e8eeea7888
+#          read from /tmp/cskg_ontology.ttl, SHA-256 e1d889a3d44b648417d406755d866cc1385af7cb4035418b826a35991ff321dd
 # Licence: CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/), (c) the CS-KG authors,
 #          Knowledge Media Institute, The Open University. Terms and statements are copied unchanged.
 #

@@ -56,7 +56,8 @@ The agentic run (`harness_agent.research.AgenticResearch`) is a sequence of name
 |---|---|---|
 | `HARNESS_MODEL_AGENT` | `lite-model` | Agent tool loop (MCP), context summaries, paper readers |
 | `HARNESS_MODEL_EDC` | `lite-model` | Open extraction, relation definition and mapping |
-| `HARNESS_MODEL_SMALL` | `heavy-model` | Planning, answer composition; schema inference, evidence review and verification in Fast/Adaptive |
+| `HARNESS_MODEL_SMALL` | `heavy-model` | Planning, schema inference, evidence review and verification in Fast/Adaptive |
+| `HARNESS_MODEL_ANSWER` | `HARNESS_MODEL_SMALL` | Answer composition only; verification stays with the path's verifier |
 | `HARNESS_MODEL_HIGH` | `heavy-model` | Concept proposal and schema inference in agentic runs |
 | `HARNESS_MODEL_JUDGE` | `heavy-model` | Evidence review, answer verification, claim enrichment and the independent verifier in agentic runs |
 
